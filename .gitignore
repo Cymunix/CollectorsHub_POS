@@ -1,5 +1,8 @@
 node_modules
 dist
 release
+release-portable
+release-v1
+CollectorsHub-Desktop-Windows.zip
 *.log
 *.local
