@@ -31,6 +31,7 @@ function cleanPowerShellError(raw) {
 const isDev = Boolean(process.env.NORDVIK_DESKTOP_RENDERER_URL)
 const appRoot = path.resolve(__dirname, '..')
 const distDir = path.join(appRoot, 'dist')
+const appIconPath = path.join(appRoot, 'assets', 'icon.png')
 let mainWindow = null
 
 protocol.registerSchemesAsPrivileged([
@@ -126,6 +127,7 @@ async function createWindow() {
     minWidth: 1060,
     minHeight: 700,
     title: 'CollectorsHub POS',
+    icon: appIconPath,
     backgroundColor: '#f6f3ed',
     fullscreen: true,
     autoHideMenuBar: true,
