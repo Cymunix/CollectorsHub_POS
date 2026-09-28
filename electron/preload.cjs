@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   loadStore: () => ipcRenderer.invoke('store:load'),
   saveStore: (store) => ipcRenderer.invoke('store:save', store),
   getDataPath: () => ipcRenderer.invoke('app:get-data-path'),
+  getVersion: () => ipcRenderer.invoke('app:get-version'),
   exitApp: () => ipcRenderer.invoke('app:exit'),
   selectScanImages: () => ipcRenderer.invoke('scanner:select-images'),
   scanImage: () => ipcRenderer.invoke('scanner:scan-image'),

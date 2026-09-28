@@ -198,6 +198,7 @@ function configureAutoUpdates() {
 ipcMain.handle('store:load', async () => ensureStore())
 ipcMain.handle('store:save', async (_event, nextStore) => saveStore(nextStore))
 ipcMain.handle('app:get-data-path', () => getStoreFile())
+ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('app:exit', () => app.quit())
 ipcMain.handle('scanner:select-images', async () => {
   const result = await dialog.showOpenDialog({

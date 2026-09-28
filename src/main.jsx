@@ -100,6 +100,9 @@ function desktopApi() {
     async getDataPath() {
       return 'Browser preview storage'
     },
+    async getVersion() {
+      return 'dev'
+    },
     async exitApp() {
       window.close()
     },
@@ -144,6 +147,7 @@ function App() {
   const [authSession, setAuthSession] = useState(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState(emptyStore.sync)
+  const [appVersion, setAppVersion] = useState('')
   const [registerLocation, setRegisterLocation] = useState(null)
   const [receiptBranding, setReceiptBranding] = useState(null)
   const [loginMode, setLoginMode] = useState('staff')
@@ -158,9 +162,10 @@ function App() {
     let cancelled = false
 
     async function load() {
-      const [loadedStore, loadedPath] = await Promise.all([
+      const [loadedStore, loadedPath, loadedVersion] = await Promise.all([
         desktopApi().loadStore(),
         desktopApi().getDataPath(),
+        desktopApi().getVersion(),
       ])
 
       if (!cancelled) {
@@ -170,6 +175,7 @@ function App() {
         setStore(nextStore)
         setSyncStatus(nextStore.sync)
         setDataPath(loadedPath)
+        setAppVersion(loadedVersion || '')
         setIsLoaded(true)
       }
     }
@@ -626,6 +632,7 @@ function App() {
         draft={loginDraft}
         error={loginError}
         isAuthenticating={isAuthenticating}
+        appVersion={appVersion}
         mode={loginMode}
         onChange={setLoginDraft}
         onClearError={() => setLoginError('')}
@@ -760,7 +767,7 @@ function App() {
   )
 }
 
-function LoginScreen({ draft, error, isAuthenticating, mode, onChange, onClearError, onModeChange, onSubmit }) {
+function LoginScreen({ appVersion, draft, error, isAuthenticating, mode, onChange, onClearError, onModeChange, onSubmit }) {
   const isAdminMode = mode === 'admin'
 
   function handleExit() {
@@ -845,7 +852,7 @@ function LoginScreen({ draft, error, isAuthenticating, mode, onChange, onClearEr
 
           <div className="login-version" aria-label="Application version">
             <span />
-            <small>CollectorsHub POS v0.1.0</small>
+            <small>CollectorsHub POS v{appVersion || 'dev'}</small>
             <span />
           </div>
         </form>
