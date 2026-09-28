@@ -429,7 +429,7 @@ export async function fetchMarketSales({ catalogueItemId, provider = 'ebay', sin
     item_id: catalogueItemId,
     source: provider,
     search_query: searchQuery,
-    status: 'unavailable',
+    status: 'running',
     results_found: 0,
     results_approved: 0,
     results_excluded: 0,
@@ -437,20 +437,83 @@ export async function fetchMarketSales({ catalogueItemId, provider = 'ebay', sin
     started_at: startedAt,
     created_by: (await supabase.auth.getUser()).data?.user?.id || null,
     raw_results: [],
-    error_message: provider === 'ebay'
-      ? 'Sold-market history unavailable with current eBay API permissions. Configure an official sold/completed-sales provider endpoint before fetching live results.'
-      : `Provider ${provider} is not configured.`,
+    error_message: null,
   })
 
-  return {
-    import: importRow,
-    item: itemRecord,
-    provider,
-    query: searchQuery,
-    candidates: [],
-    status: 'unavailable',
-    error: importRow.error_message,
-    since,
+  if (provider !== 'ebay') {
+    const message = `Provider ${provider} is not configured.`
+    const failedImport = await updateMarketImport(importRow.id, {
+      status: 'unavailable',
+      error_message: message,
+      raw_results: [],
+    })
+    return {
+      import: failedImport || importRow,
+      item: itemRecord,
+      provider,
+      query: searchQuery,
+      candidates: [],
+      status: 'unavailable',
+      error: message,
+      since,
+    }
+  }
+
+  try {
+    const desktop = window.nordvikDesktop
+    if (!desktop?.searchEbayMarket) {
+      throw new Error('eBay API search is only available in the installed CollectorsHub POS desktop app.')
+    }
+
+    const response = await desktop.searchEbayMarket({ query: searchQuery, limit: 25 })
+    const candidates = (response.candidates || []).map((candidate) => classifyMarketSaleCandidate({
+      ...candidate,
+      catalogueItemId,
+    }, item))
+    const reviewCount = candidates.filter((candidate) => candidate.reviewStatus === 'REVIEW').length
+    const excludedCount = candidates.filter((candidate) => candidate.reviewStatus === 'EXCLUDED').length
+    const completeImport = await updateMarketImport(importRow.id, {
+      status: response.mode === 'insights' ? 'completed' : 'review',
+      results_found: candidates.length,
+      results_excluded: excludedCount,
+      results_review: reviewCount,
+      raw_results: response.raw || response.candidates || [],
+      error_message: response.mode === 'browse'
+        ? 'Connected to eBay Browse API. Results are active listings, not confirmed sold history. Use Marketplace Insights mode only if eBay has approved the app for sold-history access.'
+        : null,
+    })
+
+    return {
+      import: completeImport || importRow,
+      item: itemRecord,
+      provider,
+      query: searchQuery,
+      candidates,
+      status: response.mode === 'insights' ? 'completed' : 'review',
+      error: response.mode === 'browse'
+        ? 'eBay connection works. These are active listings, not sold-market sales, so review carefully before saving.'
+        : '',
+      mode: response.mode,
+      marketplaceId: response.marketplaceId,
+      since,
+    }
+  } catch (error) {
+    const message = error.message || 'eBay market fetch failed.'
+    const failedImport = await updateMarketImport(importRow.id, {
+      status: 'error',
+      error_message: message,
+      raw_results: [],
+    })
+    return {
+      import: failedImport || importRow,
+      item: itemRecord,
+      provider,
+      query: searchQuery,
+      candidates: [],
+      status: 'error',
+      error: message,
+      since,
+    }
   }
 }
 

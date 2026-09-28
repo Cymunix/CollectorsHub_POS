@@ -33,6 +33,7 @@ const appRoot = path.resolve(__dirname, '..')
 const distDir = path.join(appRoot, 'dist')
 const appIconPath = path.join(appRoot, 'assets', 'icon.png')
 let mainWindow = null
+let ebayTokenCache = null
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -56,6 +57,196 @@ function getStoreFile() {
 
 function getScanDir() {
   return path.join(getDataDir(), 'scan-images')
+}
+
+function getEbayConfigFile() {
+  return path.join(getDataDir(), 'ebay-api.json')
+}
+
+function sanitiseEbayConfig(config = {}) {
+  return {
+    environment: config.environment || 'production',
+    marketplaceId: config.marketplaceId || 'EBAY_CA',
+    clientId: config.clientId || '',
+    clientSecretConfigured: Boolean(config.clientSecret),
+    salesDataMode: config.salesDataMode || 'browse',
+  }
+}
+
+async function loadEbayConfig({ includeSecret = false } = {}) {
+  const fromEnv = {
+    environment: process.env.EBAY_ENVIRONMENT || 'production',
+    marketplaceId: process.env.EBAY_MARKETPLACE_ID || 'EBAY_CA',
+    clientId: process.env.EBAY_CLIENT_ID || '',
+    clientSecret: process.env.EBAY_CLIENT_SECRET || '',
+    salesDataMode: process.env.EBAY_SALES_DATA_MODE || 'browse',
+  }
+
+  let stored = {}
+  try {
+    if (existsSync(getEbayConfigFile())) {
+      stored = JSON.parse(await readFile(getEbayConfigFile(), 'utf8'))
+    }
+  } catch (error) {
+    console.error('[eBay API] Config read failed:', error)
+  }
+
+  const config = { ...fromEnv, ...stored }
+  return includeSecret ? config : sanitiseEbayConfig(config)
+}
+
+async function saveEbayConfig(nextConfig = {}) {
+  const existing = await loadEbayConfig({ includeSecret: true })
+  const config = {
+    environment: nextConfig.environment || existing.environment || 'production',
+    marketplaceId: nextConfig.marketplaceId || existing.marketplaceId || 'EBAY_CA',
+    clientId: String(nextConfig.clientId || '').trim(),
+    clientSecret: nextConfig.clientSecret ? String(nextConfig.clientSecret).trim() : existing.clientSecret || '',
+    salesDataMode: nextConfig.salesDataMode || existing.salesDataMode || 'browse',
+  }
+
+  await mkdir(getDataDir(), { recursive: true })
+  await writeFile(getEbayConfigFile(), JSON.stringify(config, null, 2))
+  ebayTokenCache = null
+  return sanitiseEbayConfig(config)
+}
+
+function ebayApiBase(config) {
+  return config.environment === 'sandbox' ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com'
+}
+
+async function ebayJson(response) {
+  const text = await response.text()
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { message: text }
+  }
+}
+
+function ebayErrorMessage(payload, fallback) {
+  const errors = payload?.errors || payload?.error?.errors
+  if (Array.isArray(errors) && errors.length) {
+    return errors.map((entry) => entry.message || entry.longMessage || entry.errorId).filter(Boolean).join(' ')
+  }
+  return payload?.error_description || payload?.message || payload?.error || fallback
+}
+
+async function getEbayAccessToken(config) {
+  if (!config.clientId || !config.clientSecret) {
+    throw new Error('Add your eBay Client ID and Client Secret before connecting.')
+  }
+
+  if (
+    ebayTokenCache?.token &&
+    ebayTokenCache.environment === config.environment &&
+    ebayTokenCache.clientId === config.clientId &&
+    ebayTokenCache.expiresAt > Date.now() + 60000
+  ) {
+    return ebayTokenCache.token
+  }
+
+  const credentials = Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    scope: 'https://api.ebay.com/oauth/api_scope',
+  })
+  const response = await fetch(`${ebayApiBase(config)}/identity/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  })
+  const payload = await ebayJson(response)
+  if (!response.ok) throw new Error(ebayErrorMessage(payload, 'eBay OAuth failed.'))
+
+  ebayTokenCache = {
+    token: payload.access_token,
+    environment: config.environment,
+    clientId: config.clientId,
+    expiresAt: Date.now() + Number(payload.expires_in || 7200) * 1000,
+  }
+  return ebayTokenCache.token
+}
+
+function normaliseEbayPrice(price) {
+  return price ? { value: Number(price.value || 0), currency: price.currency || 'CAD' } : { value: 0, currency: 'CAD' }
+}
+
+function mapEbayBrowseItem(item) {
+  const price = normaliseEbayPrice(item.price || item.currentBidPrice)
+  const shipping = normaliseEbayPrice(item.shippingOptions?.[0]?.shippingCost)
+  return {
+    id: item.itemId || item.legacyItemId || randomUUID(),
+    sourceSaleId: item.itemId || item.legacyItemId || null,
+    sourceUrl: item.itemWebUrl || null,
+    title: item.title || 'eBay listing',
+    price: price.value,
+    currency: price.currency,
+    shippingPrice: shipping.value || null,
+    dateOfSale: null,
+    quantity: 1,
+    rawCondition: item.condition || null,
+    source: 'eBay Active',
+    reviewStatus: 'REVIEW',
+    include: false,
+    exclusionReason: 'Active listing only; not confirmed sold.',
+    raw: item,
+  }
+}
+
+function mapEbaySoldItem(item) {
+  const price = normaliseEbayPrice(item.price || item.soldPrice || item.currentBidPrice)
+  const shipping = normaliseEbayPrice(item.shippingOptions?.[0]?.shippingCost)
+  return {
+    id: item.itemId || item.legacyItemId || randomUUID(),
+    sourceSaleId: item.itemId || item.legacyItemId || null,
+    sourceUrl: item.itemWebUrl || null,
+    title: item.title || 'eBay sold item',
+    price: price.value,
+    currency: price.currency,
+    shippingPrice: shipping.value || null,
+    dateOfSale: item.itemEndDate || item.soldDate || item.lastSoldDate || null,
+    quantity: Number(item.quantitySold || 1),
+    rawCondition: item.condition || null,
+    source: 'eBay',
+    raw: item,
+  }
+}
+
+async function searchEbayMarket({ query, limit = 25 } = {}) {
+  const config = await loadEbayConfig({ includeSecret: true })
+  const token = await getEbayAccessToken(config)
+  const mode = config.salesDataMode === 'insights' ? 'insights' : 'browse'
+  const base = ebayApiBase(config)
+  const endpoint = mode === 'insights'
+    ? `${base}/buy/marketplace_insights/v1_beta/item_sales/search`
+    : `${base}/buy/browse/v1/item_summary/search`
+  const url = new URL(endpoint)
+  url.searchParams.set('q', query || '')
+  url.searchParams.set('limit', String(Math.min(Math.max(Number(limit) || 25, 1), 50)))
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'X-EBAY-C-MARKETPLACE-ID': config.marketplaceId || 'EBAY_CA',
+      'Content-Type': 'application/json',
+    },
+  })
+  const payload = await ebayJson(response)
+  if (!response.ok) throw new Error(ebayErrorMessage(payload, 'eBay search failed.'))
+
+  const items = mode === 'insights' ? payload?.itemSales || payload?.itemSummaries || [] : payload?.itemSummaries || []
+  return {
+    mode,
+    marketplaceId: config.marketplaceId || 'EBAY_CA',
+    total: Number(payload?.total || payload?.totalSoldItems || items.length || 0),
+    candidates: items.map(mode === 'insights' ? mapEbaySoldItem : mapEbayBrowseItem),
+    raw: payload,
+  }
 }
 
 function createInitialStore() {
@@ -200,6 +391,14 @@ ipcMain.handle('store:save', async (_event, nextStore) => saveStore(nextStore))
 ipcMain.handle('app:get-data-path', () => getStoreFile())
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('app:exit', () => app.quit())
+ipcMain.handle('ebay:get-config', async () => loadEbayConfig())
+ipcMain.handle('ebay:save-config', async (_event, nextConfig) => saveEbayConfig(nextConfig))
+ipcMain.handle('ebay:test-config', async () => {
+  const config = await loadEbayConfig({ includeSecret: true })
+  await getEbayAccessToken(config)
+  return sanitiseEbayConfig(config)
+})
+ipcMain.handle('ebay:search-market', async (_event, input) => searchEbayMarket(input))
 ipcMain.handle('scanner:select-images', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Select scanned image files',

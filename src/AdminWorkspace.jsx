@@ -630,6 +630,16 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState('')
+  const [isEbayConfigOpen, setIsEbayConfigOpen] = useState(false)
+  const [ebayConfig, setEbayConfig] = useState(null)
+  const [ebayDraft, setEbayDraft] = useState({
+    environment: 'production',
+    marketplaceId: 'EBAY_CA',
+    clientId: '',
+    clientSecret: '',
+    salesDataMode: 'browse',
+  })
+  const [ebayConfigMessage, setEbayConfigMessage] = useState('')
 
   useEffect(() => {
     setQuery(generateMarketSearchQuery(item))
@@ -638,6 +648,34 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
     setError('')
     setSuccess('')
   }, [item?.item_id])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadEbayConfig() {
+      try {
+        const config = await window.nordvikDesktop?.getEbayApiConfig?.()
+        if (!cancelled && config) {
+          setEbayConfig(config)
+          setEbayDraft({
+            environment: config.environment || 'production',
+            marketplaceId: config.marketplaceId || 'EBAY_CA',
+            clientId: config.clientId || '',
+            clientSecret: '',
+            salesDataMode: config.salesDataMode || 'browse',
+          })
+        }
+      } catch (err) {
+        if (!cancelled) setEbayConfigMessage(err.message || 'Could not load eBay API settings.')
+      }
+    }
+
+    loadEbayConfig()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const savedSales = record?.marketSales || []
   const imports = record?.marketImports || []
@@ -739,6 +777,41 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
     }
   }
 
+  async function saveEbayConfig() {
+    setBusy('ebay-config')
+    setError('')
+    setEbayConfigMessage('')
+    try {
+      if (!window.nordvikDesktop?.saveEbayApiConfig) {
+        throw new Error('eBay API settings are only available in the installed desktop app.')
+      }
+      const config = await window.nordvikDesktop.saveEbayApiConfig(ebayDraft)
+      setEbayConfig(config)
+      setEbayDraft((current) => ({ ...current, clientSecret: '' }))
+      setEbayConfigMessage('eBay API settings saved.')
+    } catch (err) {
+      setEbayConfigMessage(err.message || 'Could not save eBay API settings.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function testEbayConfig() {
+    setBusy('ebay-test')
+    setError('')
+    setEbayConfigMessage('')
+    try {
+      const config = await window.nordvikDesktop?.testEbayApiConfig?.()
+      if (!config) throw new Error('eBay API test is only available in the installed desktop app.')
+      setEbayConfig(config)
+      setEbayConfigMessage('eBay OAuth connection succeeded.')
+    } catch (err) {
+      setEbayConfigMessage(err.message || 'eBay OAuth connection failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   return (
     <div className="market-data-workspace">
       <section className="market-data-card">
@@ -763,18 +836,65 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
           </select>
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Generated market search query" />
           <button className="admin-gold-button" type="button" onClick={runFetch} disabled={busy === 'fetch' || !query.trim()}>
-            {busy === 'fetch' ? 'Fetching...' : 'Fetch Market Sales'}
+            {busy === 'fetch' ? 'Fetching...' : ebayConfig?.salesDataMode === 'insights' ? 'Fetch Market Sales' : 'Fetch eBay Listings'}
           </button>
         </div>
         <div className="admin-button-row">
           <button className="admin-secondary-button" type="button" onClick={() => setQuery(generateMarketSearchQuery(item))}>Regenerate Query</button>
           <button className="admin-secondary-button" type="button" onClick={onReload}>View Sales History</button>
+          <button className="admin-secondary-button" type="button" onClick={() => setIsEbayConfigOpen((current) => !current)}>
+            {ebayConfig?.clientSecretConfigured ? 'eBay Connected' : 'Configure eBay API'}
+          </button>
           <label className={`admin-secondary-button market-csv-upload ${busy === 'csv' ? 'disabled' : ''}`}>
             <FileUp size={16} />
             {busy === 'csv' ? 'Importing CSV...' : 'Upload CSV to Selected Item'}
             <input type="file" accept=".csv,text/csv" onChange={importCsv} disabled={busy === 'csv'} />
           </label>
         </div>
+        {isEbayConfigOpen ? (
+          <div className="market-api-config">
+            <label>
+              <span>Environment</span>
+              <select value={ebayDraft.environment} onChange={(event) => setEbayDraft({ ...ebayDraft, environment: event.target.value })}>
+                <option value="production">Production</option>
+                <option value="sandbox">Sandbox</option>
+              </select>
+            </label>
+            <label>
+              <span>Marketplace</span>
+              <select value={ebayDraft.marketplaceId} onChange={(event) => setEbayDraft({ ...ebayDraft, marketplaceId: event.target.value })}>
+                <option value="EBAY_CA">Canada</option>
+                <option value="EBAY_US">United States</option>
+                <option value="EBAY_GB">United Kingdom</option>
+                <option value="EBAY_AU">Australia</option>
+              </select>
+            </label>
+            <label>
+              <span>Sales Data Mode</span>
+              <select value={ebayDraft.salesDataMode} onChange={(event) => setEbayDraft({ ...ebayDraft, salesDataMode: event.target.value })}>
+                <option value="browse">Browse API: active listings</option>
+                <option value="insights">Marketplace Insights: sold history</option>
+              </select>
+            </label>
+            <label>
+              <span>Client ID</span>
+              <input value={ebayDraft.clientId} onChange={(event) => setEbayDraft({ ...ebayDraft, clientId: event.target.value })} placeholder="eBay App ID / Client ID" />
+            </label>
+            <label>
+              <span>Client Secret</span>
+              <input type="password" value={ebayDraft.clientSecret} onChange={(event) => setEbayDraft({ ...ebayDraft, clientSecret: event.target.value })} placeholder={ebayConfig?.clientSecretConfigured ? 'Saved; leave blank to keep current secret' : 'eBay Cert ID / Client Secret'} />
+            </label>
+            <div className="admin-button-row">
+              <button className="admin-gold-button" type="button" onClick={saveEbayConfig} disabled={busy === 'ebay-config'}>
+                {busy === 'ebay-config' ? 'Saving...' : 'Save eBay API'}
+              </button>
+              <button className="admin-secondary-button" type="button" onClick={testEbayConfig} disabled={busy === 'ebay-test' || !ebayConfig?.clientSecretConfigured}>
+                {busy === 'ebay-test' ? 'Testing...' : 'Test Connection'}
+              </button>
+            </div>
+            {ebayConfigMessage ? <p className="admin-success">{ebayConfigMessage}</p> : null}
+          </div>
+        ) : null}
         {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
         {success ? <p className="admin-success">{success}</p> : null}
         {fetchResult?.error ? (

@@ -1427,6 +1427,8 @@ button:disabled {
 
 .market-fetch-row input,
 .market-fetch-row select,
+.market-api-config input,
+.market-api-config select,
 .market-review-table input,
 .market-review-table select {
   background: #ffffff;
@@ -1437,6 +1439,36 @@ button:disabled {
   min-height: 38px;
   min-width: 0;
   padding: 0 10px;
+}
+
+.market-api-config {
+  background: #f7f9fc;
+  border: 1px solid #dfe6ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+  padding: 12px;
+}
+
+.market-api-config label {
+  display: grid;
+  gap: 5px;
+}
+
+.market-api-config label:nth-of-type(4),
+.market-api-config label:nth-of-type(5),
+.market-api-config .admin-button-row,
+.market-api-config .admin-success {
+  grid-column: 1 / -1;
+}
+
+.market-api-config span {
+  color: #6c7585;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .market-review-header {
