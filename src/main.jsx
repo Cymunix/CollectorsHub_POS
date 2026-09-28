@@ -300,15 +300,6 @@ function App() {
     }
   }, [authSession, store.register, store.transactions])
 
-  const filteredInventory = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    if (!query) return store.inventory
-
-    return store.inventory.filter((item) => (
-      [item.name, item.category, item.sku].some((value) => String(value || '').toLowerCase().includes(query))
-    ))
-  }, [search, store.inventory])
-
   function addToCart(item) {
     setCart((currentCart) => {
       const existing = currentCart.find((cartItem) => cartItem.id === item.id)
@@ -750,7 +741,7 @@ function App() {
 
         {activeView === 'inventory' ? (
           <InventoryView
-            inventory={filteredInventory}
+            inventory={store.inventory}
             search={search}
             setSearch={setSearch}
           />
@@ -3472,35 +3463,236 @@ function conditionOptions(mode, category) {
 }
 
 function InventoryView({ inventory, search, setSearch }) {
+  const [stockFilter, setStockFilter] = useState('all')
+  const [sortMode, setSortMode] = useState('name')
+  const [selectedId, setSelectedId] = useState('')
+
+  const categories = useMemo(() => (
+    [...new Set((inventory || []).map((item) => item.category).filter(Boolean))].sort()
+  ), [inventory])
+  const [categoryFilter, setCategoryFilter] = useState('all')
+
+  const stats = useMemo(() => {
+    const rows = inventory || []
+    const units = rows.reduce((sum, item) => sum + inventoryStock(item), 0)
+    const availableUnits = rows.reduce((sum, item) => sum + Number(item.available ?? item.quantity ?? 0), 0)
+    const retailValue = rows.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.available ?? item.quantity ?? 0), 0)
+    const costValue = rows.reduce((sum, item) => sum + Number(item.cost || item.buyPrice || 0) * Number(item.available ?? item.quantity ?? 0), 0)
+    const lowStock = rows.filter((item) => Number(item.available ?? item.quantity ?? 0) <= 1).length
+    const unpriced = rows.filter((item) => Number(item.price || 0) <= 0).length
+    return { rows: rows.length, units, availableUnits, retailValue, costValue, lowStock, unpriced }
+  }, [inventory])
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    const rows = (inventory || []).filter((item) => {
+      const available = Number(item.available ?? item.quantity ?? 0)
+      const price = Number(item.price || 0)
+      if (stockFilter === 'available' && available <= 0) return false
+      if (stockFilter === 'low' && available > 1) return false
+      if (stockFilter === 'unpriced' && price > 0) return false
+      if (stockFilter === 'listed' && !item.listedForSale) return false
+      if (categoryFilter !== 'all' && item.category !== categoryFilter) return false
+      if (!term) return true
+      return [
+        item.name,
+        item.title,
+        item.sku,
+        item.barcode,
+        item.number,
+        item.category,
+        item.condition,
+        item.gradingCompany,
+        item.catalogItemId,
+      ].some((value) => String(value || '').toLowerCase().includes(term))
+    })
+
+    return [...rows].sort((a, b) => {
+      if (sortMode === 'stock') return Number(b.available ?? b.quantity ?? 0) - Number(a.available ?? a.quantity ?? 0)
+      if (sortMode === 'price') return Number(b.price || 0) - Number(a.price || 0)
+      if (sortMode === 'updated') return new Date(b.syncedAt || 0) - new Date(a.syncedAt || 0)
+      return String(a.name || a.title || '').localeCompare(String(b.name || b.title || ''))
+    })
+  }, [categoryFilter, inventory, search, sortMode, stockFilter])
+
+  useEffect(() => {
+    if (!filtered.length) {
+      setSelectedId('')
+      return
+    }
+    if (!filtered.some((item) => item.id === selectedId)) {
+      setSelectedId(filtered[0].id)
+    }
+  }, [filtered, selectedId])
+
+  const selected = filtered.find((item) => item.id === selectedId) || filtered[0] || null
+
   return (
-    <div className="inventory-layout inventory-layout-full">
-      <section className="panel">
-        <div className="panel-header">
+    <div className="inventory-workspace">
+      <section className="inventory-hero panel">
+        <div className="inventory-hero-main">
           <div>
             <p className="eyebrow">Synced stockroom cache</p>
             <h2>Inventory</h2>
+            <span>{stats.rows.toLocaleString()} records · {stats.availableUnits.toLocaleString()} available units</span>
           </div>
           <SearchBox value={search} onChange={setSearch} />
         </div>
-        <div className="inventory-list">
-          {inventory.length === 0 ? <EmptyState text="Your desktop inventory starts here." /> : null}
-          {inventory.map((item) => (
-            <div className="inventory-row" key={item.id}>
-              <span className="inventory-row-main">
-                <ItemThumb item={item} />
-                <span>
-                <strong>{item.name}</strong>
-                  <small>{[item.category, item.sku ? `SKU ${item.sku}` : '', item.condition].filter(Boolean).join(' · ')}</small>
-                </span>
-              </span>
-              <span className="row-meta">
-                <strong>{money.format(Number(item.price || 0))}</strong>
-                <small>{item.quantity} available{item.onlinePrice != null ? ` · online ${money.format(Number(item.onlinePrice))}` : ''}</small>
-              </span>
-            </div>
-          ))}
+        <div className="inventory-summary-grid">
+          <InventorySummary label="Retail Value" value={money.format(stats.retailValue)} />
+          <InventorySummary label="Cost Basis" value={money.format(stats.costValue)} />
+          <InventorySummary label="Low Stock" value={String(stats.lowStock)} tone={stats.lowStock ? 'warn' : ''} />
+          <InventorySummary label="Unpriced" value={String(stats.unpriced)} tone={stats.unpriced ? 'warn' : ''} />
         </div>
       </section>
+
+      <section className="inventory-toolbar panel">
+        <div className="inventory-filter-row">
+          {[
+            ['all', 'All'],
+            ['available', 'Available'],
+            ['low', 'Low Stock'],
+            ['unpriced', 'Unpriced'],
+            ['listed', 'Listed'],
+          ].map(([key, label]) => (
+            <button className={stockFilter === key ? 'active' : ''} type="button" key={key} onClick={() => setStockFilter(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="inventory-control-row">
+          <label>
+            <span>Category</span>
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="all">All categories</option>
+              {categories.map((category) => <option key={category}>{category}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Sort</span>
+            <select value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
+              <option value="name">Name</option>
+              <option value="stock">Available stock</option>
+              <option value="price">Price high to low</option>
+              <option value="updated">Last synced</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <div className="inventory-detail-layout">
+        <section className="inventory-table-panel panel">
+          <div className="inventory-table-head">
+            <span><strong>{filtered.length.toLocaleString()}</strong> matching records</span>
+            <small>{search.trim() ? `Search: ${search.trim()}` : 'Local cache from latest sync'}</small>
+          </div>
+          <div className="inventory-table">
+            <div className="inventory-table-row inventory-table-header">
+              <span>Item</span>
+              <span>SKU / Barcode</span>
+              <span>Stock</span>
+              <span>Price</span>
+              <span>Status</span>
+            </div>
+            {!filtered.length ? <EmptyState text="No inventory matches the current filters." /> : null}
+            {filtered.map((item) => {
+              const available = Number(item.available ?? item.quantity ?? 0)
+              const lowStock = available <= 1
+              const unpriced = Number(item.price || 0) <= 0
+              return (
+                <button
+                  className={selected?.id === item.id ? 'inventory-table-row selected' : 'inventory-table-row'}
+                  type="button"
+                  key={item.id}
+                  onClick={() => setSelectedId(item.id)}
+                >
+                  <span className="inventory-row-main">
+                    <ItemThumb item={item} />
+                    <span>
+                      <strong>{item.name || item.title}</strong>
+                      <small>{[item.category, item.condition, item.grade ? `Grade ${item.grade}` : ''].filter(Boolean).join(' · ')}</small>
+                    </span>
+                  </span>
+                  <span>
+                    <strong>{item.sku || '—'}</strong>
+                    <small>{item.barcode || item.number || 'No barcode'}</small>
+                  </span>
+                  <span>
+                    <strong>{available}</strong>
+                    <small>{Number(item.reserved || 0) ? `${item.reserved} reserved` : `${item.onHand ?? available} on hand`}</small>
+                  </span>
+                  <span>
+                    <strong>{Number(item.price || 0) > 0 ? money.format(Number(item.price || 0)) : '—'}</strong>
+                    <small>{item.onlinePrice != null ? `Online ${money.format(Number(item.onlinePrice))}` : item.cost != null ? `Cost ${money.format(Number(item.cost))}` : 'No comparison'}</small>
+                  </span>
+                  <span className="inventory-status-stack">
+                    <b className={lowStock ? 'inventory-chip warn' : 'inventory-chip'}>{lowStock ? 'Low' : 'Ready'}</b>
+                    {unpriced ? <b className="inventory-chip warn">Unpriced</b> : null}
+                    {item.listedForSale ? <b className="inventory-chip">Listed</b> : null}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+
+        <aside className="inventory-detail-panel panel">
+          {selected ? (
+            <>
+              <div className="inventory-detail-card">
+                <ItemThumb item={selected} />
+                <span>
+                  <p className="eyebrow">Selected Item</p>
+                  <h3>{selected.name || selected.title}</h3>
+                  <small>{[selected.category, selected.condition].filter(Boolean).join(' · ') || selected.inventoryId}</small>
+                </span>
+              </div>
+              <div className="inventory-detail-metrics">
+                <InventorySummary label="Available" value={String(Number(selected.available ?? selected.quantity ?? 0))} />
+                <InventorySummary label="On Hand" value={String(Number(selected.onHand ?? selected.quantity ?? 0))} />
+                <InventorySummary label="Reserved" value={String(Number(selected.reserved || 0))} />
+                <InventorySummary label="Price" value={Number(selected.price || 0) > 0 ? money.format(Number(selected.price)) : '—'} tone={Number(selected.price || 0) <= 0 ? 'warn' : ''} />
+              </div>
+              <div className="inventory-field-list">
+                <InventoryField label="SKU" value={selected.sku} />
+                <InventoryField label="Barcode" value={selected.barcode} />
+                <InventoryField label="Catalogue ID" value={selected.catalogItemId} />
+                <InventoryField label="Inventory ID" value={selected.inventoryId || selected.id} />
+                <InventoryField label="Cost" value={selected.cost != null ? money.format(Number(selected.cost)) : ''} />
+                <InventoryField label="Online Price" value={selected.onlinePrice != null ? money.format(Number(selected.onlinePrice)) : ''} />
+                <InventoryField label="Trade-In" value={selected.isTradeIn ? 'Yes' : 'No'} />
+                <InventoryField label="Listed for Sale" value={selected.listedForSale ? 'Yes' : 'No'} />
+                <InventoryField label="Last Synced" value={selected.syncedAt ? new Date(selected.syncedAt).toLocaleString() : ''} />
+              </div>
+              <div className="inventory-detail-actions">
+                <button type="button" onClick={() => setSearch(selected.sku || selected.barcode || selected.name || '')}>Search Similar</button>
+                <button type="button" disabled>Adjust Stock</button>
+                <button type="button" disabled>Print Label</button>
+              </div>
+            </>
+          ) : (
+            <EmptyState text="Select an inventory item to inspect details." />
+          )}
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+function InventorySummary({ label, value, tone = '' }) {
+  return (
+    <article className={tone ? `inventory-summary ${tone}` : 'inventory-summary'}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  )
+}
+
+function InventoryField({ label, value }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value || '—'}</strong>
     </div>
   )
 }
