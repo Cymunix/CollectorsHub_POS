@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url')
 const { randomUUID } = require('node:crypto')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
+const { autoUpdater } = require('electron-updater')
 
 const execFileAsync = promisify(execFile)
 
@@ -30,10 +31,11 @@ function cleanPowerShellError(raw) {
 const isDev = Boolean(process.env.NORDVIK_DESKTOP_RENDERER_URL)
 const appRoot = path.resolve(__dirname, '..')
 const distDir = path.join(appRoot, 'dist')
+let mainWindow = null
 
 protocol.registerSchemesAsPrivileged([
   {
-    scheme: 'nordvik-desktop',
+    scheme: 'collectorshub-pos',
     privileges: {
       standard: true,
       secure: true,
@@ -118,12 +120,12 @@ function resolveDistPath(requestUrl) {
 }
 
 async function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
     minWidth: 1060,
     minHeight: 700,
-    title: 'NORDVIK Desktop',
+    title: 'CollectorsHub POS',
     backgroundColor: '#f6f3ed',
     fullscreen: true,
     autoHideMenuBar: true,
@@ -150,8 +152,45 @@ async function createWindow() {
   if (isDev) {
     await mainWindow.loadURL(process.env.NORDVIK_DESKTOP_RENDERER_URL)
   } else {
-    await mainWindow.loadURL('nordvik-desktop://app/index.html')
+    await mainWindow.loadURL('collectorshub-pos://app/index.html')
   }
+}
+
+function configureAutoUpdates() {
+  if (isDev) return
+
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-downloaded', (_event, releaseNotes, releaseName) => {
+    const detail = releaseName
+      ? `${releaseName} has been downloaded and will install when CollectorsHub POS closes.`
+      : 'An update has been downloaded and will install when CollectorsHub POS closes.'
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        buttons: ['Restart now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Update ready',
+        message: 'CollectorsHub POS update ready',
+        detail,
+      }).then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall(false, true)
+      })
+    }
+  })
+
+  autoUpdater.on('error', (error) => {
+    console.error('[Auto Update] Failed:', error)
+  })
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+      console.error('[Auto Update] Check failed:', error)
+    })
+  }, 5000)
 }
 
 ipcMain.handle('store:load', async () => ensureStore())
@@ -242,13 +281,14 @@ ipcMain.handle('scanner:scan-image', async () => {
 
 app.whenReady().then(async () => {
   if (!isDev) {
-    protocol.handle('nordvik-desktop', (request) => {
+    protocol.handle('collectorshub-pos', (request) => {
       const filePath = resolveDistPath(request.url)
       return net.fetch(pathToFileURL(filePath).toString())
     })
   }
 
   await createWindow()
+  configureAutoUpdates()
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {

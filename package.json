@@ -1,8 +1,9 @@
 {
-  "name": "@nordvik/desktop-app",
+  "name": "collectorshub-pos",
   "private": true,
   "version": "0.1.0",
-  "description": "Local-first NORDVIK desktop app.",
+  "description": "Local-first CollectorsHub POS desktop app.",
+  "author": "CollectorsHub",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -10,11 +11,13 @@
     "build": "vite build",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "release": "npm run build && electron-builder --publish always"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.544.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -26,8 +29,8 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.nordvik.desktop",
-    "productName": "NORDVIK Desktop",
+    "appId": "com.collectorshub.pos",
+    "productName": "CollectorsHub POS",
     "directories": {
       "output": "release"
     },
@@ -35,6 +38,13 @@
       "dist/**/*",
       "electron/**/*",
       "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Cymunix",
+        "repo": "CollectorsHub_POS"
+      }
     ],
     "win": {
       "target": "nsis"
