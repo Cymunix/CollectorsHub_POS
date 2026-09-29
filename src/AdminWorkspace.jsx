@@ -1762,17 +1762,28 @@ function ScanIntake({ onCreateDraft }) {
 
   async function scanFromDevice(side) {
     setScannerError('')
-    setScannerMessage('Waiting for the Canon scanner...')
+    setScannerMessage('Detecting scanner...')
+    const waitingTimer = window.setTimeout(() => {
+      setScannerMessage('Waiting for the scanner transfer window...')
+    }, 1500)
     try {
       const image = await adminDesktopApi().scanImage()
+      window.clearTimeout(waitingTimer)
+      if (image?.needsSelection) {
+        const names = (image.scanners || []).map((scanner) => scanner.name).filter(Boolean)
+        setScannerMessage(names.length ? `${image.message} Found: ${names.join(', ')}` : image.message || 'Choose a WIA scanner before scanning.')
+        return
+      }
       if (!image || image.canceled) {
         setScannerMessage('Scan canceled.')
         return
       }
+      setScannerMessage('Processing scanned image...')
       if (side === 'front') setFrontImage(image)
       if (side === 'back') setBackImage(image)
       setScannerMessage(`${side === 'front' ? 'Front' : 'Back'} scan captured.`)
     } catch (error) {
+      window.clearTimeout(waitingTimer)
       setScannerMessage('')
       setScannerError(error.message || 'Could not connect to the Canon scanner.')
     }

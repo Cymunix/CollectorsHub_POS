@@ -26,6 +26,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Clean release output
+        shell: pwsh
+        run: Remove-Item -Recurse -Force release -ErrorAction SilentlyContinue
+
       - name: Build installer
         run: npm run dist
         env:

@@ -4628,6 +4628,7 @@ button:disabled {
 }
 
 .scanner-status-dot.paused i,
+.scanner-status-dot.detecting i,
 .scanner-status-dot.processing i,
 .scanner-status-dot.scanning i {
   background: #d19a19;

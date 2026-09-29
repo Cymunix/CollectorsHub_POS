@@ -82,6 +82,23 @@ const storeOpeningCashByCode = {
   NOR001: 300,
 }
 
+const generalRetailCategories = [
+  'General Merchandise',
+  'Supplies',
+  'Accessories',
+  'Apparel',
+  'Food & Drink',
+  'Books & Media',
+  'Electronics',
+  'Services',
+  'Other',
+]
+
+function isCollectibleCategory(category) {
+  const text = String(category || '').toLowerCase()
+  return /card|lego|building|comic|coin|collectible|memorabilia|video game|game|toy|figure/.test(text)
+}
+
 function desktopApi() {
   if (window.nordvikDesktop) return window.nordvikDesktop
 
@@ -339,6 +356,47 @@ function App() {
         : item
     ))
     await persist({ ...store, inventory: nextInventory, sync: nextSync })
+  }
+
+  async function createInventoryItem(draft) {
+    const now = new Date().toISOString()
+    const quantity = Math.max(0, Number(draft.quantityAvailable ?? draft.quantity ?? draft.available ?? 0))
+    const item = {
+      id: createId('inventory'),
+      inventoryId: '',
+      catalogItemId: '',
+      name: String(draft.name || draft.title || 'New item').trim(),
+      title: String(draft.name || draft.title || 'New item').trim(),
+      sku: String(draft.sku || '').trim(),
+      barcode: String(draft.barcode || '').trim(),
+      category: String(draft.category || 'General Merchandise').trim(),
+      itemType: String(draft.itemType || 'general').trim(),
+      condition: String(draft.condition || 'New').trim(),
+      cost: Number(draft.cost || 0),
+      buyPrice: Number(draft.cost || 0),
+      inStorePrice: Number(draft.inStorePrice || 0),
+      onlinePrice: Number(draft.onlinePrice || draft.inStorePrice || 0),
+      price: Number(draft.inStorePrice || 0),
+      quantity,
+      quantityAvailable: quantity,
+      available: quantity,
+      onHand: quantity,
+      reserved: 0,
+      hasExplicitPrice: Number(draft.inStorePrice || draft.onlinePrice || 0) > 0,
+      hasOnlineDraft: false,
+      listedForSale: false,
+      listingApproved: false,
+      isTradeIn: false,
+      isGeneralRetail: !isCollectibleCategory(draft.category),
+      syncedAt: now,
+      createdAt: now,
+    }
+    const nextSync = {
+      ...syncStatus,
+      pendingLocalChanges: Number(syncStatus?.pendingLocalChanges || 0) + 1,
+    }
+    await persist({ ...store, inventory: [...(store.inventory || []), item], sync: nextSync })
+    return item
   }
 
   function requestNavigate(nextView) {
@@ -783,6 +841,7 @@ function App() {
               setActiveView('register')
             }}
             onSyncNow={handleSyncNow}
+            onCreateItem={createInventoryItem}
             onUpdateItem={updateInventoryItem}
             search={search}
             setSearch={setSearch}
@@ -1472,9 +1531,19 @@ function RegisterView({
   }
 
   async function captureScanImageEvent(workflow) {
-    setScanStatus('Scanning')
+    setScanStatus('Detecting')
+    const waitingTimer = window.setTimeout(() => {
+      setScanStatus('Scanning')
+    }, 1500)
     try {
       const image = await desktopApi().scanImage()
+      window.clearTimeout(waitingTimer)
+      if (image?.needsSelection) {
+        const names = (image.scanners || []).map((scanner) => scanner.name).filter(Boolean)
+        setScanStatus('Paused')
+        setNotice(names.length ? `${image.message} Found: ${names.join(', ')}` : image.message || 'Choose a WIA scanner before scanning.')
+        return null
+      }
       if (image?.canceled) {
         setScanStatus('Paused')
         setNotice('Scanner canceled.')
@@ -1487,6 +1556,8 @@ function RegisterView({
       setScanStatus('Error')
       setNotice(error?.message || 'Scanner could not capture an image.')
       return null
+    } finally {
+      window.clearTimeout(waitingTimer)
     }
   }
 
@@ -3512,14 +3583,18 @@ function initials(value) {
 
 function conditionOptions(mode, category) {
   const categoryText = String(category || '').toLowerCase()
+  if (categoryText.includes('service')) return ['N/A']
   if (mode === 'buy' && (categoryText.includes('lego') || categoryText.includes('building'))) {
     return ['New/Sealed', 'Pre-Owned 100%', 'Pre-Owned - Missing Parts', 'Damaged']
+  }
+  if (!isCollectibleCategory(category)) {
+    return ['New', 'Open Box', 'Used - Like New', 'Used - Good', 'Used - Fair', 'Damaged', 'N/A']
   }
 
   return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged', 'New/Sealed', 'Used/Complete']
 }
 
-function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow, onUpdateItem, search, setSearch, syncStatus }) {
+function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow, onCreateItem, onUpdateItem, search, setSearch, syncStatus }) {
   const [activeWorkflow, setActiveWorkflow] = useState('')
   const [itemOverrides, setItemOverrides] = useState({})
   const [inventoryNotice, setInventoryNotice] = useState('')
@@ -3615,6 +3690,21 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
   }, [filtered, selectedId])
 
   const selected = filtered.find((item) => item.id === selectedId) || filtered[0] || null
+  const workflowItem = activeWorkflow === 'create'
+    ? {
+        id: 'new',
+        name: '',
+        sku: '',
+        barcode: '',
+        category: 'General Merchandise',
+        itemType: 'general',
+        condition: 'New',
+        quantityAvailable: 1,
+        cost: 0,
+        inStorePrice: 0,
+        onlinePrice: 0,
+      }
+    : selected
   const pendingChanges = Number(syncStatus?.pendingLocalChanges || 0)
   const lastSynced = formatSyncTime(syncStatus?.lastSyncAt)
 
@@ -3638,11 +3728,22 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
   }
 
   function openWorkflow(workflow, item = selected) {
-    if (!item) return
-    selectInventoryRow(item)
+    if (workflow !== 'create' && !item) return
+    if (item) selectInventoryRow(item)
     setActiveWorkflow(workflow)
     setInventoryNotice('')
     setRowMenu(null)
+  }
+
+  async function createInventoryItem(patch) {
+    const created = await onCreateItem?.(patch)
+    if (created?.id) {
+      setSelectedId(created.id)
+      setStockFilter('all')
+      setCategoryFilter('all')
+    }
+    setInventoryNotice(`${patch.name || 'Item'} was added to inventory.`)
+    setActiveWorkflow('')
   }
 
   function sellSelectedItem() {
@@ -3726,7 +3827,7 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
           </span>
         </div>
         <div className="inventory-page-actions">
-          <button className="gold-button" type="button" onClick={() => showInventoryNotice('Add Item is next: create the item record, receive stock, then price it for in-store and online.')}>
+          <button className="gold-button" type="button" onClick={() => openWorkflow('create')}>
             <Plus size={17} /> Add Item
           </button>
           <button className="secondary-action" type="button" onClick={onSyncNow} disabled={isSyncing}>

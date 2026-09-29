@@ -583,7 +583,7 @@ ipcMain.handle('scanner:scan-image', async () => {
   }
 
   await mkdir(getScanDir(), { recursive: true })
-  const fileName = `${Date.now()}-${randomUUID()}.png`
+  const fileName = `${Date.now()}-${randomUUID()}.jpg`
   const destinationPath = path.join(getScanDir(), fileName)
   const escapedPath = destinationPath.replace(/'/g, "''")
   const script = [
@@ -591,19 +591,27 @@ ipcMain.handle('scanner:scan-image', async () => {
     // Suppress the "Preparing modules for first use" progress record, which
     // PowerShell otherwise serialises as CLIXML noise onto the error stream.
     "$ProgressPreference = 'SilentlyContinue'",
-    // Give a clear message when there is simply no imaging device, instead of the
-    // opaque COM "No WIA device of the selected type is available".
+    // Match the known-good WIA flow: enumerate devices, select a real WIA
+    // scanner (Type 1), connect, then transfer from Items.Item(1). The Canon
+    // TS3725/TS3700 exposes a second ESCL entry that looks attractive by name
+    // but is not the working WIA scanner for this acquisition path.
     "$manager = New-Object -ComObject WIA.DeviceManager",
     "if ($manager.DeviceInfos.Count -eq 0) { throw 'No imaging device detected. Make sure the scanner is powered on, connected, and its Windows (WIA) driver is installed.' }",
+    "$scannerInfos = @($manager.DeviceInfos | Where-Object { $_.Type -eq 1 })",
+    "$scannerRows = @($scannerInfos | ForEach-Object { @{ name = [string]$_.Properties['Name'].Value; deviceId = [string]$_.DeviceID; type = [int]$_.Type } })",
+    "if ($scannerInfos.Count -eq 0) { Write-Output (@{ needsSelection = $true; scanners = $scannerRows; message = 'No WIA scanner devices were found. Confirm the scanner is visible in Windows WIA.' } | ConvertTo-Json -Compress); exit 0 }",
+    "$scanner = $scannerInfos | Where-Object { ([string]$_.Properties['Name'].Value) -match 'TS3700|TS3725' } | Select-Object -First 1",
+    "if (-not $scanner -and $scannerInfos.Count -eq 1) { $scanner = $scannerInfos | Select-Object -First 1 }",
+    "if (-not $scanner) { Write-Output (@{ needsSelection = $true; scanners = $scannerRows; message = 'Multiple WIA scanners are available. Select a default scanner in CollectorsHub scanner settings.' } | ConvertTo-Json -Compress); exit 0 }",
+    "$scannerName = [string]$scanner.Properties['Name'].Value",
+    "$device = $scanner.Connect()",
+    "$item = $device.Items.Item(1)",
     "$dialog = New-Object -ComObject WIA.CommonDialog",
-    // Device type 0 (Unspecified) instead of 1 (Scanner-only): many all-in-ones
-    // and document scanners expose themselves to WIA without the strict Scanner
-    // type, and the Scanner filter is what raised "No WIA device of the selected
-    // type is available" even though a usable device was present.
-    "$image = $dialog.ShowAcquireImage(0, 4, 0, '', $false, $true, $false)",
-    "if ($null -eq $image) { Write-Output (@{ canceled = $true } | ConvertTo-Json -Compress); exit 0 }",
+    "$jpeg = '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}'",
+    "$image = $dialog.ShowTransfer($item, $jpeg, $false)",
+    "if ($null -eq $image) { Write-Output (@{ canceled = $true; scannerName = $scannerName } | ConvertTo-Json -Compress); exit 0 }",
     `$image.SaveFile('${escapedPath}')`,
-    `Write-Output (@{ canceled = $false; path = '${escapedPath}' } | ConvertTo-Json -Compress)`,
+    `Write-Output (@{ canceled = $false; path = '${escapedPath}'; scannerName = $scannerName } | ConvertTo-Json -Compress)`,
   ].join('; ')
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
 
@@ -614,17 +622,22 @@ ipcMain.handle('scanner:scan-image', async () => {
       'Bypass',
       '-EncodedCommand',
       encoded,
-    ], { windowsHide: true, maxBuffer: 1024 * 1024 })
+    ], { windowsHide: true, maxBuffer: 1024 * 1024, timeout: 120000, killSignal: 'SIGKILL' })
     const result = JSON.parse(stdout.trim().split(/\r?\n/).filter(Boolean).pop() || '{}')
+    if (result.needsSelection) return result
     if (result.canceled) return { canceled: true }
     return {
       canceled: false,
       path: destinationPath,
       url: pathToFileURL(destinationPath).toString(),
       fileName,
+      scannerName: result.scannerName || '',
     }
   } catch (error) {
-    const detail = cleanPowerShellError(error.stderr || error.message) || 'Windows could not acquire an image from the scanner.'
+    const timedOut = error.killed || error.signal
+    const detail = timedOut
+      ? 'Scanner acquisition timed out. Cancel the scanner dialog or try the scan again.'
+      : cleanPowerShellError(error.stderr || error.message) || 'Windows could not acquire an image from the scanner.'
     throw new Error(`Scanner acquisition failed: ${detail}`)
   }
 })
