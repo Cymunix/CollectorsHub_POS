@@ -2772,58 +2772,285 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.review-comparison {
+.review-actions .admin-gold-button {
+  background: #d6a632;
+  border-color: #d6a632;
+  color: #0b111b;
+}
+
+.scan-match-banner {
+  align-items: center;
   background: #ffffff;
   border: 1px solid #d7dee8;
+  border-left: 4px solid #9aa8bb;
   border-radius: 8px;
-  display: grid;
-  gap: 6px;
+  display: flex;
+  gap: 12px;
   margin-top: 10px;
-  padding: 10px;
+  padding: 10px 12px;
 }
 
-.review-comparison-header {
+.scan-match-banner.found {
+  border-left-color: #d6a632;
+}
+
+.scan-match-banner img {
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  height: 64px;
+  object-fit: contain;
+  width: 48px;
+}
+
+.scan-match-banner strong {
+  color: #0b111b;
+}
+
+.scan-review-modal {
   align-items: center;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-}
-
-.review-comparison-header span {
-  display: flex;
-  gap: 5px;
-}
-
-.review-comparison-header button {
-  font-size: 11px;
-  min-height: 28px;
-  padding: 0 8px;
-}
-
-.review-comparison-row {
-  align-items: center;
-  border-top: 1px solid #edf0f4;
+  background: rgba(11, 17, 27, 0.5);
   display: grid;
+  inset: 0;
+  justify-items: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 200;
+}
+
+.scan-review-modal > section {
+  background: #ffffff;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  border-top: 4px solid #d6a632;
+  box-shadow: 0 28px 70px rgba(11, 17, 27, 0.25);
+  color: #07142b;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  max-height: calc(100vh - 48px);
+  max-width: 1180px;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.scan-review-header {
+  align-items: start;
+  border-bottom: 1px solid #e3e8ef;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 18px 60px 16px 20px;
+}
+
+.scan-review-header h2 {
+  font-family: "Space Grotesk", Manrope, sans-serif;
+  font-size: 22px;
+  margin: 2px 0 10px;
+}
+
+.scan-review-images {
+  display: flex;
   gap: 8px;
-  grid-template-columns: 110px minmax(0, 1fr) auto;
-  padding-top: 7px;
 }
 
-.review-comparison-row.changed small {
-  color: #9b2d2d;
+.scan-review-images img,
+.scan-review-match-image {
+  background: #f4f6f8;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  height: 112px;
+  object-fit: contain;
+  width: 80px;
 }
 
-.review-comparison-row button {
+.scan-review-match-image {
+  border-color: #d6a632;
+}
+
+.scan-review-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.scan-review-controls label {
+  color: #526176;
+  display: grid;
   font-size: 11px;
-  min-height: 28px;
+  font-weight: 900;
+  gap: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scan-review-controls select {
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  color: #07142b;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+  min-height: 38px;
+  min-width: 220px;
+  padding: 0 10px;
+  text-transform: none;
+}
+
+.scan-review-summary {
+  align-items: center;
+  background: #f8f5ec;
+  color: #34455f;
+  display: flex;
+  font-size: 13px;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 20px;
+}
+
+.scan-review-modal .admin-error {
+  margin: 10px 20px 0;
+}
+
+.scan-review-table-wrap {
+  overflow: auto;
+  padding: 0 20px 12px;
+}
+
+.scan-review-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.scan-review-table thead th {
+  background: #ffffff;
+  border-bottom: 1px solid #d7dee8;
+  color: #526176;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 12px 8px 8px;
+  position: sticky;
+  text-align: left;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 1;
+}
+
+.scan-review-table .scan-review-group th {
+  color: #8a5d00;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  padding: 16px 8px 6px;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.scan-review-table tbody tr:not(.scan-review-group) {
+  border-bottom: 1px solid #eef1f5;
+}
+
+.scan-review-table tbody th[scope="row"] {
+  color: #34455f;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  width: 190px;
+}
+
+.scan-review-table td {
+  padding: 6px 8px;
+  vertical-align: middle;
+}
+
+.scan-review-table td:nth-last-child(2),
+.scan-review-table td:nth-last-child(3) {
+  width: 26%;
+}
+
+.scan-review-table tr.conflict {
+  background: #fff7e6;
+}
+
+.scan-review-table tr.fills {
+  background: #f1f8f3;
+}
+
+.scan-review-value {
+  color: #17253d;
+  display: block;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.scan-review-table td button {
+  background: #ffffff;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  color: #17253d;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  margin-top: 4px;
+  min-height: 26px;
   padding: 0 8px;
 }
 
-.review-comparison-row em {
-  color: #5c8f67;
-  font-size: 11px;
-  font-style: normal;
+.scan-review-table input,
+.scan-review-table textarea {
+  background: #ffffff;
+  border: 1px solid #d5dfeb;
+  border-radius: 6px;
+  color: #07142b;
+  font: inherit;
+  font-size: 13px;
+  min-height: 34px;
+  padding: 6px 9px;
+  width: 100%;
+}
+
+.scan-review-table textarea {
+  resize: vertical;
+}
+
+.scan-review-table input:focus,
+.scan-review-table textarea:focus {
+  border-color: #d6a632;
+  outline: 2px solid rgba(214, 166, 50, 0.25);
+}
+
+.scan-review-footer {
+  border-top: 1px solid #e3e8ef;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 14px 20px;
+}
+
+.scan-review-footer button {
+  background: #ffffff;
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  color: #07142b;
+  cursor: pointer;
   font-weight: 900;
+  min-height: 42px;
+  padding: 0 14px;
+}
+
+.scan-review-footer .admin-gold-button {
+  background: #d6a632;
+  border-color: #d6a632;
+  color: #0b111b;
+}
+
+.scan-review-footer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .taxonomy-grid {

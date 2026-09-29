@@ -1280,7 +1280,7 @@ export async function identifyScannedDraft(draft) {
     .map((row) => {
       const scored = scoreScanCandidate(row, proposed)
       return {
-        item: row,
+        item: { ...row, imageUrl: publicImageUrl(row.image_path) },
         score: scored.score,
         reasons: scored.reasons,
         comparisons: compareScanFields(row, proposed),
@@ -1316,122 +1316,178 @@ export async function identifyScannedDraft(draft) {
   }
 }
 
-export async function createCatalogueItemFromScan(draft) {
-  const proposed = draft.scanAnalysis?.proposed || proposedScanFields(draft)
-  if (!proposed.name) throw new Error('A name is required before creating a catalogue item.')
+// ---------------------------------------------------------------------------
+// Scan review field table. One definition per catalogue field drives reading
+// an existing item, comparing it with the scan, and writing the approved
+// values. `column` fields live on the items row; `path` fields live under
+// items.dynamic_fields in the same shape scans have always been written in.
 
-  const categoryName = draft.category || ''
-  const { data: category } = categoryName
-    ? await supabase.from('categories').select('category_id').ilike('name', `%${categoryName}%`).limit(1).maybeSingle()
-    : { data: null }
+const SPORTS_CARD_KEYS = [
+  'player', 'subset_insert_set', 'sport', 'league', 'team', 'position', 'rookie_card', 'base_insert', 'parallel',
+  'parallel_colour', 'variation', 'serial_numbered', 'serial_number', 'print_run', 'autograph', 'autograph_type',
+  'memorabilia_relic', 'memorabilia_type', 'memorabilia_source', 'patch_type', 'rookie_patch_auto', 'short_print',
+  'super_short_print', 'case_hit', 'error_correction', 'multi_player_card', 'other_players', 'draft_team',
+  'college_junior_team', 'grading_company', 'grade', 'subgrades', 'certification_number', 'raw_condition',
+  'market_value', 'last_sale', 'price_updated', 'external_ids',
+]
 
-  const payload = {
-    name: proposed.name,
-    subject: proposed.subject || proposed.name,
-    category_id: category?.category_id || null,
-    card_number: proposed.card_number || proposed.id_number || null,
-    lego_set_number: proposed.lego_set_number || null,
-    catalog_code: proposed.catalog_code || null,
-    upc: proposed.upc || proposed.barcodes || null,
-    release_year: Number(proposed.release_year) || null,
-    retail_price: Number(proposed.retail_price) || null,
-    availability: proposed.availability || null,
-    dynamic_fields: {
-      scanner_source: 'CollectorsHub Desktop scanner',
-      scanner_confidence: draft.scanAnalysis?.confidence || null,
-      manufacturer: proposed.manufacturer || '',
-      set_name: proposed.collectible_set || '',
-      taxonomy: {
-        subcategory: proposed.subcategory || '',
-        franchise: proposed.franchise || '',
-        subfranchise: proposed.subfranchise || '',
-        property: proposed.property || '',
-        item_type: proposed.item_type || '',
-      },
-      collection: proposed.collection || '',
-      sports_card: {
-        player: proposed.player || '',
-        subset_insert_set: proposed.subset_insert_set || '',
-        sport: proposed.sport || '',
-        league: proposed.league || '',
-        team: proposed.team || '',
-        position: proposed.position || '',
-        rookie_card: proposed.rookie_card || '',
-        base_insert: proposed.base_insert || '',
-        parallel: proposed.parallel || '',
-        parallel_colour: proposed.parallel_colour || '',
-        variation: proposed.variation || '',
-        serial_numbered: proposed.serial_numbered || '',
-        serial_number: proposed.serial_number || '',
-        print_run: proposed.print_run || '',
-        autograph: proposed.autograph || '',
-        autograph_type: proposed.autograph_type || '',
-        memorabilia_relic: proposed.memorabilia_relic || '',
-        memorabilia_type: proposed.memorabilia_type || '',
-        memorabilia_source: proposed.memorabilia_source || '',
-        patch_type: proposed.patch_type || '',
-        rookie_patch_auto: proposed.rookie_patch_auto || '',
-        short_print: proposed.short_print || '',
-        super_short_print: proposed.super_short_print || '',
-        case_hit: proposed.case_hit || '',
-        error_correction: proposed.error_correction || '',
-        multi_player_card: proposed.multi_player_card || '',
-        other_players: proposed.other_players || '',
-        draft_team: proposed.draft_team || '',
-        college_junior_team: proposed.college_junior_team || '',
-        grading_company: proposed.grading_company || '',
-        grade: proposed.grade || '',
-        subgrades: proposed.subgrades || '',
-        certification_number: proposed.certification_number || '',
-        raw_condition: proposed.raw_condition || '',
-        market_value: proposed.market_value || '',
-        last_sale: proposed.last_sale || '',
-        price_updated: proposed.price_updated || '',
-        external_ids: proposed.external_ids || '',
-      },
-      trading_card: {
-        series_block: proposed.series_block || '',
-        franchise_game: proposed.franchise_game || '',
-        release_date: proposed.release_date || '',
-        rarity: proposed.rarity || '',
-        variant_parallel: proposed.variant_parallel || '',
-        finish: proposed.finish || '',
-        language: proposed.language || '',
-        edition: proposed.edition || '',
-        card_type: proposed.card_type || '',
-        character_subject: proposed.character_subject || '',
-        card_attributes: proposed.card_attributes || '',
-        artist: proposed.artist || '',
-        serial_number: proposed.serial_number || '',
-        print_run: proposed.print_run || '',
-        promo: proposed.promo || '',
-        promo_number: proposed.promo_number || '',
-        autograph: proposed.autograph || '',
-        memorabilia_relic: proposed.memorabilia_relic || '',
-        rookie_card: proposed.rookie_card || '',
-        short_print: proposed.short_print || '',
-        error_variation: proposed.error_variation || '',
-        grading_company: proposed.grading_company || '',
-        grade: proposed.grade || '',
-        certification_number: proposed.certification_number || '',
-        raw_condition: proposed.raw_condition || '',
-        market_value: proposed.market_value || '',
-        last_sale: proposed.last_sale || '',
-        price_updated: proposed.price_updated || '',
-        tcgplayer_id: proposed.tcgplayer_id || '',
-        ebay_external_ids: proposed.ebay_external_ids || '',
-      },
-      description: proposed.description || '',
-      includes: proposed.includes || '',
-      included_in: proposed.included_in || '',
-      variant: proposed.variant || '',
-      language: proposed.language || '',
-      country: proposed.country || '',
-      notes: proposed.notes || '',
-    },
-  }
+const TRADING_CARD_KEYS = [
+  'series_block', 'franchise_game', 'release_date', 'rarity', 'variant_parallel', 'finish', 'language', 'edition',
+  'card_type', 'character_subject', 'card_attributes', 'artist', 'serial_number', 'print_run', 'promo', 'promo_number',
+  'autograph', 'memorabilia_relic', 'rookie_card', 'short_print', 'error_variation', 'grading_company', 'grade',
+  'certification_number', 'raw_condition', 'market_value', 'last_sale', 'price_updated', 'tcgplayer_id', 'ebay_external_ids',
+]
+
+function fieldLabel(key) {
+  const text = key.replaceAll('_', ' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+export const SCAN_REVIEW_GROUPS = [
+  {
+    id: 'core',
+    label: 'Catalogue identity',
+    fields: [
+      { key: 'name', label: 'Name', column: 'name', required: true },
+      { key: 'subject', label: 'Subject', column: 'subject' },
+      { key: 'card_number', label: 'Card / item number', column: 'card_number' },
+      { key: 'release_year', label: 'Year', column: 'release_year', type: 'number' },
+      { key: 'manufacturer', label: 'Brand / manufacturer', path: ['manufacturer'] },
+      { key: 'set_name', label: 'Set', path: ['set_name'], proposedKey: 'collectible_set' },
+      { key: 'upc', label: 'Barcode / UPC', column: 'upc' },
+      { key: 'catalog_code', label: 'Catalogue code', column: 'catalog_code' },
+      { key: 'lego_set_number', label: 'LEGO set number', column: 'lego_set_number', categories: ['LEGO / Building Blocks'] },
+      { key: 'variant', label: 'Variant', path: ['variant'] },
+      { key: 'language', label: 'Language', path: ['language'] },
+      { key: 'country', label: 'Country', path: ['country'] },
+      { key: 'retail_price', label: 'Retail price', column: 'retail_price', type: 'number' },
+      { key: 'availability', label: 'Availability', column: 'availability' },
+      { key: 'description', label: 'Description', path: ['description'], multiline: true },
+      { key: 'notes', label: 'Notes', path: ['notes'], multiline: true },
+    ],
+  },
+  {
+    id: 'sports',
+    label: 'Sports card details',
+    categories: ['Sports Cards'],
+    fields: SPORTS_CARD_KEYS.map((key) => ({ key: `sports_card.${key}`, label: fieldLabel(key), path: ['sports_card', key], proposedKey: key })),
+  },
+  {
+    id: 'trading',
+    label: 'Trading card details',
+    categories: ['Trading Cards'],
+    fields: TRADING_CARD_KEYS.map((key) => ({ key: `trading_card.${key}`, label: fieldLabel(key), path: ['trading_card', key], proposedKey: key })),
+  },
+  {
+    id: 'taxonomy',
+    label: 'Taxonomy',
+    fields: ['subcategory', 'franchise', 'subfranchise', 'property', 'item_type', 'collection', 'includes', 'included_in'].map((key) => ({
+      key: ['collection', 'includes', 'included_in'].includes(key) ? key : `taxonomy.${key}`,
+      label: fieldLabel(key),
+      path: ['collection', 'includes', 'included_in'].includes(key) ? [key] : ['taxonomy', key],
+      proposedKey: key,
+    })),
+  },
+]
+
+export function scanReviewGroups(category) {
+  return SCAN_REVIEW_GROUPS
+    .filter((group) => !group.categories || group.categories.includes(category))
+    .map((group) => ({ ...group, fields: group.fields.filter((field) => !field.categories || field.categories.includes(category)) }))
+}
+
+function readPath(object, path) {
+  return path.reduce((current, key) => (current && typeof current === 'object' ? current[key] : undefined), object)
+}
+
+function reviewText(value) {
+  if (value == null) return ''
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value).trim()
+}
+
+export function catalogueFieldValue(item, field) {
+  if (!item) return ''
+  if (field.column) return reviewText(item[field.column])
+  const leaf = field.path[field.path.length - 1]
+  return reviewText(readPath(item.dynamic_fields, field.path) ?? item.dynamic_fields?.[leaf] ?? item.attributes?.[leaf])
+}
+
+// OCR returns names in capitals ("MICAH PARSONS"); store them as "Micah Parsons".
+const PERSON_NAME_FIELDS = new Set(['name', 'subject', 'sports_card.player', 'sports_card.other_players'])
+
+function titleCaseIfShouting(value) {
+  if (!/[A-Z]{2}/.test(value) || value !== value.toUpperCase()) return value
+  return value.toLowerCase().replace(/(^|[\s'.-])([a-z])/g, (match, separator, letter) => separator + letter.toUpperCase())
+}
+
+export function scannedFieldValue(draft, field) {
+  const proposed = proposedScanFields(draft)
+  const key = field.proposedKey || field.key
+  const value = key === 'upc' ? reviewText(proposed.upc || proposed.barcodes) : reviewText(proposed[key])
+  return PERSON_NAME_FIELDS.has(field.key) ? titleCaseIfShouting(value) : value
+}
+
+function reviewColumnValue(field, value) {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  if (field.type === 'number') return Number(text.replace(/[^0-9.-]/g, '')) || null
+  return text
+}
+
+function writeDynamicFields(baseDynamicFields, groups, values) {
+  const dynamicFields = JSON.parse(JSON.stringify(baseDynamicFields || {}))
+  groups.flatMap((group) => group.fields).filter((field) => field.path).forEach((field) => {
+    let target = dynamicFields
+    field.path.slice(0, -1).forEach((key) => {
+      if (!target[key] || typeof target[key] !== 'object') target[key] = {}
+      target = target[key]
+    })
+    target[field.path[field.path.length - 1]] = String(values[field.key] ?? '').trim()
+  })
+  return dynamicFields
+}
+
+async function categoryIdForName(categoryName) {
+  if (!categoryName) return null
+  const { data } = await supabase.from('categories').select('category_id').ilike('name', `%${categoryName}%`).limit(1).maybeSingle()
+  return data?.category_id || null
+}
+
+export async function createCatalogueItemFromReview({ category, values, confidence = null }) {
+  const groups = scanReviewGroups(category)
+  if (!String(values.name || '').trim()) throw new Error('A name is required before adding the item to the catalogue.')
+
+  const payload = { category_id: await categoryIdForName(category) }
+  groups.flatMap((group) => group.fields).filter((field) => field.column).forEach((field) => {
+    payload[field.column] = reviewColumnValue(field, values[field.key])
+  })
+  payload.dynamic_fields = writeDynamicFields({
+    scanner_source: 'CollectorsHub Desktop scanner',
+    scanner_confidence: confidence,
+  }, groups, values)
 
   const { data, error } = await supabase.from('items').insert(payload).select(CATALOGUE_SELECT.join(',')).single()
   if (error) throw error
   return data
+}
+
+// Writes only the fields whose final value differs from the catalogue item, and
+// keeps any dynamic_fields keys the review table does not know about.
+export async function updateCatalogueItemFromReview({ item, category, values }) {
+  const groups = scanReviewGroups(category)
+  const fields = groups.flatMap((group) => group.fields)
+  const changed = fields.filter((field) => String(values[field.key] ?? '').trim() !== catalogueFieldValue(item, field))
+  if (!changed.length) return { item, changed: [] }
+
+  const patch = {}
+  changed.filter((field) => field.column).forEach((field) => {
+    patch[field.column] = reviewColumnValue(field, values[field.key])
+  })
+  if (changed.some((field) => field.path)) {
+    patch.dynamic_fields = writeDynamicFields(item.dynamic_fields, groups, values)
+  }
+
+  const updated = await updateCatalogueItemRecord(item.item_id, patch)
+  return { item: updated, changed: changed.map((field) => field.key) }
 }

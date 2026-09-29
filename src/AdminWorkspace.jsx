@@ -18,6 +18,7 @@ import {
   Store,
   Tags,
   Users,
+  X,
 } from 'lucide-react'
 import {
   ADMIN_EXPLORER_TABLES,
@@ -36,7 +37,11 @@ import {
   loadTaxonomyData,
   loadUsersData,
   identifyScannedDraft,
-  createCatalogueItemFromScan,
+  catalogueFieldValue,
+  createCatalogueItemFromReview,
+  scanReviewGroups,
+  scannedFieldValue,
+  updateCatalogueItemFromReview,
   updateCatalogueItemRecord,
   updateExplorerRecord,
 } from './lib/adminData'
@@ -2007,87 +2012,18 @@ function ScanImageSlot({ label, image, onPick }) {
 function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
   const rows = drafts || []
   const [busyId, setBusyId] = useState('')
+  const [reviewDraftId, setReviewDraftId] = useState('')
+  const reviewDraft = rows.find((draft) => draft.id === reviewDraftId) || null
 
   async function analyze(draft) {
     setBusyId(draft.id)
     try {
       const ocrDraft = await enrichDraftWithOcr(draft)
       const scanAnalysis = await identifyScannedDraft(ocrDraft)
-      await onUpdateDraft(draft.id, { category: ocrDraft.category, metadata: ocrDraft.metadata, ocr: ocrDraft.ocr, scanAnalysis, status: scanAnalysis.status, analysisError: '' })
+      // A fresh analysis can change the candidates, so drop any saved review table.
+      await onUpdateDraft(draft.id, { category: ocrDraft.category, metadata: ocrDraft.metadata, ocr: ocrDraft.ocr, scanAnalysis, status: scanAnalysis.status, analysisError: '', review: null })
     } catch (error) {
       await onUpdateDraft(draft.id, { analysisError: error.message || 'Scan analysis failed.' })
-    } finally {
-      setBusyId('')
-    }
-  }
-
-  async function createItem(draft) {
-    setBusyId(draft.id)
-    try {
-      const item = await createCatalogueItemFromScan(draft)
-      await onUpdateDraft(draft.id, {
-        status: 'Catalogue Item Created',
-        createdItemId: item?.item_id || null,
-        audit: [...(draft.audit || []), { action: 'create', itemId: item?.item_id, at: new Date().toISOString() }],
-      })
-    } catch (error) {
-      await onUpdateDraft(draft.id, { analysisError: error.message || 'Could not create catalogue item.' })
-    } finally {
-      setBusyId('')
-    }
-  }
-
-  function setFieldDecision(draft, field, decision) {
-    const comparisons = (draft.scanAnalysis?.bestMatch?.comparisons || []).map((comparison) => (
-      comparison.field === field ? { ...comparison, decision } : comparison
-    ))
-    onUpdateDraft(draft.id, {
-      scanAnalysis: {
-        ...draft.scanAnalysis,
-        bestMatch: { ...draft.scanAnalysis.bestMatch, comparisons },
-      },
-    })
-  }
-
-  function setAllDecisions(draft, decision) {
-    const comparisons = (draft.scanAnalysis?.bestMatch?.comparisons || []).map((comparison) => (
-      comparison.differs ? { ...comparison, decision } : comparison
-    ))
-    onUpdateDraft(draft.id, {
-      scanAnalysis: {
-        ...draft.scanAnalysis,
-        bestMatch: { ...draft.scanAnalysis.bestMatch, comparisons },
-      },
-    })
-  }
-
-  async function applyApprovedChanges(draft) {
-    const match = draft.scanAnalysis?.bestMatch
-    const approved = (match?.comparisons || []).filter((comparison) => comparison.differs && comparison.decision === 'approve')
-    if (!match?.item?.item_id || !approved.length) return
-    setBusyId(draft.id)
-    try {
-      const dynamicFields = { ...(match.item.dynamic_fields || {}) }
-      const patch = {}
-      approved.forEach((comparison) => {
-        if (comparison.field === 'name') patch.name = comparison.proposedValue
-        if (comparison.field === 'year') patch.release_year = Number(comparison.proposedValue) || null
-        if (comparison.field === 'card_number') patch.card_number = comparison.proposedValue
-        if (comparison.field === 'barcode') patch.upc = comparison.proposedValue
-        if (comparison.field === 'manufacturer') dynamicFields.manufacturer = comparison.proposedValue
-        if (comparison.field === 'set_or_series') dynamicFields.set_name = comparison.proposedValue
-        if (comparison.field === 'variant') dynamicFields.variant = comparison.proposedValue
-        if (comparison.field === 'language') dynamicFields.language = comparison.proposedValue
-        if (comparison.field === 'country') dynamicFields.country = comparison.proposedValue
-      })
-      patch.dynamic_fields = dynamicFields
-      await updateCatalogueItemRecord(match.item.item_id, patch)
-      await onUpdateDraft(draft.id, {
-        status: 'Matched and Updated',
-        audit: [...(draft.audit || []), { action: 'approve_scan_changes', itemId: match.item.item_id, fields: approved.map((entry) => entry.field), at: new Date().toISOString() }],
-      })
-    } catch (error) {
-      await onUpdateDraft(draft.id, { analysisError: error.message || 'Could not apply approved changes.' })
     } finally {
       setBusyId('')
     }
@@ -2109,6 +2045,9 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
           const metadataRows = meaningfulScanMetadata(draft.metadata)
           const route = scanRouteLabel(draft.scanAnalysis?.route)
           const confidence = Number(draft.scanAnalysis?.confidence || 0)
+          const bestMatch = draft.scanAnalysis?.bestMatch
+          const candidateCount = draft.scanAnalysis?.candidates?.length || 0
+          const finished = ['Catalogue Item Created', 'Matched and Updated', 'Matched'].includes(draft.status)
           return (
           <div className="review-draft-card" key={draft.id}>
             <div className="review-draft-images">
@@ -2123,28 +2062,28 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
                 <span className="confidence-badge">{draft.scanAnalysis ? `${confidence}% confidence` : 'Not analyzed'}</span>
                 <strong>{route}</strong>
                 {draft.status ? <small>Status: {draft.status}</small> : null}
-                {draft.scanAnalysis?.bestMatch ? <small>Best match: {draft.scanAnalysis.bestMatch.item?.name || draft.scanAnalysis.bestMatch.item?.subject || draft.scanAnalysis.bestMatch.item?.item_id}</small> : null}
-                {draft.scanAnalysis?.bestMatch?.reasons?.length ? <small>{draft.scanAnalysis.bestMatch.reasons.join(' · ')}</small> : null}
                 {draft.ocr?.confidenceNotes?.length ? <small>OCR: {draft.ocr.confidenceNotes.join(' · ')}</small> : null}
-                {draft.ocr?.rejectedNames?.length ? <small>Ignored uncertain OCR name: {draft.ocr.rejectedNames[0]}</small> : null}
-                {!metadataRows.length ? <small>No item identity fields were captured yet. Add card/player/set details before creating a catalogue item.</small> : null}
+                {!metadataRows.length ? <small>No item identity fields were captured yet. Open Review &amp; Edit Fields to fill them in.</small> : null}
               </div>
+              {draft.scanAnalysis ? (
+                <div className={bestMatch ? 'scan-match-banner found' : 'scan-match-banner'}>
+                  {bestMatch?.item?.imageUrl ? <img src={bestMatch.item.imageUrl} alt="" /> : null}
+                  <div>
+                    <strong>{bestMatch ? 'Catalogue match found' : 'No catalogue match found'}</strong>
+                    {bestMatch ? (
+                      <>
+                        <span>{bestMatch.item?.name || bestMatch.item?.subject || bestMatch.item?.item_id} · {bestMatch.score}% match</span>
+                        {bestMatch.reasons?.length ? <small>{bestMatch.reasons.join(' · ')}</small> : null}
+                        {candidateCount > 1 ? <small>{candidateCount - 1} other possible {candidateCount === 2 ? 'match' : 'matches'}</small> : null}
+                      </>
+                    ) : <span>Review the fields and add it to the catalogue as a new item.</span>}
+                  </div>
+                </div>
+              ) : null}
               {metadataRows.length ? (
                 <div className="scan-metadata-summary">
                   {metadataRows.map(([key, value]) => (
                     <span key={key}><strong>{key.replace(/([A-Z])/g, ' $1').replaceAll('_', ' ')}</strong>{String(value)}</span>
-                  ))}
-                </div>
-              ) : null}
-              {draft.scanAnalysis?.bestMatch?.comparisons?.length ? (
-                <div className="review-comparison">
-                  <div className="review-comparison-header"><strong>Current vs scanned</strong><span><button type="button" onClick={() => setAllDecisions(draft, 'approve')}>Approve all</button><button type="button" onClick={() => setAllDecisions(draft, 'deny')}>Deny all</button></span></div>
-                  {draft.scanAnalysis.bestMatch.comparisons.map((comparison) => (
-                    <div className={comparison.differs ? 'review-comparison-row changed' : 'review-comparison-row'} key={comparison.field}>
-                      <span>{comparison.field.replaceAll('_', ' ')}</span>
-                      <small>{comparison.currentValue || '—'} → {comparison.proposedValue || '—'}</small>
-                      {comparison.differs ? <button type="button" onClick={() => setFieldDecision(draft, comparison.field, comparison.decision === 'approve' ? 'deny' : 'approve')}>{comparison.decision === 'approve' ? 'Keep existing' : 'Approve scanned'}</button> : <em>Same</em>}
-                    </div>
                   ))}
                 </div>
               ) : null}
@@ -2155,11 +2094,10 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
               </details>
             </div>
             <div className="review-actions">
+              <button className="admin-gold-button" type="button" onClick={() => setReviewDraftId(draft.id)} disabled={busyId === draft.id || finished}>
+                {bestMatch ? 'Compare & Edit Fields' : 'Review & Edit Fields'}
+              </button>
               <button type="button" onClick={() => analyze(draft)} disabled={busyId === draft.id}>{busyId === draft.id ? 'Working...' : 'Analyze Scan'}</button>
-              {draft.scanAnalysis?.route === 'new_item_proposal' ? <button type="button" onClick={() => createItem(draft)} disabled={busyId === draft.id}>Create Catalogue Item</button> : null}
-              {draft.scanAnalysis?.route === 'existing_match' ? <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Matched', matchedItemId: draft.scanAnalysis.bestMatch.item.item_id })}>Match Existing</button> : null}
-              {draft.scanAnalysis?.route === 'manual_review_existing_item' ? <button type="button" onClick={() => applyApprovedChanges(draft)} disabled={busyId === draft.id}>Apply Approved Changes</button> : null}
-              {draft.scanAnalysis?.route === 'possible_duplicate' ? <><button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Confirmed Same Item', matchedItemId: draft.scanAnalysis.bestMatch.item.item_id })}>Same Item</button><button type="button" onClick={() => createItem(draft)} disabled={busyId === draft.id}>Create New</button></> : null}
               <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Rejected' })}>Reject</button>
               <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Review Later' })}>Review Later</button>
               <button className="danger" type="button" onClick={() => {
@@ -2170,7 +2108,253 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
           )
         })}
       </div>
+      {reviewDraft ? <ScanReviewEditor key={reviewDraft.id} draft={reviewDraft} onUpdateDraft={onUpdateDraft} onClose={() => setReviewDraftId('')} /> : null}
     </section>
+  )
+}
+
+const SCAN_REVIEW_CATEGORIES = ['Trading Cards', 'Sports Cards', 'Coins', 'LEGO / Building Blocks', 'Comics', 'Video Games']
+// Scan Intake form defaults; not a real reading when the catalogue is blank.
+const SCAN_PLACEHOLDER_VALUES = new Set(['No', 'Base', 'Available'])
+
+function sameReviewValue(a, b) {
+  return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
+}
+
+function reviewFields(category) {
+  return scanReviewGroups(category).flatMap((group) => group.fields)
+}
+
+// Keep what the catalogue already has; fill blanks from the scan.
+function initialReviewValues(draft, category, matchItem) {
+  return Object.fromEntries(reviewFields(category).map((field) => {
+    const current = catalogueFieldValue(matchItem, field)
+    const scanned = scannedFieldValue(draft, field)
+    if (!matchItem) return [field.key, scanned]
+    return [field.key, current || (SCAN_PLACEHOLDER_VALUES.has(scanned) ? '' : scanned)]
+  }))
+}
+
+function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
+  const candidates = draft.scanAnalysis?.candidates || []
+  const saved = draft.review || null
+  const [category, setCategory] = useState(saved?.category || draft.category || 'Trading Cards')
+  const [matchId, setMatchId] = useState(saved ? saved.matchId || '' : draft.scanAnalysis?.bestMatch?.item?.item_id || '')
+  const matchCandidate = candidates.find((candidate) => candidate.item.item_id === matchId) || null
+  const matchItem = matchCandidate?.item || null
+  const [values, setValues] = useState(() => saved?.values || initialReviewValues(draft, category, matchItem))
+  const [showAll, setShowAll] = useState(!matchItem)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const groups = scanReviewGroups(category)
+
+  useEffect(() => {
+    function onKey(event) { if (event.key === 'Escape' && !busy) onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [busy, onClose])
+
+  function chooseMatch(nextId) {
+    const nextItem = candidates.find((candidate) => candidate.item.item_id === nextId)?.item || null
+    setMatchId(nextId)
+    setValues(initialReviewValues(draft, category, nextItem))
+    setShowAll(!nextItem)
+  }
+
+  function chooseCategory(nextCategory) {
+    setCategory(nextCategory)
+    // Keep edits already made; seed any fields the new category adds.
+    setValues((current) => ({ ...initialReviewValues(draft, nextCategory, matchItem), ...current }))
+  }
+
+  function setValue(key, value) {
+    setValues((current) => ({ ...current, [key]: value }))
+  }
+
+  const rows = groups.map((group) => ({
+    ...group,
+    rows: group.fields.map((field) => {
+      const current = catalogueFieldValue(matchItem, field)
+      const scanned = scannedFieldValue(draft, field)
+      const finalValue = String(values[field.key] ?? '')
+      const scanIsReading = scanned && !(SCAN_PLACEHOLDER_VALUES.has(scanned) && !current)
+      return {
+        field,
+        current,
+        scanned,
+        finalValue,
+        conflict: Boolean(matchItem && scanIsReading && current && current.toLowerCase() !== scanned.toLowerCase()),
+        fills: Boolean(matchItem && scanIsReading && !current),
+        edited: Boolean(matchItem) && finalValue.trim() !== current,
+      }
+    }).filter((row) => showAll || row.conflict || row.fills || row.edited),
+  })).filter((group) => group.rows.length)
+
+  const allRows = rows.flatMap((group) => group.rows)
+  const changeCount = matchItem ? reviewFields(category).filter((field) => String(values[field.key] ?? '').trim() !== catalogueFieldValue(matchItem, field)).length : 0
+  const conflictCount = allRows.filter((row) => row.conflict).length
+
+  async function saveForLater() {
+    await onUpdateDraft(draft.id, { category, review: { category, matchId, values, savedAt: new Date().toISOString() } })
+    onClose()
+  }
+
+  async function run(label, action) {
+    setBusy(label)
+    setError('')
+    try {
+      await action()
+      onClose()
+    } catch (err) {
+      setError(err.message || 'Could not save to the catalogue.')
+      setBusy('')
+    }
+  }
+
+  function addAsNewItem() {
+    return run('create', async () => {
+      const item = await createCatalogueItemFromReview({ category, values, confidence: draft.scanAnalysis?.confidence ?? null })
+      await onUpdateDraft(draft.id, {
+        category,
+        status: 'Catalogue Item Created',
+        createdItemId: item?.item_id || null,
+        review: { category, matchId: '', values, savedAt: new Date().toISOString() },
+        audit: [...(draft.audit || []), { action: 'create', itemId: item?.item_id, at: new Date().toISOString() }],
+      })
+    })
+  }
+
+  function updateMatchedItem() {
+    return run('update', async () => {
+      const result = await updateCatalogueItemFromReview({ item: matchItem, category, values })
+      await onUpdateDraft(draft.id, {
+        category,
+        status: result.changed.length ? 'Matched and Updated' : 'Matched',
+        matchedItemId: matchItem.item_id,
+        review: { category, matchId, values, savedAt: new Date().toISOString() },
+        audit: [...(draft.audit || []), { action: result.changed.length ? 'update_from_scan' : 'match', itemId: matchItem.item_id, fields: result.changed, at: new Date().toISOString() }],
+      })
+    })
+  }
+
+  function linkWithoutChanges() {
+    return run('link', async () => {
+      await onUpdateDraft(draft.id, {
+        category,
+        status: 'Matched',
+        matchedItemId: matchItem.item_id,
+        audit: [...(draft.audit || []), { action: 'match', itemId: matchItem.item_id, at: new Date().toISOString() }],
+      })
+    })
+  }
+
+  return (
+    <div className="scan-review-modal" role="dialog" aria-modal="true" aria-labelledby="scan-review-title">
+      <section>
+        <header className="scan-review-header">
+          <div className="scan-review-images">
+            {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="Front scan" /> : null}
+            {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back scan" /> : null}
+          </div>
+          <div>
+            <p className="admin-kicker">Scan review</p>
+            <h2 id="scan-review-title">{String(values.name || '').trim() || scanDraftTitle(draft)}</h2>
+            <div className="scan-review-controls">
+              <label>Category
+                <select value={category} onChange={(event) => chooseCategory(event.target.value)}>
+                  {SCAN_REVIEW_CATEGORIES.map((option) => <option key={option}>{option}</option>)}
+                </select>
+              </label>
+              <label>Catalogue match
+                <select value={matchId} onChange={(event) => chooseMatch(event.target.value)}>
+                  <option value="">No match – add as a new item</option>
+                  {candidates.map((candidate) => (
+                    <option key={candidate.item.item_id} value={candidate.item.item_id}>
+                      {candidate.item.name || candidate.item.subject || candidate.item.item_id}
+                      {candidate.item.card_number ? ` #${candidate.item.card_number}` : ''}
+                      {candidate.item.release_year ? ` (${candidate.item.release_year})` : ''} · {candidate.score}%
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+          {matchItem?.imageUrl ? <img className="scan-review-match-image" src={matchItem.imageUrl} alt="Catalogue item" /> : null}
+          <button className="modal-close" type="button" onClick={onClose} disabled={Boolean(busy)} aria-label="Close"><X size={18} /></button>
+        </header>
+
+        <div className="scan-review-summary">
+          {matchItem ? (
+            <span>
+              Comparing with <strong>{matchItem.name || matchItem.subject}</strong>
+              {matchCandidate?.reasons?.length ? ` · ${matchCandidate.reasons.join(' · ')}` : ''}
+              {' · '}{conflictCount ? `${conflictCount} field${conflictCount === 1 ? '' : 's'} differ` : 'no conflicting fields'}
+            </span>
+          ) : <span>No catalogue item selected. The final values below will be added as a new catalogue item.</span>}
+          {matchItem ? (
+            <label className="admin-check"><input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} /> Show all fields</label>
+          ) : null}
+        </div>
+
+        {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
+
+        <div className="scan-review-table-wrap">
+          <table className="scan-review-table">
+            <thead>
+              <tr>
+                <th>Field</th>
+                {matchItem ? <th>In catalogue</th> : null}
+                <th>Scanned</th>
+                <th>Final value</th>
+              </tr>
+            </thead>
+            {rows.map((group) => (
+              <tbody key={group.id}>
+                <tr className="scan-review-group"><th colSpan={matchItem ? 4 : 3}>{group.label}</th></tr>
+                {group.rows.map((row) => (
+                  <tr key={row.field.key} className={row.conflict ? 'conflict' : row.fills ? 'fills' : ''}>
+                    <th scope="row">{row.field.label}{row.field.required ? ' *' : ''}</th>
+                    {matchItem ? (
+                      <td>
+                        <span className="scan-review-value">{row.current || '—'}</span>
+                        {row.conflict && !sameReviewValue(row.finalValue, row.current) ? <button type="button" onClick={() => setValue(row.field.key, row.current)}>Keep catalogue</button> : null}
+                      </td>
+                    ) : null}
+                    <td>
+                      <span className="scan-review-value">{row.scanned || '—'}</span>
+                      {row.scanned && !sameReviewValue(row.finalValue, row.scanned) ? <button type="button" onClick={() => setValue(row.field.key, row.scanned)}>Use scanned</button> : null}
+                    </td>
+                    <td>
+                      {row.field.multiline
+                        ? <textarea value={row.finalValue} onChange={(event) => setValue(row.field.key, event.target.value)} rows={2} />
+                        : <input value={row.finalValue} onChange={(event) => setValue(row.field.key, event.target.value)} />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            ))}
+          </table>
+          {!allRows.length ? <EmptyAdminState text="The scan agrees with the catalogue item. Tick Show all fields to edit anything else." /> : null}
+        </div>
+
+        <footer className="scan-review-footer">
+          <button type="button" onClick={saveForLater} disabled={Boolean(busy)}>Save &amp; Close</button>
+          {matchItem ? (
+            <>
+              <button type="button" onClick={addAsNewItem} disabled={Boolean(busy)}>{busy === 'create' ? 'Adding...' : 'Add as New Item Instead'}</button>
+              <button type="button" onClick={linkWithoutChanges} disabled={Boolean(busy)}>{busy === 'link' ? 'Linking...' : 'Link Without Changes'}</button>
+              <button className="admin-gold-button" type="button" onClick={updateMatchedItem} disabled={Boolean(busy)}>
+                {busy === 'update' ? 'Saving...' : changeCount ? `Approve & Update Item (${changeCount})` : 'Approve Match'}
+              </button>
+            </>
+          ) : (
+            <button className="admin-gold-button" type="button" onClick={addAsNewItem} disabled={Boolean(busy) || !String(values.name || '').trim()}>
+              {busy === 'create' ? 'Adding...' : 'Approve & Add to Catalogue'}
+            </button>
+          )}
+        </footer>
+      </section>
+    </div>
   )
 }
 
