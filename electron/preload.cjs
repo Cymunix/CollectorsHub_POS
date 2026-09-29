@@ -6,6 +6,13 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   getDataPath: () => ipcRenderer.invoke('app:get-data-path'),
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   exitApp: () => ipcRenderer.invoke('app:exit'),
+  getPendingUpdate: () => ipcRenderer.invoke('app:get-pending-update'),
+  installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  onUpdateReady: (callback) => {
+    const listener = (_event, update) => callback(update)
+    ipcRenderer.on('app:update-ready', listener)
+    return () => ipcRenderer.removeListener('app:update-ready', listener)
+  },
   getEbayApiConfig: () => ipcRenderer.invoke('ebay:get-config'),
   saveEbayApiConfig: (config) => ipcRenderer.invoke('ebay:save-config', config),
   testEbayApiConfig: () => ipcRenderer.invoke('ebay:test-config'),

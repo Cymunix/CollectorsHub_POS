@@ -5618,6 +5618,41 @@ button:disabled {
   position: relative;
 }
 
+.update-prompt {
+  z-index: 1000;
+}
+
+.update-prompt section {
+  border-top: 4px solid #d6a632;
+  max-width: 480px;
+}
+
+.update-prompt-logo {
+  height: 40px;
+  object-fit: contain;
+  object-position: left;
+  width: auto;
+}
+
+.update-prompt .update-prompt-kicker {
+  color: #b0851f;
+  font-size: 12px;
+  font-weight: 1000;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.modal-actions .update-prompt-primary {
+  background: #d6a632;
+  border-color: #d6a632;
+  color: #0b111b;
+}
+
+.modal-actions button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .register-modal h2 {
   font-family: "Space Grotesk", Manrope, sans-serif;
   font-size: 24px;

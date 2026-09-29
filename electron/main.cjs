@@ -704,29 +704,24 @@ async function createWindow() {
   }
 }
 
+let pendingUpdate = null
+
 function configureAutoUpdates() {
   if (isDev) return
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
-  autoUpdater.on('update-downloaded', (_event, releaseNotes, releaseName) => {
-    const detail = releaseName
-      ? `${releaseName} has been downloaded and will install when CollectorsHub POS closes.`
-      : 'An update has been downloaded and will install when CollectorsHub POS closes.'
-
+  // The renderer shows a CollectorsHub-styled prompt instead of a native
+  // Windows dialog. Keep the info so a window that loads later can ask for it.
+  autoUpdater.on('update-downloaded', (info) => {
+    pendingUpdate = {
+      version: info?.version || '',
+      releaseName: info?.releaseName || '',
+      currentVersion: app.getVersion(),
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        buttons: ['Restart now', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-        title: 'Update ready',
-        message: 'CollectorsHub POS update ready',
-        detail,
-      }).then(({ response }) => {
-        if (response === 0) autoUpdater.quitAndInstall(false, true)
-      })
+      mainWindow.webContents.send('app:update-ready', pendingUpdate)
     }
   })
 
@@ -735,7 +730,8 @@ function configureAutoUpdates() {
   })
 
   setTimeout(() => {
-    autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+    // checkForUpdates (not ...AndNotify) so Windows does not also show a toast.
+    autoUpdater.checkForUpdates().catch((error) => {
       console.error('[Auto Update] Check failed:', error)
     })
   }, 5000)
@@ -746,6 +742,10 @@ ipcMain.handle('store:save', async (_event, nextStore) => saveStore(nextStore))
 ipcMain.handle('app:get-data-path', () => getStoreFile())
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('app:exit', () => app.quit())
+ipcMain.handle('app:get-pending-update', () => pendingUpdate)
+ipcMain.handle('app:install-update', () => {
+  if (pendingUpdate) autoUpdater.quitAndInstall(false, true)
+})
 ipcMain.handle('ebay:get-config', async () => loadEbayConfig())
 ipcMain.handle('ebay:save-config', async (_event, nextConfig) => saveEbayConfig(nextConfig))
 ipcMain.handle('ebay:test-config', async () => {

@@ -4288,4 +4288,56 @@ function EmptyState({ text }) {
   return <p className="empty-state">{text}</p>
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+function UpdatePrompt() {
+  const [update, setUpdate] = useState(null)
+  const [dismissed, setDismissed] = useState(false)
+  const [installing, setInstalling] = useState(false)
+
+  useEffect(() => {
+    const api = window.nordvikDesktop
+    if (!api?.onUpdateReady) return undefined
+    api.getPendingUpdate?.().then((pending) => { if (pending) setUpdate(pending) }).catch(() => {})
+    return api.onUpdateReady((next) => {
+      setUpdate(next)
+      setDismissed(false)
+    })
+  }, [])
+
+  if (!update || dismissed) return null
+
+  async function installNow() {
+    setInstalling(true)
+    try {
+      await window.nordvikDesktop.installUpdate()
+    } catch {
+      setInstalling(false)
+    }
+  }
+
+  return (
+    <div className="register-modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
+      <section>
+        <img className="update-prompt-logo" src="/collectorshub-logo.png" alt="CollectorsHub" />
+        <p className="update-prompt-kicker">Update ready</p>
+        <h2 id="update-prompt-title">CollectorsHub POS {update.version ? `v${update.version}` : ''} is ready to install</h2>
+        <p>
+          {update.currentVersion ? `You're on v${update.currentVersion}. ` : ''}
+          Restart now to finish updating, or choose Later and it will install the next time CollectorsHub POS closes.
+        </p>
+        <div className="modal-actions">
+          <button type="button" disabled={installing} onClick={() => setDismissed(true)}>Later</button>
+          <button className="update-prompt-primary" type="button" disabled={installing} onClick={installNow}>
+            {installing ? 'Restarting...' : 'Restart now'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+createRoot(document.getElementById('root')).render(
+  <>
+    <App />
+    <UpdatePrompt />
+  </>,
+)
