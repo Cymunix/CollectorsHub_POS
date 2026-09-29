@@ -37,7 +37,9 @@ import {
   loadTaxonomyData,
   loadUsersData,
   identifyScannedDraft,
+  catalogueCategoryName,
   catalogueFieldValue,
+  categoryIdForName,
   createCatalogueItemFromReview,
   createTaxonomyOption,
   isSpecCategory,
@@ -48,6 +50,7 @@ import {
   findDuplicateCatalogueItems,
   scanReviewGroups,
   scannedFieldValue,
+  searchScanCandidates,
   updateCatalogueItemFromReview,
   updateCatalogueItemRecord,
   updateExplorerRecord,
@@ -2039,6 +2042,20 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
   }, [rows])
   const [busyId, setBusyId] = useState('')
   const [reviewDraftId, setReviewDraftId] = useState('')
+  // category_id -> name, so matches stored from before the category filter
+  // (or for a different category) are not shown as this draft's match.
+  const [categoryNames, setCategoryNames] = useState(null)
+
+  useEffect(() => {
+    loadAdminCategories()
+      .then((rows) => setCategoryNames(Object.fromEntries(rows.map((row) => [row.category_id, String(row.name || '').toLowerCase()]))))
+      .catch(() => setCategoryNames({}))
+  }, [])
+
+  function inDraftCategory(draft, candidate) {
+    if (!categoryNames || !candidate?.item) return Boolean(candidate)
+    return categoryNames[candidate.item.category_id] === catalogueCategoryName(draft.category).toLowerCase()
+  }
   const reviewDraft = rows.find((draft) => draft.id === reviewDraftId) || null
 
   async function analyze(draft) {
@@ -2071,8 +2088,8 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
           const metadataRows = meaningfulScanMetadata(draft.metadata)
           const route = scanRouteLabel(draft.scanAnalysis?.route)
           const confidence = Number(draft.scanAnalysis?.confidence || 0)
-          const bestMatch = draft.scanAnalysis?.bestMatch
-          const candidateCount = draft.scanAnalysis?.candidates?.length || 0
+          const bestMatch = inDraftCategory(draft, draft.scanAnalysis?.bestMatch) ? draft.scanAnalysis.bestMatch : null
+          const candidateCount = (draft.scanAnalysis?.candidates || []).filter((candidate) => inDraftCategory(draft, candidate)).length
           const finished = ['Catalogue Item Created', 'Matched and Updated', 'Matched'].includes(draft.status)
           const siblings = (draftsByIdentity.get(draftIdentityKey(draft)) || []).filter((other) => other.id !== draft.id)
           const catalogedSibling = siblings.find((other) => other.createdItemId || other.matchedItemId)
@@ -2148,6 +2165,9 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
   )
 }
 
+// A name match alone scores 28, + year 36; number + year alone is 26.
+const REVIEW_CANDIDATE_MIN_SCORE = 30
+const MATCH_PICK_MIN_SCORE = 40
 const SCAN_REVIEW_CATEGORIES = ['Trading Cards', 'Sports Cards', 'Coins', 'LEGO / Building Blocks', 'Comics', 'Video Games']
 // Scan Intake form defaults; not a real reading when the catalogue is blank.
 const SCAN_PLACEHOLDER_VALUES = new Set(['No', 'Base', 'Available'])
@@ -2207,11 +2227,25 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const saved = draft.review || null
   // Items found by the approval-time duplicate check join the match picker.
   const [extraCandidates, setExtraCandidates] = useState(saved?.extraCandidates || [])
-  const storedCandidates = draft.scanAnalysis?.candidates || []
-  const candidates = [...storedCandidates, ...extraCandidates.filter((extra) => !storedCandidates.some((candidate) => candidate.item.item_id === extra.item.item_id))]
   const [duplicates, setDuplicates] = useState(null)
   const [category, setCategory] = useState(saved?.category || draft.category || 'Trading Cards')
+  // Matches are limited to the selected category: its id plus a live search
+  // within it (stored candidates can predate the category filter or a change
+  // of category here).
+  const [categoryScope, setCategoryScope] = useState({ category: '', categoryId: undefined, live: [] })
+  const scopeReady = categoryScope.category === category
   const [matchId, setMatchId] = useState(saved ? saved.matchId || '' : draft.scanAnalysis?.bestMatch?.item?.item_id || '')
+  const candidatePool = new Map()
+  ;[...(draft.scanAnalysis?.candidates || []), ...extraCandidates, ...(scopeReady ? categoryScope.live : [])].forEach((candidate) => {
+    if (!candidatePool.has(candidate.item.item_id)) candidatePool.set(candidate.item.item_id, candidate)
+  })
+  // Only real candidates are listed (a shared card number or year alone is not
+  // one), plus whichever item is currently selected.
+  const candidates = [...candidatePool.values()]
+    .filter((candidate) => !scopeReady || candidate.item.category_id === categoryScope.categoryId)
+    .filter((candidate) => candidate.score >= REVIEW_CANDIDATE_MIN_SCORE || candidate.likelyDuplicate || candidate.item.item_id === matchId)
+    .sort((a, b) => b.score - a.score)
+  const autoMatchedRef = useRef(Boolean(saved))
   const matchCandidate = candidates.find((candidate) => candidate.item.item_id === matchId) || null
   const matchItem = matchCandidate?.item || null
   const [values, setValues] = useState(() => saved?.values || initialReviewValues(draft, category, matchItem))
@@ -2235,6 +2269,34 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   useEffect(() => {
     adminDesktopApi().refocusWindow?.()
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([categoryIdForName(category), searchScanCandidates(draft, category)])
+      .then(([categoryId, live]) => { if (!cancelled) setCategoryScope({ category, categoryId, live }) })
+      .catch((err) => {
+        if (cancelled) return
+        setCategoryScope({ category, categoryId: null, live: [] })
+        setError(err.message || 'Could not search the catalogue for matches.')
+      })
+    return () => { cancelled = true }
+  }, [category])
+
+  // A match outside the selected category is dropped; if nothing is selected
+  // yet, the best in-category candidate is picked once (never after the
+  // reviewer has chosen, and never over a saved review).
+  useEffect(() => {
+    if (!scopeReady) return
+    if (matchId && !candidates.some((candidate) => candidate.item.item_id === matchId)) {
+      chooseMatch('')
+      return
+    }
+    if (!matchId && !autoMatchedRef.current) {
+      autoMatchedRef.current = true
+      const top = candidates[0]
+      if (top && (top.score >= MATCH_PICK_MIN_SCORE || top.likelyDuplicate)) chooseMatch(top.item.item_id)
+    }
+  }, [scopeReady, categoryScope, matchId])
 
   useEffect(() => {
     function onKey(event) { if (event.key === 'Escape' && !busy) onClose() }
@@ -2431,7 +2493,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
         // Checked live: another scan in the queue may have added this item
         // since this draft was analysed. The selected match is excluded when
         // the reviewer deliberately chose "Add as New Item Instead".
-        const found = (await findDuplicateCatalogueItems(duplicateCheckValues())).filter((candidate) => candidate.item.item_id !== matchId)
+        const found = (await findDuplicateCatalogueItems(duplicateCheckValues(), { category })).filter((candidate) => candidate.item.item_id !== matchId)
         if (found.length) {
           setDuplicates(found)
           return false

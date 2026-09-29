@@ -1267,7 +1267,11 @@ function compareScanFields(current, proposed) {
     }))
 }
 
-async function searchCatalogueCandidates(proposed) {
+// Only items in the scan's category are candidates: a sports card never
+// matches a trading card or a LEGO set. `categoryId: null` means the category
+// could not be resolved, which returns nothing rather than every category.
+async function searchCatalogueCandidates(proposed, { categoryId } = {}) {
+  if (categoryId === null) return []
   const filters = []
   if (proposed.upc) filters.push(orEq('upc', proposed.upc))
   if (proposed.card_number) filters.push(orContains('card_number', proposed.card_number))
@@ -1276,11 +1280,12 @@ async function searchCatalogueCandidates(proposed) {
   if (proposed.name) filters.push(orContains('name', proposed.name), orContains('subject', proposed.name))
   if (!filters.length) return []
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('items')
     .select(CATALOGUE_SELECT.join(','))
     .or(filters.join(','))
-    .limit(25)
+  if (categoryId) query = query.eq('category_id', categoryId)
+  const { data, error } = await query.limit(25)
   if (error) throw error
 
   return (data || [])
@@ -1301,7 +1306,7 @@ async function searchCatalogueCandidates(proposed) {
 // Re-checks the live catalogue right before "Add to Catalogue". A draft's
 // stored candidates are from when it was analysed, so they miss items added
 // since, e.g. from another scan of the same card earlier in the queue.
-export async function findDuplicateCatalogueItems(values = {}) {
+export async function findDuplicateCatalogueItems(values = {}, { category } = {}) {
   const proposed = {
     name: String(values.name || '').trim(),
     card_number: String(values.card_number || '').trim(),
@@ -1312,8 +1317,13 @@ export async function findDuplicateCatalogueItems(values = {}) {
     collectible_set: String(values.set_name || '').trim(),
     manufacturer: String(values.manufacturer || '').trim(),
   }
-  const candidates = await searchCatalogueCandidates(proposed)
+  const candidates = await searchCatalogueCandidates(proposed, { categoryId: await categoryIdForName(category) })
   return candidates.filter((candidate) => candidate.likelyDuplicate)
+}
+
+// Live candidate search for the review screen's currently selected category.
+export async function searchScanCandidates(draft, category) {
+  return searchCatalogueCandidates(proposedScanFields(draft), { categoryId: await categoryIdForName(category) })
 }
 
 export async function identifyScannedDraft(draft) {
@@ -1333,7 +1343,7 @@ export async function identifyScannedDraft(draft) {
     }
   }
 
-  const candidates = await searchCatalogueCandidates(proposed)
+  const candidates = await searchCatalogueCandidates(proposed, { categoryId: await categoryIdForName(draft?.category) })
   const best = candidates[0]?.score >= MATCH_MIN_SCORE || candidates[0]?.likelyDuplicate ? candidates[0] : null
   const hasConflicts = !!best?.comparisons?.some((comparison) => comparison.differs)
   let route = 'new_item_proposal'
@@ -1557,12 +1567,29 @@ function writeDynamicFields(baseDynamicFields, groups, values, { dropEmpty = fal
   return dynamicFields
 }
 
-async function categoryIdForName(categoryName) {
+// Scan Intake category labels that differ from the catalogue's category names.
+const CATALOGUE_CATEGORY_NAMES = {
+  'LEGO / Building Blocks': 'Building Blocks',
+  Coins: 'Currency, Medals, & Stamps',
+}
+const categoryIdCache = new Map()
+
+export function catalogueCategoryName(categoryLabel) {
+  return CATALOGUE_CATEGORY_NAMES[categoryLabel] || categoryLabel || ''
+}
+
+export async function categoryIdForName(categoryName) {
   if (!categoryName) return null
-  const exact = await supabase.from('categories').select('category_id').ilike('name', categoryName).limit(1).maybeSingle()
-  if (exact.data?.category_id) return exact.data.category_id
-  const { data } = await supabase.from('categories').select('category_id').ilike('name', `%${categoryName}%`).limit(1).maybeSingle()
-  return data?.category_id || null
+  const name = CATALOGUE_CATEGORY_NAMES[categoryName] || categoryName
+  if (categoryIdCache.has(name)) return categoryIdCache.get(name)
+  const exact = await supabase.from('categories').select('category_id').ilike('name', name).limit(1).maybeSingle()
+  let categoryId = exact.data?.category_id || null
+  if (!categoryId) {
+    const { data } = await supabase.from('categories').select('category_id').ilike('name', `%${name}%`).limit(1).maybeSingle()
+    categoryId = data?.category_id || null
+  }
+  if (categoryId) categoryIdCache.set(name, categoryId)
+  return categoryId
 }
 
 // Uploads scan images the same way the website's Add Item form does:
