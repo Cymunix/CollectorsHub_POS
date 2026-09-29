@@ -2749,6 +2749,11 @@ button:disabled {
   opacity: 0.6;
 }
 
+.review-actions button.danger {
+  border-color: #f0b9b9;
+  color: #b3261e;
+}
+
 .scan-analysis {
   background: #ffffff;
   border: 1px solid #d7dee8;

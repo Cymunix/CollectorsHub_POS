@@ -246,6 +246,10 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     await saveScanDrafts(scanDrafts.map((draft) => draft.id === draftId ? { ...draft, ...patch, updatedAt: new Date().toISOString() } : draft))
   }
 
+  async function deleteScanDraft(draftId) {
+    await saveScanDrafts(scanDrafts.filter((draft) => draft.id !== draftId))
+  }
+
   return (
     <main className="admin-shell">
       <aside className="admin-sidebar">
@@ -293,7 +297,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         {activeView === 'overview' ? <AdminOverview onNavigate={setActiveView} /> : null}
         {activeView === 'catalogue' ? <AdminCatalogue /> : null}
         {activeView === 'scan' ? <ScanIntake onCreateDraft={createScanDraft} /> : null}
-        {activeView === 'review' ? <PendingReview drafts={scanDrafts} onUpdateDraft={updateScanDraft} onCreateMore={() => setActiveView('scan')} /> : null}
+        {activeView === 'review' ? <PendingReview drafts={scanDrafts} onUpdateDraft={updateScanDraft} onDeleteDraft={deleteScanDraft} onCreateMore={() => setActiveView('scan')} /> : null}
         {activeView === 'explorer' ? <DataExplorer /> : null}
         {activeView === 'taxonomy' ? <TaxonomyAdmin /> : null}
         {activeView === 'media' ? <AdminSectionBrowser title="Images & Media" kicker="Catalogue media administration" loader={loadImagesMediaData} /> : null}
@@ -1956,7 +1960,7 @@ function ScanImageSlot({ label, image, onPick }) {
   )
 }
 
-function PendingReview({ drafts, onUpdateDraft, onCreateMore }) {
+function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
   const rows = drafts || []
   const [busyId, setBusyId] = useState('')
 
@@ -2112,6 +2116,9 @@ function PendingReview({ drafts, onUpdateDraft, onCreateMore }) {
               {draft.scanAnalysis?.route === 'possible_duplicate' ? <><button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Confirmed Same Item', matchedItemId: draft.scanAnalysis.bestMatch.item.item_id })}>Same Item</button><button type="button" onClick={() => createItem(draft)} disabled={busyId === draft.id}>Create New</button></> : null}
               <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Rejected' })}>Reject</button>
               <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Review Later' })}>Review Later</button>
+              <button className="danger" type="button" onClick={() => {
+                if (window.confirm('Delete this scan draft from the pending review queue?')) onDeleteDraft?.(draft.id)
+              }}>Delete</button>
             </div>
           </div>
           )
