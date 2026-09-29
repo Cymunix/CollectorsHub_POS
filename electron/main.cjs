@@ -81,12 +81,33 @@ function cleanOcrLine(line) {
   return String(line || '').replace(/[^\w\s.#/&-]/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+function hasVowel(value) {
+  return /[AEIOUY]/i.test(value)
+}
+
+function scorePersonNameCandidate(value) {
+  const text = String(value || '').toUpperCase().replace(/[^A-Z\s'.-]/g, ' ').replace(/\s+/g, ' ').trim()
+  const stopWords = new Set(['SEASON', 'TICKET', 'DALLAS', 'COWBOYS', 'NFL', 'NFLPA', 'PANINI', 'CONTENDERS', 'FOOTBALL', 'ROOKIE', 'CARD', 'TEAM', 'TOTALS'])
+  const tokens = text.split(/\s+/).filter(Boolean)
+  if (tokens.length < 2 || tokens.length > 4) return 0
+  if (tokens.some((token) => stopWords.has(token))) return 0
+  if (tokens[tokens.length - 1].length <= 2 && !hasVowel(tokens[tokens.length - 1])) return 0
+  const vowelTokens = tokens.filter(hasVowel).length
+  const shortTokens = tokens.filter((token) => token.length <= 2).length
+  const oddTokens = tokens.filter((token) => !hasVowel(token) && token.length <= 3).length
+  let score = 30 + (vowelTokens * 14) - (shortTokens * 12) - (oddTokens * 18)
+  if (tokens.every((token) => token.length >= 3)) score += 15
+  if (/^[A-Z]{3,}\s+[A-Z]{3,}$/.test(text)) score += 10
+  return Math.max(0, score)
+}
+
 function parseSportsCardOcr(text) {
   const rawLines = String(text || '').split(/\r?\n/).map(cleanOcrLine).filter(Boolean)
   const lines = rawLines.filter((line) => !/^[\d\s.#-]+$/.test(line))
   const upperLines = lines.map((line) => line.toUpperCase())
   const metadata = {}
   const confidenceNotes = []
+  const rejectedNames = []
 
   const numberMatch = String(text || '').match(/\b(?:NO\.?|#)\s*([A-Z0-9-]{1,8})\b/i)
   if (numberMatch) {
@@ -108,10 +129,13 @@ function parseSportsCardOcr(text) {
   }
 
   const candidateNames = lines
-    .map((line) => line.replace(/\b(NO|DALLAS|COWBOYS|NFL|NFLPA|PANINI|CONTENDERS|FOOTBALL|YEAR|TEAM|TOTALS)\b/gi, '').trim())
-    .filter((line) => /^[A-Z][A-Z\s'.-]{4,}$/.test(line) && line.split(/\s+/).length >= 2)
-    .sort((a, b) => b.length - a.length)
-  const player = candidateNames.find((line) => !teamWords.some((word) => line.toUpperCase().includes(word)))
+    .map((line) => line.replace(/\b(NO|DALLAS|COWBOYS|NFL|NFLPA|PANINI|CONTENDERS|FOOTBALL|YEAR|TEAM|TOTALS|SEASON|TICKET)\b/gi, '').trim())
+    .filter((line) => /^[A-Z][A-Z\s'.-]{4,}$/i.test(line) && line.split(/\s+/).length >= 2)
+    .map((line) => ({ line, score: scorePersonNameCandidate(line) }))
+    .filter((candidate) => !teamWords.some((word) => candidate.line.toUpperCase().includes(word)))
+    .sort((a, b) => b.score - a.score)
+  candidateNames.filter((candidate) => candidate.score < 55).slice(0, 3).forEach((candidate) => rejectedNames.push(candidate.line))
+  const player = candidateNames.find((candidate) => candidate.score >= 55)?.line
   if (player) {
     metadata.player = player.toUpperCase().replace(/\s+/g, ' ')
     metadata.cardName = metadata.player
@@ -134,6 +158,7 @@ function parseSportsCardOcr(text) {
     rawText: String(text || '').trim(),
     confidence: Math.min(92, 35 + (confidenceNotes.length * 16)),
     confidenceNotes,
+    rejectedNames,
   }
 }
 

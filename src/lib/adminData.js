@@ -1233,6 +1233,20 @@ export async function identifyScannedDraft(draft) {
   if (proposed.catalog_code) filters.push(`catalog_code.ilike.%${proposed.catalog_code}%`)
   if (proposed.name) filters.push(`name.ilike.%${proposed.name}%`, `subject.ilike.%${proposed.name}%`)
 
+  const hasIdentity = Boolean(proposed.upc || proposed.card_number || proposed.lego_set_number || proposed.catalog_code || proposed.name)
+  if (!hasIdentity && draft?.ocr?.rawText) {
+    return {
+      route: 'ocr_review_needed',
+      status: 'OCR Review Needed',
+      proposed,
+      bestMatch: null,
+      candidates: [],
+      confidence: 0,
+      analyzedAt: new Date().toISOString(),
+      ocr: draft.ocr,
+    }
+  }
+
   let query = supabase
     .from('items')
     .select(CATALOGUE_SELECT.join(','))

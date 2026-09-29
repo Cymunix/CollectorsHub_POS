@@ -112,13 +112,19 @@ function scanRouteLabel(route) {
     manual_review_existing_item: 'Needs field review',
     possible_duplicate: 'Possible duplicate',
     new_item_proposal: 'Proposed new item',
+    ocr_review_needed: 'Needs OCR review',
   }
   return labels[route] || 'Awaiting analysis'
 }
 
-function mergeScanMetadata(metadata = {}, ocrMetadata = {}) {
+function mergeScanMetadata(metadata = {}, ocr = {}) {
   const next = { ...metadata }
-  Object.entries(ocrMetadata || {}).forEach(([key, value]) => {
+  const rejectedNames = new Set((ocr.rejectedNames || []).map((value) => String(value || '').trim().toUpperCase()))
+  ;['cardName', 'player', 'name'].forEach((key) => {
+    const value = String(next[key] || '').trim().toUpperCase()
+    if (value && rejectedNames.has(value)) next[key] = ''
+  })
+  Object.entries(ocr.metadata || {}).forEach(([key, value]) => {
     const text = String(value || '').trim()
     if (text && !String(next[key] || '').trim()) next[key] = text
   })
@@ -131,7 +137,7 @@ async function enrichDraftWithOcr(draft) {
   const ocr = await adminDesktopApi().analyzeCardScan(image)
   return {
     ...draft,
-    metadata: mergeScanMetadata(draft.metadata, ocr.metadata),
+    metadata: mergeScanMetadata(draft.metadata, ocr),
     ocr,
   }
 }
@@ -2081,6 +2087,8 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
                 {draft.status ? <small>Status: {draft.status}</small> : null}
                 {draft.scanAnalysis?.bestMatch ? <small>Best match: {draft.scanAnalysis.bestMatch.item?.name || draft.scanAnalysis.bestMatch.item?.subject || draft.scanAnalysis.bestMatch.item?.item_id}</small> : null}
                 {draft.scanAnalysis?.bestMatch?.reasons?.length ? <small>{draft.scanAnalysis.bestMatch.reasons.join(' · ')}</small> : null}
+                {draft.ocr?.confidenceNotes?.length ? <small>OCR: {draft.ocr.confidenceNotes.join(' · ')}</small> : null}
+                {draft.ocr?.rejectedNames?.length ? <small>Ignored uncertain OCR name: {draft.ocr.rejectedNames[0]}</small> : null}
                 {!metadataRows.length ? <small>No item identity fields were captured yet. Add card/player/set details before creating a catalogue item.</small> : null}
               </div>
               {metadataRows.length ? (
@@ -2105,7 +2113,7 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
               {draft.analysisError ? <p className="admin-error">{draft.analysisError}</p> : null}
               <details className="review-raw-details">
                 <summary>Raw scan details</summary>
-                <JsonBlock value={{ metadata: draft.metadata, scanner: draft.scanner, status: draft.status, analysis: draft.scanAnalysis }} />
+                <JsonBlock value={{ metadata: draft.metadata, scanner: draft.scanner, status: draft.status, ocr: draft.ocr, analysis: draft.scanAnalysis }} />
               </details>
             </div>
             <div className="review-actions">
