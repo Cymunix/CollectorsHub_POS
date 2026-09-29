@@ -69,7 +69,14 @@ function sanitiseEbayConfig(config = {}) {
     marketplaceId: config.marketplaceId || 'EBAY_CA',
     clientId: config.clientId || '',
     clientSecretConfigured: Boolean(config.clientSecret),
+    sellerAccessTokenConfigured: Boolean(config.sellerAccessToken),
     salesDataMode: config.salesDataMode || 'browse',
+    merchantLocationKey: config.merchantLocationKey || '',
+    categoryId: config.categoryId || '',
+    paymentPolicyId: config.paymentPolicyId || '',
+    fulfillmentPolicyId: config.fulfillmentPolicyId || '',
+    returnPolicyId: config.returnPolicyId || '',
+    currency: config.currency || 'CAD',
   }
 }
 
@@ -79,7 +86,14 @@ async function loadEbayConfig({ includeSecret = false } = {}) {
     marketplaceId: process.env.EBAY_MARKETPLACE_ID || 'EBAY_CA',
     clientId: process.env.EBAY_CLIENT_ID || '',
     clientSecret: process.env.EBAY_CLIENT_SECRET || '',
+    sellerAccessToken: process.env.EBAY_SELLER_ACCESS_TOKEN || '',
     salesDataMode: process.env.EBAY_SALES_DATA_MODE || 'browse',
+    merchantLocationKey: process.env.EBAY_MERCHANT_LOCATION_KEY || '',
+    categoryId: process.env.EBAY_CATEGORY_ID || '',
+    paymentPolicyId: process.env.EBAY_PAYMENT_POLICY_ID || '',
+    fulfillmentPolicyId: process.env.EBAY_FULFILLMENT_POLICY_ID || '',
+    returnPolicyId: process.env.EBAY_RETURN_POLICY_ID || '',
+    currency: process.env.EBAY_CURRENCY || 'CAD',
   }
 
   let stored = {}
@@ -102,7 +116,14 @@ async function saveEbayConfig(nextConfig = {}) {
     marketplaceId: nextConfig.marketplaceId || existing.marketplaceId || 'EBAY_CA',
     clientId: String(nextConfig.clientId || '').trim(),
     clientSecret: nextConfig.clientSecret ? String(nextConfig.clientSecret).trim() : existing.clientSecret || '',
+    sellerAccessToken: nextConfig.sellerAccessToken ? String(nextConfig.sellerAccessToken).trim() : existing.sellerAccessToken || '',
     salesDataMode: nextConfig.salesDataMode || existing.salesDataMode || 'browse',
+    merchantLocationKey: String(nextConfig.merchantLocationKey ?? existing.merchantLocationKey ?? '').trim(),
+    categoryId: String(nextConfig.categoryId ?? existing.categoryId ?? '').trim(),
+    paymentPolicyId: String(nextConfig.paymentPolicyId ?? existing.paymentPolicyId ?? '').trim(),
+    fulfillmentPolicyId: String(nextConfig.fulfillmentPolicyId ?? existing.fulfillmentPolicyId ?? '').trim(),
+    returnPolicyId: String(nextConfig.returnPolicyId ?? existing.returnPolicyId ?? '').trim(),
+    currency: String(nextConfig.currency ?? existing.currency ?? 'CAD').trim() || 'CAD',
   }
 
   await mkdir(getDataDir(), { recursive: true })
@@ -214,6 +235,132 @@ function mapEbaySoldItem(item) {
     rawCondition: item.condition || null,
     source: 'eBay',
     raw: item,
+  }
+}
+
+function getEbaySellerAccessToken(config) {
+  if (!config.sellerAccessToken) {
+    throw new Error('Add an eBay seller OAuth user access token with the sell.inventory scope before listing online.')
+  }
+  return config.sellerAccessToken
+}
+
+function ebayConditionForItem(item = {}) {
+  const text = String(item.condition || item.rawCondition || '').toLowerCase()
+  if (text.includes('new') || text.includes('sealed')) return 'NEW'
+  if (text.includes('near mint') || text.includes('excellent')) return 'USED_EXCELLENT'
+  if (text.includes('light') || text.includes('very good')) return 'USED_VERY_GOOD'
+  if (text.includes('heavy') || text.includes('poor') || text.includes('acceptable')) return 'USED_ACCEPTABLE'
+  return 'USED_GOOD'
+}
+
+function ebaySkuForItem(item = {}) {
+  return String(item.sku || item.inventoryId || item.id || '').trim().replace(/\s+/g, '-')
+}
+
+function requireEbayListingConfig(config) {
+  const missing = []
+  if (!config.merchantLocationKey) missing.push('Merchant Location Key')
+  if (!config.categoryId) missing.push('eBay Category ID')
+  if (!config.paymentPolicyId) missing.push('Payment Policy ID')
+  if (!config.fulfillmentPolicyId) missing.push('Fulfillment Policy ID')
+  if (!config.returnPolicyId) missing.push('Return Policy ID')
+  if (missing.length) {
+    throw new Error(`Complete eBay listing settings first: ${missing.join(', ')}.`)
+  }
+}
+
+async function ebayRequest(config, pathName, { method = 'GET', body = null, seller = false } = {}) {
+  const token = seller ? getEbaySellerAccessToken(config) : await getEbayAccessToken(config)
+  const response = await fetch(`${ebayApiBase(config)}${pathName}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Content-Language': config.marketplaceId === 'EBAY_CA' ? 'en-CA' : 'en-US',
+      'X-EBAY-C-MARKETPLACE-ID': config.marketplaceId || 'EBAY_CA',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const payload = await ebayJson(response)
+  if (!response.ok) throw new Error(ebayErrorMessage(payload, 'eBay request failed.'))
+  return payload
+}
+
+async function listEbayItem(item = {}) {
+  const config = await loadEbayConfig({ includeSecret: true })
+  requireEbayListingConfig(config)
+
+  const sku = ebaySkuForItem(item)
+  if (!sku) throw new Error('This item needs a SKU before it can be listed on eBay.')
+
+  const price = Number(item.onlinePrice || item.inStorePrice || item.price || 0)
+  if (price <= 0) throw new Error('Set an online price before listing on eBay.')
+
+  const quantity = Math.max(1, Number(item.quantityAvailable ?? item.available ?? item.quantity ?? item.onHand ?? 1))
+  const title = String(item.name || item.title || sku).slice(0, 80)
+  const description = String(item.description || `${title}\n\nCondition: ${item.condition || 'Used'}`)
+  const imageUrls = [item.imageUrl, item.image].filter((value) => /^https?:\/\//i.test(String(value || '')))
+
+  await ebayRequest(config, `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+    method: 'PUT',
+    seller: true,
+    body: {
+      availability: {
+        shipToLocationAvailability: { quantity },
+      },
+      condition: ebayConditionForItem(item),
+      product: {
+        title,
+        description,
+        imageUrls,
+        aspects: {
+          Category: [item.category || 'Collectibles'],
+          Condition: [item.condition || 'Used'],
+        },
+      },
+    },
+  })
+
+  const offer = await ebayRequest(config, '/sell/inventory/v1/offer', {
+    method: 'POST',
+    seller: true,
+    body: {
+      sku,
+      marketplaceId: config.marketplaceId || 'EBAY_CA',
+      format: 'FIXED_PRICE',
+      availableQuantity: quantity,
+      categoryId: config.categoryId,
+      merchantLocationKey: config.merchantLocationKey,
+      listingDescription: description,
+      pricingSummary: {
+        price: {
+          currency: config.currency || 'CAD',
+          value: String(price.toFixed(2)),
+        },
+      },
+      listingPolicies: {
+        paymentPolicyId: config.paymentPolicyId,
+        fulfillmentPolicyId: config.fulfillmentPolicyId,
+        returnPolicyId: config.returnPolicyId,
+      },
+    },
+  })
+
+  const offerId = offer?.offerId
+  if (!offerId) throw new Error('eBay created the inventory item but did not return an offer ID.')
+
+  const published = await ebayRequest(config, `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`, {
+    method: 'POST',
+    seller: true,
+  })
+
+  return {
+    sku,
+    offerId,
+    listingId: published?.listingId || published?.listing?.listingId || '',
+    marketplaceId: config.marketplaceId || 'EBAY_CA',
+    raw: published,
   }
 }
 
@@ -399,6 +546,7 @@ ipcMain.handle('ebay:test-config', async () => {
   return sanitiseEbayConfig(config)
 })
 ipcMain.handle('ebay:search-market', async (_event, input) => searchEbayMarket(input))
+ipcMain.handle('ebay:list-item', async (_event, item) => listEbayItem(item))
 ipcMain.handle('scanner:select-images', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Select scanned image files',

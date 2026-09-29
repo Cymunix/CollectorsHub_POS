@@ -637,7 +637,14 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
     marketplaceId: 'EBAY_CA',
     clientId: '',
     clientSecret: '',
+    sellerAccessToken: '',
     salesDataMode: 'browse',
+    merchantLocationKey: '',
+    categoryId: '',
+    paymentPolicyId: '',
+    fulfillmentPolicyId: '',
+    returnPolicyId: '',
+    currency: 'CAD',
   })
   const [ebayConfigMessage, setEbayConfigMessage] = useState('')
 
@@ -663,6 +670,13 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
             clientId: config.clientId || '',
             clientSecret: '',
             salesDataMode: config.salesDataMode || 'browse',
+            sellerAccessToken: '',
+            merchantLocationKey: config.merchantLocationKey || '',
+            categoryId: config.categoryId || '',
+            paymentPolicyId: config.paymentPolicyId || '',
+            fulfillmentPolicyId: config.fulfillmentPolicyId || '',
+            returnPolicyId: config.returnPolicyId || '',
+            currency: config.currency || 'CAD',
           })
         }
       } catch (err) {
@@ -787,7 +801,7 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
       }
       const config = await window.nordvikDesktop.saveEbayApiConfig(ebayDraft)
       setEbayConfig(config)
-      setEbayDraft((current) => ({ ...current, clientSecret: '' }))
+      setEbayDraft((current) => ({ ...current, clientSecret: '', sellerAccessToken: '' }))
       setEbayConfigMessage('eBay API settings saved.')
     } catch (err) {
       setEbayConfigMessage(err.message || 'Could not save eBay API settings.')
@@ -883,6 +897,34 @@ function CatalogueItemMarketData({ record, onReload, storeContext = {} }) {
             <label>
               <span>Client Secret</span>
               <input type="password" value={ebayDraft.clientSecret} onChange={(event) => setEbayDraft({ ...ebayDraft, clientSecret: event.target.value })} placeholder={ebayConfig?.clientSecretConfigured ? 'Saved; leave blank to keep current secret' : 'eBay Cert ID / Client Secret'} />
+            </label>
+            <label>
+              <span>Seller OAuth Token</span>
+              <input type="password" value={ebayDraft.sellerAccessToken} onChange={(event) => setEbayDraft({ ...ebayDraft, sellerAccessToken: event.target.value })} placeholder={ebayConfig?.sellerAccessTokenConfigured ? 'Saved; leave blank to keep current seller token' : 'User access token with sell.inventory scope'} />
+            </label>
+            <label>
+              <span>Currency</span>
+              <input value={ebayDraft.currency} onChange={(event) => setEbayDraft({ ...ebayDraft, currency: event.target.value.toUpperCase() })} placeholder="CAD" />
+            </label>
+            <label>
+              <span>Merchant Location Key</span>
+              <input value={ebayDraft.merchantLocationKey} onChange={(event) => setEbayDraft({ ...ebayDraft, merchantLocationKey: event.target.value })} placeholder="Default warehouse/location key" />
+            </label>
+            <label>
+              <span>Default Category ID</span>
+              <input value={ebayDraft.categoryId} onChange={(event) => setEbayDraft({ ...ebayDraft, categoryId: event.target.value })} placeholder="e.g. eBay category ID" />
+            </label>
+            <label>
+              <span>Payment Policy ID</span>
+              <input value={ebayDraft.paymentPolicyId} onChange={(event) => setEbayDraft({ ...ebayDraft, paymentPolicyId: event.target.value })} />
+            </label>
+            <label>
+              <span>Fulfillment Policy ID</span>
+              <input value={ebayDraft.fulfillmentPolicyId} onChange={(event) => setEbayDraft({ ...ebayDraft, fulfillmentPolicyId: event.target.value })} />
+            </label>
+            <label>
+              <span>Return Policy ID</span>
+              <input value={ebayDraft.returnPolicyId} onChange={(event) => setEbayDraft({ ...ebayDraft, returnPolicyId: event.target.value })} />
             </label>
             <div className="admin-button-row">
               <button className="admin-gold-button" type="button" onClick={saveEbayConfig} disabled={busy === 'ebay-config'}>

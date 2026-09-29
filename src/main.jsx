@@ -112,11 +112,18 @@ function desktopApi() {
     async scanImage() {
       throw new Error('Direct scanner control is only available in the installed Windows desktop app.')
     },
+    async listEbayItem() {
+      throw new Error('eBay listing is only available in the installed desktop app after eBay seller API setup.')
+    },
   }
 }
 
 function createId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function registerRetailPrice(item) {
+  return Number(item?.inStorePrice ?? item?.price ?? item?.unitPrice ?? 0)
 }
 
 function getDefaultOpeningCashForSession(session) {
@@ -142,6 +149,8 @@ function App() {
   const [dataPath, setDataPath] = useState('')
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState([])
+  const [pendingRegisterItem, setPendingRegisterItem] = useState(null)
+  const [registerHasDraft, setRegisterHasDraft] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [authSession, setAuthSession] = useState(null)
@@ -317,6 +326,29 @@ function App() {
 
   function removeFromCart(itemId) {
     setCart((currentCart) => currentCart.filter((item) => item.id !== itemId))
+  }
+
+  async function updateInventoryItem(itemId, patch) {
+    const nextSync = {
+      ...syncStatus,
+      pendingLocalChanges: Number(syncStatus?.pendingLocalChanges || 0) + 1,
+    }
+    const nextInventory = (store.inventory || []).map((item) => (
+      item.id === itemId
+        ? { ...item, ...patch, syncedAt: patch.syncedAt || new Date().toISOString() }
+        : item
+    ))
+    await persist({ ...store, inventory: nextInventory, sync: nextSync })
+  }
+
+  function requestNavigate(nextView) {
+    if (nextView === activeView) return
+    if (activeView === 'register' && registerHasDraft) {
+      const shouldLeave = window.confirm('Leaving will erase the current transaction. Leave Register and erase this transaction?')
+      if (!shouldLeave) return
+      setRegisterHasDraft(false)
+    }
+    setActiveView(nextView)
   }
 
   async function completeRegisterTransaction(draft) {
@@ -658,12 +690,12 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="Main">
-          <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => setActiveView('register')} />
-          <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => setActiveView('inventory')} />
-          <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => setActiveView('customers')} />
-          <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => setActiveView('transactions')} />
-          <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => setActiveView('reports')} />
-          <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => setActiveView('settings')} />
+          <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
+          <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} />
+          <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} />
+          <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
+          <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} />
+          <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => requestNavigate('settings')} />
         </nav>
 
         <div className="sidebar-footer">
@@ -680,11 +712,10 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {activeView !== 'register' ? (
+        {activeView !== 'register' && activeView !== 'inventory' ? (
           <>
             <header className="topbar">
               <div>
-                <p className="eyebrow">Local-first retail workstation</p>
                 <h1>{viewTitle(activeView)}</h1>
               </div>
               <div className="topbar-actions">
@@ -720,9 +751,12 @@ function App() {
             customers={store.customers || []}
             inventory={store.inventory}
             isSyncing={isSyncing}
+            pendingRegisterItem={pendingRegisterItem}
             onCompleteTransaction={completeRegisterTransaction}
             onCompleteRefund={completeRegisterRefund}
-            onNavigate={setActiveView}
+            onNavigate={requestNavigate}
+            onPendingRegisterItemConsumed={() => setPendingRegisterItem(null)}
+            onRegisterDraftChange={setRegisterHasDraft}
             transactions={store.transactions}
             onSyncNow={handleSyncNow}
             onToggleRegister={toggleRegister}
@@ -742,8 +776,17 @@ function App() {
         {activeView === 'inventory' ? (
           <InventoryView
             inventory={store.inventory}
+            isSyncing={isSyncing}
+            onNavigate={requestNavigate}
+            onSellItem={(item) => {
+              setPendingRegisterItem({ ...item, handoffId: createId('register_handoff') })
+              setActiveView('register')
+            }}
+            onSyncNow={handleSyncNow}
+            onUpdateItem={updateInventoryItem}
             search={search}
             setSearch={setSearch}
+            syncStatus={syncStatus}
           />
         ) : null}
 
@@ -949,9 +992,12 @@ function RegisterView({
   inventory,
   inventoryValue,
   isSyncing,
+  pendingRegisterItem,
   onCompleteTransaction,
   onCompleteRefund,
   onNavigate,
+  onPendingRegisterItemConsumed,
+  onRegisterDraftChange,
   onSyncNow,
   onToggleRegister,
   register,
@@ -1029,6 +1075,10 @@ function RegisterView({
     || authSession?.permissions?.discount_override === true
 
   useEffect(() => {
+    onRegisterDraftChange?.(lines.length > 0)
+  }, [lines.length, onRegisterDraftChange])
+
+  useEffect(() => {
     let cancelled = false
     if (!authSession?.storeId) {
       setActivePromotions([])
@@ -1042,6 +1092,13 @@ function RegisterView({
       })
     return () => { cancelled = true }
   }, [authSession?.storeId])
+
+  useEffect(() => {
+    if (!pendingRegisterItem) return
+    setMode('sale')
+    addInventoryItem(pendingRegisterItem)
+    onPendingRegisterItemConsumed?.()
+  }, [pendingRegisterItem])
 
   const filteredInventory = useMemo(() => {
     const value = query.trim().toLowerCase()
@@ -1571,7 +1628,7 @@ function RegisterView({
   }
 
   function addInventoryItem(item) {
-    const available = Number(item.quantity ?? item.available ?? 0)
+    const available = inventoryStock(item)
     if (available <= 0) return
 
     setLines((current) => {
@@ -1600,7 +1657,7 @@ function RegisterView({
           direction: 'outgoing',
           quantity: 1,
           quantityAvailable: available,
-          unitPrice: Number(item.price || item.inStorePrice || 0),
+          unitPrice: registerRetailPrice(item),
           discount: 0,
           condition: item.condition || item.rawCondition || '',
         },
@@ -2419,7 +2476,7 @@ function RegisterView({
                     <span>
                       <strong>{item.name || item.title || 'Untitled item'}</strong>
                       <small>{[item.sku ? `SKU ${item.sku}` : '', item.category].filter(Boolean).join(' | ')}</small>
-                      <b>{money.format(Number(item.price || item.inStorePrice || 0))}</b>
+                      <b>{money.format(registerRetailPrice(item))}</b>
                       <em><Plus size={15} /> Add to Sale</em>
                     </span>
                   </button>
@@ -3462,36 +3519,68 @@ function conditionOptions(mode, category) {
   return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged', 'New/Sealed', 'Used/Complete']
 }
 
-function InventoryView({ inventory, search, setSearch }) {
+function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow, onUpdateItem, search, setSearch, syncStatus }) {
+  const [activeWorkflow, setActiveWorkflow] = useState('')
+  const [itemOverrides, setItemOverrides] = useState({})
+  const [inventoryNotice, setInventoryNotice] = useState('')
+  const [rowMenu, setRowMenu] = useState(null)
   const [stockFilter, setStockFilter] = useState('all')
   const [sortMode, setSortMode] = useState('name')
   const [selectedId, setSelectedId] = useState('')
 
+  const inventoryRows = useMemo(() => (
+    (inventory || []).map((item) => {
+      const override = itemOverrides[item.id] || {}
+      const cost = Number(item.cost ?? item.buyPrice ?? 0)
+      const baseInStorePrice = override.inStorePrice ?? item.inStorePrice ?? item.price
+      const suggestedPrice = cost > 0 ? Math.round(cost * 1.15 * 100) / 100 : 0
+      const inStorePrice = Number(baseInStorePrice ?? suggestedPrice ?? 0)
+      const onlinePrice = Number(override.onlinePrice ?? item.onlinePrice ?? inStorePrice ?? 0)
+      const hasExplicitPrice = Boolean(override.hasExplicitPrice ?? item.hasExplicitPrice ?? baseInStorePrice != null)
+      const hasOnlineDraft = Boolean(override.hasOnlineDraft ?? item.hasOnlineDraft ?? item.listedForSale ?? item.listingApproved ?? false)
+      const listingApproved = Boolean(override.listingApproved ?? item.listingApproved ?? false)
+      const listedForSale = Boolean((override.listedForSale ?? item.listedForSale) && listingApproved)
+      return {
+        ...item,
+        ...override,
+        cost,
+        inStorePrice,
+        listedForSale,
+        listingApproved,
+        onlinePrice,
+        price: inStorePrice,
+        hasExplicitPrice,
+        hasOnlineDraft,
+        priceIsSuggested: !hasExplicitPrice && suggestedPrice > 0,
+      }
+    })
+  ), [inventory, itemOverrides])
+
   const categories = useMemo(() => (
-    [...new Set((inventory || []).map((item) => item.category).filter(Boolean))].sort()
-  ), [inventory])
+    [...new Set(inventoryRows.map((item) => item.category).filter(Boolean))].sort()
+  ), [inventoryRows])
   const [categoryFilter, setCategoryFilter] = useState('all')
 
   const stats = useMemo(() => {
-    const rows = inventory || []
-    const units = rows.reduce((sum, item) => sum + inventoryStock(item), 0)
-    const availableUnits = rows.reduce((sum, item) => sum + Number(item.available ?? item.quantity ?? 0), 0)
-    const retailValue = rows.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.available ?? item.quantity ?? 0), 0)
-    const costValue = rows.reduce((sum, item) => sum + Number(item.cost || item.buyPrice || 0) * Number(item.available ?? item.quantity ?? 0), 0)
-    const lowStock = rows.filter((item) => Number(item.available ?? item.quantity ?? 0) <= 1).length
-    const unpriced = rows.filter((item) => Number(item.price || 0) <= 0).length
-    return { rows: rows.length, units, availableUnits, retailValue, costValue, lowStock, unpriced }
-  }, [inventory])
+    const rows = inventoryRows
+    const availableUnits = rows.reduce((sum, item) => sum + inventoryStock(item), 0)
+    const retailValue = rows.reduce((sum, item) => sum + Number(item.inStorePrice || 0) * inventoryStock(item), 0)
+    const costValue = rows.reduce((sum, item) => sum + Number(item.cost ?? item.buyPrice ?? 0) * inventoryStock(item), 0)
+    const lowStock = rows.filter((item) => inventoryStock(item) <= 1).length
+    const unpriced = rows.filter((item) => !item.hasExplicitPrice).length
+    const needsApproval = rows.filter((item) => item.hasExplicitPrice && !item.listingApproved && !item.listedForSale).length
+    return { rows: rows.length, availableUnits, retailValue, costValue, lowStock, needsApproval, unpriced }
+  }, [inventoryRows])
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
-    const rows = (inventory || []).filter((item) => {
-      const available = Number(item.available ?? item.quantity ?? 0)
-      const price = Number(item.price || 0)
+    const rows = inventoryRows.filter((item) => {
+      const available = inventoryStock(item)
       if (stockFilter === 'available' && available <= 0) return false
       if (stockFilter === 'low' && available > 1) return false
-      if (stockFilter === 'unpriced' && price > 0) return false
-      if (stockFilter === 'listed' && !item.listedForSale) return false
+      if (stockFilter === 'unpriced' && item.hasExplicitPrice) return false
+      if (stockFilter === 'approval' && (!item.hasExplicitPrice || item.listingApproved || item.listedForSale)) return false
+      if (stockFilter === 'listed' && !item.hasOnlineDraft && !item.listedForSale && !item.listingApproved) return false
       if (categoryFilter !== 'all' && item.category !== categoryFilter) return false
       if (!term) return true
       return [
@@ -3508,12 +3597,12 @@ function InventoryView({ inventory, search, setSearch }) {
     })
 
     return [...rows].sort((a, b) => {
-      if (sortMode === 'stock') return Number(b.available ?? b.quantity ?? 0) - Number(a.available ?? a.quantity ?? 0)
-      if (sortMode === 'price') return Number(b.price || 0) - Number(a.price || 0)
+      if (sortMode === 'stock') return inventoryStock(b) - inventoryStock(a)
+      if (sortMode === 'price') return Number(b.inStorePrice || 0) - Number(a.inStorePrice || 0)
       if (sortMode === 'updated') return new Date(b.syncedAt || 0) - new Date(a.syncedAt || 0)
       return String(a.name || a.title || '').localeCompare(String(b.name || b.title || ''))
     })
-  }, [categoryFilter, inventory, search, sortMode, stockFilter])
+  }, [categoryFilter, inventoryRows, search, sortMode, stockFilter])
 
   useEffect(() => {
     if (!filtered.length) {
@@ -3526,33 +3615,149 @@ function InventoryView({ inventory, search, setSearch }) {
   }, [filtered, selectedId])
 
   const selected = filtered.find((item) => item.id === selectedId) || filtered[0] || null
+  const pendingChanges = Number(syncStatus?.pendingLocalChanges || 0)
+  const lastSynced = formatSyncTime(syncStatus?.lastSyncAt)
+
+  function updateInventoryItem(itemId, patch) {
+    const nextPatch = {
+      ...patch,
+      syncedAt: patch.syncedAt || new Date().toISOString(),
+    }
+    setItemOverrides((current) => ({
+      ...current,
+      [itemId]: {
+        ...(current[itemId] || {}),
+        ...nextPatch,
+      },
+    }))
+    onUpdateItem?.(itemId, nextPatch)
+  }
+
+  function showInventoryNotice(message) {
+    setInventoryNotice(message)
+  }
+
+  function openWorkflow(workflow, item = selected) {
+    if (!item) return
+    selectInventoryRow(item)
+    setActiveWorkflow(workflow)
+    setInventoryNotice('')
+    setRowMenu(null)
+  }
+
+  function sellSelectedItem() {
+    if (!selected) return
+    onSellItem?.(selected)
+  }
+
+  function selectInventoryRow(item) {
+    setSelectedId(item.id)
+  }
+
+  async function approveListing(item = selected) {
+    if (!item) return
+    try {
+      const result = await desktopApi().listEbayItem({
+        ...item,
+        onlinePrice: Number(item.onlinePrice || item.inStorePrice || 0),
+      })
+      updateInventoryItem(item.id, {
+        listedForSale: true,
+        listingApproved: true,
+        hasOnlineDraft: true,
+        onlinePrice: Number(item.onlinePrice || item.inStorePrice || 0),
+        ebaySku: result?.sku || item.sku || '',
+        ebayOfferId: result?.offerId || '',
+        ebayListingId: result?.listingId || '',
+        ebayMarketplaceId: result?.marketplaceId || '',
+      })
+      setStockFilter('listed')
+      setSelectedId(item.id)
+      setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} was published to eBay${result?.listingId ? ` as listing ${result.listingId}` : ''}.`)
+    } catch (error) {
+      setInventoryNotice(error?.message || 'Could not publish this item to eBay.')
+    }
+  }
+
+  function applyDefaultMarkup(item = selected) {
+    if (!item) return
+    const cost = Number(item.cost ?? item.buyPrice ?? 0)
+    if (cost <= 0) {
+      setInventoryNotice('Add a purchase cost before applying the 15% pricing rule.')
+      return
+    }
+    const price = Math.round(cost * 1.15 * 100) / 100
+    updateInventoryItem(item.id, {
+      inStorePrice: price,
+      onlinePrice: price,
+      hasExplicitPrice: true,
+      hasOnlineDraft: false,
+      listedForSale: false,
+      listingApproved: false,
+    })
+    setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} was priced at ${money.format(price)} and is waiting for listing approval.`)
+  }
+
+  function adjustStock(item = selected, delta = 1) {
+    if (!item) return
+    const nextQuantity = Math.max(0, inventoryStock(item) + delta)
+    updateInventoryItem(item.id, {
+      available: nextQuantity,
+      quantity: nextQuantity,
+      onHand: Math.max(0, Number(item.onHand ?? inventoryStock(item)) + delta),
+    })
+    setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} stock adjusted to ${nextQuantity}.`)
+  }
+
+  function handleInventoryRowKey(event, item) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      selectInventoryRow(item)
+    }
+  }
 
   return (
     <div className="inventory-workspace">
-      <section className="inventory-hero panel">
-        <div className="inventory-hero-main">
-          <div>
-            <p className="eyebrow">Synced stockroom cache</p>
-            <h2>Inventory</h2>
-            <span>{stats.rows.toLocaleString()} records · {stats.availableUnits.toLocaleString()} available units</span>
-          </div>
-          <SearchBox value={search} onChange={setSearch} />
+      <header className="inventory-page-header">
+        <div>
+          <h2>Inventory</h2>
+          <span>
+            {stats.rows.toLocaleString()} {stats.rows === 1 ? 'item' : 'items'} · {money.format(stats.retailValue)} retail value · Last synced {lastSynced} · {pendingChanges.toLocaleString()} pending changes
+          </span>
         </div>
-        <div className="inventory-summary-grid">
-          <InventorySummary label="Retail Value" value={money.format(stats.retailValue)} />
-          <InventorySummary label="Cost Basis" value={money.format(stats.costValue)} />
-          <InventorySummary label="Low Stock" value={String(stats.lowStock)} tone={stats.lowStock ? 'warn' : ''} />
-          <InventorySummary label="Unpriced" value={String(stats.unpriced)} tone={stats.unpriced ? 'warn' : ''} />
+        <div className="inventory-page-actions">
+          <button className="gold-button" type="button" onClick={() => showInventoryNotice('Add Item is next: create the item record, receive stock, then price it for in-store and online.')}>
+            <Plus size={17} /> Add Item
+          </button>
+          <button className="secondary-action" type="button" onClick={onSyncNow} disabled={isSyncing}>
+            <RefreshIcon /> {isSyncing ? 'Syncing' : 'Sync'}
+          </button>
         </div>
+      </header>
+
+      <section className="inventory-summary-grid" aria-label="Inventory summary">
+        <InventorySummary label="Retail" value={money.format(stats.retailValue)} />
+        <InventorySummary label="Cost" value={money.format(stats.costValue)} />
+        <InventorySummary label="Available" value={stats.availableUnits.toLocaleString()} />
+        <InventorySummary label="Low Stock" value={String(stats.lowStock)} tone={stats.lowStock ? 'warn' : ''} />
+        <InventorySummary label="Needs Approval" value={String(stats.needsApproval)} tone={stats.needsApproval ? 'warn' : ''} />
+        <InventorySummary label="Unpriced" value={String(stats.unpriced)} tone={stats.unpriced ? 'warn' : ''} />
       </section>
 
-      <section className="inventory-toolbar panel">
-        <div className="inventory-filter-row">
+      {inventoryNotice ? (
+        <DismissibleAlert className="inventory-notice" onDismiss={() => setInventoryNotice('')}>
+          {inventoryNotice}
+        </DismissibleAlert>
+      ) : null}
+
+      <section className="inventory-controls">
+        <div className="inventory-filter-row" role="group" aria-label="Inventory filters">
           {[
             ['all', 'All'],
             ['available', 'Available'],
             ['low', 'Low Stock'],
             ['unpriced', 'Unpriced'],
+            ['approval', 'Needs Approval'],
             ['listed', 'Listed'],
           ].map(([key, label]) => (
             <button className={stockFilter === key ? 'active' : ''} type="button" key={key} onClick={() => setStockFilter(key)}>
@@ -3577,6 +3782,7 @@ function InventoryView({ inventory, search, setSearch }) {
               <option value="updated">Last synced</option>
             </select>
           </label>
+          <SearchBox value={search} onChange={setSearch} />
         </div>
       </section>
 
@@ -3584,27 +3790,35 @@ function InventoryView({ inventory, search, setSearch }) {
         <section className="inventory-table-panel panel">
           <div className="inventory-table-head">
             <span><strong>{filtered.length.toLocaleString()}</strong> matching records</span>
-            <small>{search.trim() ? `Search: ${search.trim()}` : 'Local cache from latest sync'}</small>
+            <small>{search.trim() ? `Search: ${search.trim()}` : 'Local inventory view'}</small>
           </div>
           <div className="inventory-table">
             <div className="inventory-table-row inventory-table-header">
               <span>Item</span>
-              <span>SKU / Barcode</span>
-              <span>Stock</span>
-              <span>Price</span>
-              <span>Status</span>
+              <span>SKU</span>
+              <span>Available</span>
+              <span>Cost</span>
+              <span>In-Store</span>
+              <span>Online</span>
+              <span>Listing</span>
+              <span aria-label="More actions" />
             </div>
             {!filtered.length ? <EmptyState text="No inventory matches the current filters." /> : null}
             {filtered.map((item) => {
-              const available = Number(item.available ?? item.quantity ?? 0)
+              const available = inventoryStock(item)
+              const cost = Number(item.cost ?? item.buyPrice ?? 0)
+              const inStorePrice = Number(item.inStorePrice || 0)
+              const onlinePrice = Number(item.onlinePrice || 0)
               const lowStock = available <= 1
-              const unpriced = Number(item.price || 0) <= 0
+              const unpriced = !item.hasExplicitPrice
               return (
-                <button
+                <div
                   className={selected?.id === item.id ? 'inventory-table-row selected' : 'inventory-table-row'}
-                  type="button"
                   key={item.id}
-                  onClick={() => setSelectedId(item.id)}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => selectInventoryRow(item)}
+                  onKeyDown={(event) => handleInventoryRowKey(event, item)}
                 >
                   <span className="inventory-row-main">
                     <ItemThumb item={item} />
@@ -3622,15 +3836,44 @@ function InventoryView({ inventory, search, setSearch }) {
                     <small>{Number(item.reserved || 0) ? `${item.reserved} reserved` : `${item.onHand ?? available} on hand`}</small>
                   </span>
                   <span>
-                    <strong>{Number(item.price || 0) > 0 ? money.format(Number(item.price || 0)) : '—'}</strong>
-                    <small>{item.onlinePrice != null ? `Online ${money.format(Number(item.onlinePrice))}` : item.cost != null ? `Cost ${money.format(Number(item.cost))}` : 'No comparison'}</small>
+                    <strong>{cost > 0 ? money.format(cost) : '—'}</strong>
+                    <small>Basis</small>
+                  </span>
+                  <span>
+                    <strong>{inStorePrice > 0 ? money.format(inStorePrice) : '—'}</strong>
+                    <small>{item.priceIsSuggested ? 'Suggested' : 'POS'}</small>
+                  </span>
+                  <span>
+                    <strong>{onlinePrice > 0 ? money.format(onlinePrice) : '—'}</strong>
+                    <small>Marketplace</small>
                   </span>
                   <span className="inventory-status-stack">
-                    <b className={lowStock ? 'inventory-chip warn' : 'inventory-chip'}>{lowStock ? 'Low' : 'Ready'}</b>
+                    <b className={item.listedForSale ? 'inventory-chip' : item.hasOnlineDraft || item.listingApproved ? 'inventory-chip muted' : 'inventory-chip warn'}>
+                      {item.listedForSale ? 'Listed' : item.listingApproved ? 'Approved' : item.hasOnlineDraft ? 'Draft' : 'Needs approval'}
+                    </b>
+                    {lowStock ? <b className="inventory-chip warn">Low</b> : null}
                     {unpriced ? <b className="inventory-chip warn">Unpriced</b> : null}
-                    {item.listedForSale ? <b className="inventory-chip">Listed</b> : null}
                   </span>
-                </button>
+                  <span className="inventory-row-actions">
+                    <button
+                      className="inventory-row-more"
+                      type="button"
+                      aria-label={`Open actions for ${item.name || item.title || item.sku || 'inventory item'}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        selectInventoryRow(item)
+                        const rect = event.currentTarget.getBoundingClientRect()
+                        setRowMenu(rowMenu?.id === item.id ? null : {
+                          id: item.id,
+                          left: Math.min(rect.left - 86, window.innerWidth - 130),
+                          top: Math.min(rect.bottom + 6, window.innerHeight - 120),
+                        })
+                      }}
+                    >
+                      ...
+                    </button>
+                  </span>
+                </div>
               )
             })}
           </div>
@@ -3647,27 +3890,63 @@ function InventoryView({ inventory, search, setSearch }) {
                   <small>{[selected.category, selected.condition].filter(Boolean).join(' · ') || selected.inventoryId}</small>
                 </span>
               </div>
-              <div className="inventory-detail-metrics">
-                <InventorySummary label="Available" value={String(Number(selected.available ?? selected.quantity ?? 0))} />
-                <InventorySummary label="On Hand" value={String(Number(selected.onHand ?? selected.quantity ?? 0))} />
-                <InventorySummary label="Reserved" value={String(Number(selected.reserved || 0))} />
-                <InventorySummary label="Price" value={Number(selected.price || 0) > 0 ? money.format(Number(selected.price)) : '—'} tone={Number(selected.price || 0) <= 0 ? 'warn' : ''} />
+              <div className="inventory-detail-actions inventory-detail-actions-top">
+                <button className="gold-button" type="button" onClick={() => openWorkflow('edit')}>
+                  Edit Item
+                </button>
+                <button type="button" onClick={() => openWorkflow('stock')}>
+                  Adjust Stock
+                </button>
+                <button type="button" onClick={sellSelectedItem}>
+                  Sell
+                </button>
+                <button type="button" onClick={() => openWorkflow('list')}>
+                  List Online
+                </button>
               </div>
-              <div className="inventory-field-list">
-                <InventoryField label="SKU" value={selected.sku} />
-                <InventoryField label="Barcode" value={selected.barcode} />
-                <InventoryField label="Catalogue ID" value={selected.catalogItemId} />
-                <InventoryField label="Inventory ID" value={selected.inventoryId || selected.id} />
-                <InventoryField label="Cost" value={selected.cost != null ? money.format(Number(selected.cost)) : ''} />
-                <InventoryField label="Online Price" value={selected.onlinePrice != null ? money.format(Number(selected.onlinePrice)) : ''} />
-                <InventoryField label="Trade-In" value={selected.isTradeIn ? 'Yes' : 'No'} />
-                <InventoryField label="Listed for Sale" value={selected.listedForSale ? 'Yes' : 'No'} />
-                <InventoryField label="Last Synced" value={selected.syncedAt ? new Date(selected.syncedAt).toLocaleString() : ''} />
-              </div>
-              <div className="inventory-detail-actions">
-                <button type="button" onClick={() => setSearch(selected.sku || selected.barcode || selected.name || '')}>Search Similar</button>
-                <button type="button" disabled>Adjust Stock</button>
-                <button type="button" disabled>Print Label</button>
+              <div className="inventory-detail-scroll">
+                <div className="inventory-detail-metrics">
+                  <InventorySummary label="Available" value={String(inventoryStock(selected))} />
+                  <InventorySummary label="On Hand" value={String(Number(selected.onHand ?? selected.quantity ?? 0))} />
+                  <InventorySummary label="Reserved" value={String(Number(selected.reserved || 0))} />
+                  <InventorySummary label="In-Store" value={Number(selected.inStorePrice ?? selected.price ?? 0) > 0 ? money.format(Number(selected.inStorePrice ?? selected.price ?? 0)) : '—'} tone={Number(selected.inStorePrice ?? selected.price ?? 0) <= 0 ? 'warn' : ''} />
+                </div>
+                <InventoryWorkflowPanel
+                  item={selected}
+                  mode={activeWorkflow}
+                  onAdjustStock={adjustStock}
+                  onApplyDefaultMarkup={applyDefaultMarkup}
+                  onApproveListing={approveListing}
+                  onClose={() => setActiveWorkflow('')}
+                  onSaveItem={(patch) => {
+                    updateInventoryItem(selected.id, patch)
+                    setInventoryNotice(`${selected.name || selected.title || selected.sku || 'Item'} was updated locally.`)
+                    setActiveWorkflow('')
+                  }}
+                />
+                <div className="inventory-field-list">
+                  <InventoryField label="SKU" value={selected.sku} />
+                  <InventoryField label="Barcode" value={selected.barcode} />
+                  <InventoryField label="Cost" value={selected.cost != null || selected.buyPrice != null ? money.format(Number(selected.cost ?? selected.buyPrice)) : ''} />
+                  <InventoryField label="In-Store Price" value={selected.inStorePrice != null || selected.price != null ? money.format(Number(selected.inStorePrice ?? selected.price)) : ''} />
+                  <InventoryField label="Online Price" value={selected.onlinePrice != null ? money.format(Number(selected.onlinePrice)) : ''} />
+                <InventoryField label="Price Source" value={selected.priceIsSuggested ? 'Suggested from cost' : 'Employee set'} />
+                <InventoryField label="Listing Status" value={selected.listedForSale ? 'Listed' : selected.listingApproved ? 'Approved' : selected.hasOnlineDraft ? 'Draft' : 'Needs approval'} />
+                <InventoryField label="eBay Listing" value={selected.ebayListingId || selected.ebayOfferId} />
+                  <InventoryField label="Trade-In" value={selected.isTradeIn ? 'Yes' : 'No'} />
+                  <InventoryField label="Last Synced" value={selected.syncedAt ? new Date(selected.syncedAt).toLocaleString() : ''} />
+                </div>
+                <details className="inventory-more-details">
+                  <summary>More details</summary>
+                  <div className="inventory-field-list compact">
+                    <InventoryField label="Catalogue ID" value={selected.catalogItemId} />
+                    <InventoryField label="Inventory ID" value={selected.inventoryId || selected.id} />
+                  </div>
+                </details>
+                <div className="inventory-detail-actions">
+                  <button type="button" onClick={() => setSearch(selected.sku || selected.barcode || selected.name || '')}>Search Similar</button>
+                  <button type="button" onClick={() => openWorkflow('label')}>Print Label</button>
+                </div>
               </div>
             </>
           ) : (
@@ -3675,6 +3954,13 @@ function InventoryView({ inventory, search, setSearch }) {
           )}
         </aside>
       </div>
+      {rowMenu ? (
+        <div className="inventory-row-menu" style={{ left: rowMenu.left, top: rowMenu.top }}>
+          <button type="button" onClick={() => openWorkflow('edit', inventoryRows.find((item) => item.id === rowMenu.id))}>Edit</button>
+          <button type="button" onClick={() => openWorkflow('stock', inventoryRows.find((item) => item.id === rowMenu.id))}>Adjust</button>
+          <button type="button" onClick={() => openWorkflow('list', inventoryRows.find((item) => item.id === rowMenu.id))}>List</button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -3694,6 +3980,128 @@ function InventoryField({ label, value }) {
       <span>{label}</span>
       <strong>{value || '—'}</strong>
     </div>
+  )
+}
+
+function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarkup, onApproveListing, onClose, onSaveItem }) {
+  const itemName = item.name || item.title || item.sku || 'Inventory item'
+  const cost = Number(item.cost ?? item.buyPrice ?? 0)
+  const suggestedPrice = cost > 0 ? Math.round(cost * 1.15 * 100) / 100 : 0
+  const [editDraft, setEditDraft] = useState({
+    category: '',
+    condition: '',
+    inStorePrice: '',
+    onlinePrice: '',
+  })
+
+  useEffect(() => {
+    if (!item || mode !== 'edit') return
+    setEditDraft({
+      category: item.category || '',
+      condition: item.condition || '',
+      inStorePrice: String(Number(item.inStorePrice || item.price || suggestedPrice || 0) || ''),
+      onlinePrice: String(Number(item.onlinePrice || item.inStorePrice || item.price || suggestedPrice || 0) || ''),
+    })
+  }, [item?.id, item?.inStorePrice, item?.onlinePrice, item?.price, item?.category, item?.condition, mode, suggestedPrice])
+
+  if (!mode || !item) return null
+
+  function saveEdit(event) {
+    event.preventDefault()
+    const inStoreDraft = String(editDraft.inStorePrice || '').trim()
+    const onlineDraft = String(editDraft.onlinePrice || '').trim()
+    const inStorePrice = inStoreDraft ? Number(inStoreDraft) : Number(item.inStorePrice || item.price || suggestedPrice || 0)
+    const onlinePrice = onlineDraft ? Number(onlineDraft) : Number(item.onlinePrice || item.inStorePrice || item.price || suggestedPrice || 0)
+    onSaveItem({
+      category: String(editDraft.category || item.category || ''),
+      condition: String(editDraft.condition || item.condition || ''),
+      inStorePrice,
+      onlinePrice,
+      hasExplicitPrice: inStorePrice > 0 || onlinePrice > 0,
+      hasOnlineDraft: false,
+      listedForSale: false,
+      listingApproved: false,
+    })
+  }
+
+  function fillMarkupPrice() {
+    if (suggestedPrice <= 0) return
+    const value = String(suggestedPrice)
+    setEditDraft((current) => ({ ...current, inStorePrice: value, onlinePrice: value }))
+  }
+
+  return (
+    <section className="inventory-workflow-card" aria-label="Inventory action">
+      <div className="inventory-workflow-head">
+        <strong>
+          {mode === 'edit' ? 'Edit item' : mode === 'stock' ? 'Adjust stock' : mode === 'list' ? 'List online' : 'Print label'}
+        </strong>
+        <button type="button" onClick={onClose} aria-label="Close inventory action">
+          <X size={15} />
+        </button>
+      </div>
+
+      {mode === 'edit' ? (
+        <form className="inventory-workflow-form" onSubmit={saveEdit}>
+          <div className="inventory-readonly-field">
+            <span>Cost</span>
+            <strong>{cost > 0 ? money.format(cost) : '—'}</strong>
+          </div>
+          <label>
+            <span>In-store price</span>
+            <input name="inStorePrice" type="number" min="0" step="0.01" value={editDraft.inStorePrice} onChange={(event) => setEditDraft((current) => ({ ...current, inStorePrice: event.target.value }))} />
+          </label>
+          <label>
+            <span>Online price</span>
+            <input name="onlinePrice" type="number" min="0" step="0.01" value={editDraft.onlinePrice} onChange={(event) => setEditDraft((current) => ({ ...current, onlinePrice: event.target.value }))} />
+          </label>
+          <label>
+            <span>Category</span>
+            <input name="category" value={editDraft.category} onChange={(event) => setEditDraft((current) => ({ ...current, category: event.target.value }))} />
+          </label>
+          <label>
+            <span>Condition</span>
+            <input name="condition" value={editDraft.condition} onChange={(event) => setEditDraft((current) => ({ ...current, condition: event.target.value }))} />
+          </label>
+          <div className="inventory-workflow-actions">
+            <button type="button" onClick={fillMarkupPrice}>Use 15% markup</button>
+            <button className="gold-button" type="submit">Save</button>
+          </div>
+          <small>Saving resets online listing approval until the item is reviewed.</small>
+        </form>
+      ) : null}
+
+      {mode === 'stock' ? (
+        <div className="inventory-workflow-stack">
+          <p>{inventoryStock(item)} available · {Number(item.reserved || 0)} reserved</p>
+          <div className="inventory-workflow-actions">
+            <button type="button" onClick={() => onAdjustStock(item, -1)}>-1</button>
+            <button type="button" onClick={() => onAdjustStock(item, 1)}>+1</button>
+            <button type="button" onClick={() => onAdjustStock(item, 5)}>+5</button>
+          </div>
+        </div>
+      ) : null}
+
+      {mode === 'list' ? (
+        <div className="inventory-workflow-stack">
+          <p>{item.listingApproved ? 'Approved for online sale.' : 'Not listed until approved.'}</p>
+          <p>Online price: {Number(item.onlinePrice || 0) > 0 ? money.format(Number(item.onlinePrice)) : money.format(Number(item.inStorePrice || suggestedPrice || 0))}</p>
+          <div className="inventory-workflow-actions">
+            <button type="button" onClick={() => onApplyDefaultMarkup(item)}>Use 15% markup</button>
+            <button type="button" onClick={() => onSaveItem({ hasOnlineDraft: true, listedForSale: false, listingApproved: false })}>Save draft</button>
+            <button className="gold-button" type="button" onClick={() => onApproveListing(item)}>Approve listing</button>
+          </div>
+        </div>
+      ) : null}
+
+      {mode === 'label' ? (
+        <div className="inventory-label-preview">
+          <strong>{itemName}</strong>
+          <span>{item.sku || item.barcode || 'No SKU'}</span>
+          <b>{Number(item.inStorePrice || 0) > 0 ? money.format(Number(item.inStorePrice)) : 'Price pending'}</b>
+        </div>
+      ) : null}
+    </section>
   )
 }
 
