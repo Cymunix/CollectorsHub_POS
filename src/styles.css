@@ -2806,6 +2806,88 @@ button:disabled {
   color: #0b111b;
 }
 
+.scan-queue-duplicate {
+  background: #fff7e6;
+  border: 1px solid #f0d49a;
+  border-radius: 8px;
+  color: #6b4a00;
+  font-size: 12px;
+  font-weight: 800;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+}
+
+.scan-review-duplicates {
+  background: #fff7e6;
+  border: 1px solid #f0d49a;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin: 12px 20px 0;
+  padding: 12px 14px;
+}
+
+.scan-review-duplicates > strong {
+  color: #6b4a00;
+}
+
+.scan-review-duplicates > span {
+  color: #34455f;
+  font-size: 13px;
+}
+
+.scan-review-duplicate {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: 8px 10px;
+}
+
+.scan-review-duplicate:not(:has(img)) {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.scan-review-duplicate img {
+  border-radius: 4px;
+  height: 48px;
+  object-fit: contain;
+  width: 36px;
+}
+
+.scan-review-duplicate small {
+  color: #526176;
+  display: block;
+  font-size: 12px;
+}
+
+.scan-review-duplicate button,
+.scan-review-duplicate-actions button {
+  background: #ffffff;
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  color: #07142b;
+  cursor: pointer;
+  font-weight: 900;
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+.scan-review-duplicate .admin-gold-button {
+  background: #d6a632;
+  border-color: #d6a632;
+  color: #0b111b;
+}
+
+.scan-review-duplicate-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .scan-review-modal {
   align-items: center;
   background: rgba(11, 17, 27, 0.5);

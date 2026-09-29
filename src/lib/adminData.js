@@ -1198,20 +1198,45 @@ function scoreScanCandidate(row, proposed) {
     score += 8
     reasons.push('Year match')
   }
-  if (proposed.name) {
-    const itemName = normaliseText(row.name || row.subject)
+  let titleMatch = false
+  const itemName = normaliseText(row.name || row.subject)
+  if (proposed.name && itemName) {
     const proposedName = normaliseText(proposed.name)
     if (itemName === proposedName) {
       score += 28
+      titleMatch = true
       reasons.push('Exact title match')
     } else if (itemName.includes(proposedName) || proposedName.includes(itemName)) {
       score += 14
+      titleMatch = true
       reasons.push('Similar title')
     }
   }
+  // Name + number + year alone scored 54, just under the duplicate threshold;
+  // set and brand separate the same card from a different product line.
+  const itemSet = normaliseText(row.dynamic_fields?.set_name || row.dynamic_fields?.collection)
+  const proposedSet = normaliseText(proposed.collectible_set)
+  if (itemSet && proposedSet && (itemSet.includes(proposedSet) || proposedSet.includes(itemSet))) {
+    score += 12
+    reasons.push('Set match')
+  }
+  if (proposed.manufacturer && sameText(row.dynamic_fields?.manufacturer, proposed.manufacturer)) {
+    score += 6
+    reasons.push('Brand match')
+  }
 
-  return { score: Math.min(100, score), reasons }
+  const identifierMatch = reasons.some((reason) => ['Exact barcode/UPC match', 'Set number match', 'Catalogue number match'].includes(reason))
+  const numberMatch = reasons.includes('Card/item number match')
+  return {
+    score: Math.min(100, score),
+    reasons,
+    // Strong enough that adding a new item is probably a duplicate.
+    likelyDuplicate: identifierMatch || (titleMatch && numberMatch) || (titleMatch && score >= 50),
+  }
 }
+
+// Below this a candidate is only listed as "similar", not reported as a match.
+const MATCH_MIN_SCORE = 40
 
 function compareScanFields(current, proposed) {
   const fieldMap = [
@@ -1239,14 +1264,57 @@ function compareScanFields(current, proposed) {
     }))
 }
 
-export async function identifyScannedDraft(draft) {
-  const proposed = proposedScanFields(draft)
+async function searchCatalogueCandidates(proposed) {
   const filters = []
   if (proposed.upc) filters.push(orEq('upc', proposed.upc))
   if (proposed.card_number) filters.push(orContains('card_number', proposed.card_number))
   if (proposed.lego_set_number) filters.push(orEq('lego_set_number', proposed.lego_set_number))
   if (proposed.catalog_code) filters.push(orContains('catalog_code', proposed.catalog_code))
   if (proposed.name) filters.push(orContains('name', proposed.name), orContains('subject', proposed.name))
+  if (!filters.length) return []
+
+  const { data, error } = await supabase
+    .from('items')
+    .select(CATALOGUE_SELECT.join(','))
+    .or(filters.join(','))
+    .limit(25)
+  if (error) throw error
+
+  return (data || [])
+    .map((row) => {
+      const scored = scoreScanCandidate(row, proposed)
+      return {
+        item: { ...row, imageUrl: publicImageUrl(row.image_path) },
+        score: scored.score,
+        reasons: scored.reasons,
+        likelyDuplicate: scored.likelyDuplicate,
+        comparisons: compareScanFields(row, proposed),
+      }
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score)
+}
+
+// Re-checks the live catalogue right before "Add to Catalogue". A draft's
+// stored candidates are from when it was analysed, so they miss items added
+// since, e.g. from another scan of the same card earlier in the queue.
+export async function findDuplicateCatalogueItems(values = {}) {
+  const proposed = {
+    name: String(values.name || '').trim(),
+    card_number: String(values.card_number || '').trim(),
+    upc: String(values.upc || '').trim(),
+    lego_set_number: String(values.lego_set_number || '').trim(),
+    catalog_code: String(values.catalog_code || '').trim(),
+    release_year: String(values.release_year || '').trim(),
+    collectible_set: String(values.set_name || '').trim(),
+    manufacturer: String(values.manufacturer || '').trim(),
+  }
+  const candidates = await searchCatalogueCandidates(proposed)
+  return candidates.filter((candidate) => candidate.likelyDuplicate)
+}
+
+export async function identifyScannedDraft(draft) {
+  const proposed = proposedScanFields(draft)
 
   const hasIdentity = Boolean(proposed.upc || proposed.card_number || proposed.lego_set_number || proposed.catalog_code || proposed.name)
   if (!hasIdentity && draft?.ocr?.rawText) {
@@ -1262,34 +1330,8 @@ export async function identifyScannedDraft(draft) {
     }
   }
 
-  let query = supabase
-    .from('items')
-    .select(CATALOGUE_SELECT.join(','))
-    .limit(25)
-
-  if (filters.length) {
-    query = query.or(filters.join(','))
-  } else {
-    query = query.order('name', { ascending: true, nullsFirst: false }).limit(0)
-  }
-
-  const { data, error } = await query
-  if (error) throw error
-
-  const candidates = (data || [])
-    .map((row) => {
-      const scored = scoreScanCandidate(row, proposed)
-      return {
-        item: { ...row, imageUrl: publicImageUrl(row.image_path) },
-        score: scored.score,
-        reasons: scored.reasons,
-        comparisons: compareScanFields(row, proposed),
-      }
-    })
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score)
-
-  const best = candidates[0] || null
+  const candidates = await searchCatalogueCandidates(proposed)
+  const best = candidates[0]?.score >= MATCH_MIN_SCORE || candidates[0]?.likelyDuplicate ? candidates[0] : null
   const hasConflicts = !!best?.comparisons?.some((comparison) => comparison.differs)
   let route = 'new_item_proposal'
   let status = 'Proposed New Item'
@@ -1300,7 +1342,7 @@ export async function identifyScannedDraft(draft) {
   } else if (best?.score >= 80) {
     route = hasConflicts ? 'manual_review_existing_item' : 'existing_match'
     status = hasConflicts ? 'Manual Review - Existing Item' : 'Matched'
-  } else if (best?.score >= 55) {
+  } else if (best?.score >= 55 || best?.likelyDuplicate) {
     route = 'possible_duplicate'
     status = 'Manual Review - Possible Duplicate'
   }

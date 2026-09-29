@@ -39,6 +39,7 @@ import {
   identifyScannedDraft,
   catalogueFieldValue,
   createCatalogueItemFromReview,
+  findDuplicateCatalogueItems,
   scanReviewGroups,
   scannedFieldValue,
   updateCatalogueItemFromReview,
@@ -2009,8 +2010,27 @@ function ScanImageSlot({ label, image, onPick }) {
   )
 }
 
+// Name + (number or year) identifies "the same item" across drafts in the queue.
+function draftIdentityKey(draft) {
+  const values = draft.review?.values || {}
+  const meta = draft.metadata || {}
+  const name = String(values.name || meta.cardName || meta.player || meta.name || '').trim().toLowerCase()
+  const number = String(values.card_number || meta.cardNumber || '').trim().toLowerCase()
+  const year = String(values.release_year || meta.year || meta.releaseYear || '').trim()
+  if (!name || !(number || year)) return ''
+  return [name, number, year].join('|')
+}
+
 function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
   const rows = drafts || []
+  const draftsByIdentity = useMemo(() => {
+    const groups = new Map()
+    rows.filter((draft) => draft.status !== 'Rejected').forEach((draft) => {
+      const key = draftIdentityKey(draft)
+      if (key) groups.set(key, [...(groups.get(key) || []), draft])
+    })
+    return groups
+  }, [rows])
   const [busyId, setBusyId] = useState('')
   const [reviewDraftId, setReviewDraftId] = useState('')
   const reviewDraft = rows.find((draft) => draft.id === reviewDraftId) || null
@@ -2048,6 +2068,8 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
           const bestMatch = draft.scanAnalysis?.bestMatch
           const candidateCount = draft.scanAnalysis?.candidates?.length || 0
           const finished = ['Catalogue Item Created', 'Matched and Updated', 'Matched'].includes(draft.status)
+          const siblings = (draftsByIdentity.get(draftIdentityKey(draft)) || []).filter((other) => other.id !== draft.id)
+          const catalogedSibling = siblings.find((other) => other.createdItemId || other.matchedItemId)
           return (
           <div className="review-draft-card" key={draft.id}>
             <div className="review-draft-images">
@@ -2065,6 +2087,11 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
                 {draft.ocr?.confidenceNotes?.length ? <small>OCR: {draft.ocr.confidenceNotes.join(' · ')}</small> : null}
                 {!metadataRows.length ? <small>No item identity fields were captured yet. Open Review &amp; Edit Fields to fill them in.</small> : null}
               </div>
+              {!finished && catalogedSibling ? (
+                <p className="scan-queue-duplicate">Already added to the catalogue from another scan in this queue. Approving will offer to link to it instead of creating a duplicate.</p>
+              ) : !finished && siblings.length ? (
+                <p className="scan-queue-duplicate">{siblings.length + 1} scans of this item are in the queue. Approve one, then link the others to it.</p>
+              ) : null}
               {draft.scanAnalysis ? (
                 <div className={bestMatch ? 'scan-match-banner found' : 'scan-match-banner'}>
                   {bestMatch?.item?.imageUrl ? <img src={bestMatch.item.imageUrl} alt="" /> : null}
@@ -2136,8 +2163,12 @@ function initialReviewValues(draft, category, matchItem) {
 }
 
 function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
-  const candidates = draft.scanAnalysis?.candidates || []
   const saved = draft.review || null
+  // Items found by the approval-time duplicate check join the match picker.
+  const [extraCandidates, setExtraCandidates] = useState(saved?.extraCandidates || [])
+  const storedCandidates = draft.scanAnalysis?.candidates || []
+  const candidates = [...storedCandidates, ...extraCandidates.filter((extra) => !storedCandidates.some((candidate) => candidate.item.item_id === extra.item.item_id))]
+  const [duplicates, setDuplicates] = useState(null)
   const [category, setCategory] = useState(saved?.category || draft.category || 'Trading Cards')
   const [matchId, setMatchId] = useState(saved ? saved.matchId || '' : draft.scanAnalysis?.bestMatch?.item?.item_id || '')
   const matchCandidate = candidates.find((candidate) => candidate.item.item_id === matchId) || null
@@ -2154,8 +2185,12 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [busy, onClose])
 
-  function chooseMatch(nextId) {
-    const nextItem = candidates.find((candidate) => candidate.item.item_id === nextId)?.item || null
+  function chooseMatch(nextId, nextCandidate = null) {
+    const nextItem = nextCandidate?.item || candidates.find((candidate) => candidate.item.item_id === nextId)?.item || null
+    if (nextCandidate && !candidates.some((candidate) => candidate.item.item_id === nextId)) {
+      setExtraCandidates((current) => [...current, nextCandidate])
+    }
+    setDuplicates(null)
     setMatchId(nextId)
     setValues(initialReviewValues(draft, category, nextItem))
     setShowAll(!nextItem)
@@ -2195,7 +2230,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const conflictCount = allRows.filter((row) => row.conflict).length
 
   async function saveForLater() {
-    await onUpdateDraft(draft.id, { category, review: { category, matchId, values, savedAt: new Date().toISOString() } })
+    await onUpdateDraft(draft.id, { category, review: { category, matchId, values, extraCandidates, savedAt: new Date().toISOString() } })
     onClose()
   }
 
@@ -2203,7 +2238,11 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     setBusy(label)
     setError('')
     try {
-      await action()
+      // An action returns false to keep the editor open (e.g. duplicates found).
+      if (await action() === false) {
+        setBusy('')
+        return
+      }
       onClose()
     } catch (err) {
       setError(err.message || 'Could not save to the catalogue.')
@@ -2211,8 +2250,18 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     }
   }
 
-  function addAsNewItem() {
+  function addAsNewItem({ skipDuplicateCheck = false } = {}) {
     return run('create', async () => {
+      if (!skipDuplicateCheck) {
+        // Checked live: another scan in the queue may have added this item
+        // since this draft was analysed. The selected match is excluded when
+        // the reviewer deliberately chose "Add as New Item Instead".
+        const found = (await findDuplicateCatalogueItems(values)).filter((candidate) => candidate.item.item_id !== matchId)
+        if (found.length) {
+          setDuplicates(found)
+          return false
+        }
+      }
       const item = await createCatalogueItemFromReview({ category, values, confidence: draft.scanAnalysis?.confidence ?? null })
       await onUpdateDraft(draft.id, {
         category,
@@ -2237,13 +2286,13 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     })
   }
 
-  function linkWithoutChanges() {
+  function linkToItem(item) {
     return run('link', async () => {
       await onUpdateDraft(draft.id, {
         category,
         status: 'Matched',
-        matchedItemId: matchItem.item_id,
-        audit: [...(draft.audit || []), { action: 'match', itemId: matchItem.item_id, at: new Date().toISOString() }],
+        matchedItemId: item.item_id,
+        audit: [...(draft.audit || []), { action: 'match', itemId: item.item_id, at: new Date().toISOString() }],
       })
     })
   }
@@ -2298,6 +2347,32 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
 
         {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
 
+        {duplicates ? (
+          <div className="scan-review-duplicates" role="alert">
+            <strong>This item may already be in the catalogue</strong>
+            <span>Adding it again would create a duplicate. Link this scan to the existing item, compare with it, or create a new item anyway (for example, a different parallel).</span>
+            {duplicates.map((candidate) => (
+              <div className="scan-review-duplicate" key={candidate.item.item_id}>
+                {candidate.item.imageUrl ? <img src={candidate.item.imageUrl} alt="" /> : null}
+                <div>
+                  <strong>
+                    {candidate.item.name || candidate.item.subject || candidate.item.item_id}
+                    {candidate.item.card_number ? ` #${candidate.item.card_number}` : ''}
+                    {candidate.item.release_year ? ` (${candidate.item.release_year})` : ''}
+                  </strong>
+                  <small>{[candidate.item.dynamic_fields?.set_name, ...(candidate.reasons || [])].filter(Boolean).join(' · ')}</small>
+                </div>
+                <button type="button" onClick={() => chooseMatch(candidate.item.item_id, candidate)} disabled={Boolean(busy)}>Compare</button>
+                <button className="admin-gold-button" type="button" onClick={() => linkToItem(candidate.item)} disabled={Boolean(busy)}>Link to This Item</button>
+              </div>
+            ))}
+            <div className="scan-review-duplicate-actions">
+              <button type="button" onClick={() => setDuplicates(null)} disabled={Boolean(busy)}>Cancel</button>
+              <button type="button" onClick={() => addAsNewItem({ skipDuplicateCheck: true })} disabled={Boolean(busy)}>{busy === 'create' ? 'Adding...' : 'Create New Item Anyway'}</button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="scan-review-table-wrap">
           <table className="scan-review-table">
             <thead>
@@ -2341,15 +2416,15 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
           <button type="button" onClick={saveForLater} disabled={Boolean(busy)}>Save &amp; Close</button>
           {matchItem ? (
             <>
-              <button type="button" onClick={addAsNewItem} disabled={Boolean(busy)}>{busy === 'create' ? 'Adding...' : 'Add as New Item Instead'}</button>
-              <button type="button" onClick={linkWithoutChanges} disabled={Boolean(busy)}>{busy === 'link' ? 'Linking...' : 'Link Without Changes'}</button>
+              <button type="button" onClick={() => addAsNewItem()} disabled={Boolean(busy)}>{busy === 'create' ? 'Checking...' : 'Add as New Item Instead'}</button>
+              <button type="button" onClick={() => linkToItem(matchItem)} disabled={Boolean(busy)}>{busy === 'link' ? 'Linking...' : 'Link Without Changes'}</button>
               <button className="admin-gold-button" type="button" onClick={updateMatchedItem} disabled={Boolean(busy)}>
                 {busy === 'update' ? 'Saving...' : changeCount ? `Approve & Update Item (${changeCount})` : 'Approve Match'}
               </button>
             </>
           ) : (
-            <button className="admin-gold-button" type="button" onClick={addAsNewItem} disabled={Boolean(busy) || !String(values.name || '').trim()}>
-              {busy === 'create' ? 'Adding...' : 'Approve & Add to Catalogue'}
+            <button className="admin-gold-button" type="button" onClick={() => addAsNewItem()} disabled={Boolean(busy) || !String(values.name || '').trim()}>
+              {busy === 'create' ? 'Checking...' : 'Approve & Add to Catalogue'}
             </button>
           )}
         </footer>
