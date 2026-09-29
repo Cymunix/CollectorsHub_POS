@@ -78,6 +78,44 @@ function formatDate(value) {
   return new Date(value).toLocaleString()
 }
 
+function firstFilled(...values) {
+  return values.map((value) => String(value || '').trim()).find(Boolean) || ''
+}
+
+function scanDraftTitle(draft) {
+  const metadata = draft?.metadata || {}
+  return firstFilled(
+    metadata.cardName,
+    metadata.player,
+    metadata.name,
+    metadata.subject,
+    metadata.productSet,
+    metadata.set,
+    metadata.setName,
+    metadata.brand,
+  ) || 'Untitled scanned item'
+}
+
+function meaningfulScanMetadata(metadata = {}) {
+  const hiddenValues = new Set(['No', 'Base', 'Available'])
+  return Object.entries(metadata)
+    .filter(([, value]) => {
+      const text = String(value || '').trim()
+      return text && !hiddenValues.has(text)
+    })
+    .slice(0, 8)
+}
+
+function scanRouteLabel(route) {
+  const labels = {
+    existing_match: 'Matched catalogue item',
+    manual_review_existing_item: 'Needs field review',
+    possible_duplicate: 'Possible duplicate',
+    new_item_proposal: 'Proposed new item',
+  }
+  return labels[route] || 'Awaiting analysis'
+}
+
 function JsonBlock({ value }) {
   return <pre className="admin-json">{JSON.stringify(value || {}, null, 2)}</pre>
 }
@@ -1988,22 +2026,36 @@ function PendingReview({ drafts, onUpdateDraft, onCreateMore }) {
       </div>
       {!rows.length ? <EmptyAdminState text="No scanned drafts yet. Import front/back scanner images from Scan Intake to create review drafts." /> : null}
       <div className="review-draft-list">
-        {rows.map((draft) => (
+        {rows.map((draft) => {
+          const title = scanDraftTitle(draft)
+          const metadataRows = meaningfulScanMetadata(draft.metadata)
+          const route = scanRouteLabel(draft.scanAnalysis?.route)
+          const confidence = Number(draft.scanAnalysis?.confidence || 0)
+          return (
           <div className="review-draft-card" key={draft.id}>
             <div className="review-draft-images">
               {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="" /> : <span>Front</span>}
               {draft.backImage?.url ? <img src={draft.backImage.url} alt="" /> : <span>Back</span>}
             </div>
             <div>
-              <strong>{draft.metadata?.name || 'Untitled scanned item'}</strong>
+              <strong>{title}</strong>
               <span>{draft.category} · {draft.mode}</span>
               <small>{formatDate(draft.createdAt)}</small>
               <div className="scan-analysis">
-                <span className="confidence-badge">{draft.scanAnalysis ? `${draft.scanAnalysis.confidence}% confidence` : 'Not analyzed'}</span>
-                <strong>{draft.scanAnalysis?.route || 'Awaiting analysis'}</strong>
+                <span className="confidence-badge">{draft.scanAnalysis ? `${confidence}% confidence` : 'Not analyzed'}</span>
+                <strong>{route}</strong>
+                {draft.status ? <small>Status: {draft.status}</small> : null}
                 {draft.scanAnalysis?.bestMatch ? <small>Best match: {draft.scanAnalysis.bestMatch.item?.name || draft.scanAnalysis.bestMatch.item?.subject || draft.scanAnalysis.bestMatch.item?.item_id}</small> : null}
                 {draft.scanAnalysis?.bestMatch?.reasons?.length ? <small>{draft.scanAnalysis.bestMatch.reasons.join(' · ')}</small> : null}
+                {!metadataRows.length ? <small>No item identity fields were captured yet. Add card/player/set details before creating a catalogue item.</small> : null}
               </div>
+              {metadataRows.length ? (
+                <div className="scan-metadata-summary">
+                  {metadataRows.map(([key, value]) => (
+                    <span key={key}><strong>{key.replace(/([A-Z])/g, ' $1').replaceAll('_', ' ')}</strong>{String(value)}</span>
+                  ))}
+                </div>
+              ) : null}
               {draft.scanAnalysis?.bestMatch?.comparisons?.length ? (
                 <div className="review-comparison">
                   <div className="review-comparison-header"><strong>Current vs scanned</strong><span><button type="button" onClick={() => setAllDecisions(draft, 'approve')}>Approve all</button><button type="button" onClick={() => setAllDecisions(draft, 'deny')}>Deny all</button></span></div>
@@ -2017,7 +2069,10 @@ function PendingReview({ drafts, onUpdateDraft, onCreateMore }) {
                 </div>
               ) : null}
               {draft.analysisError ? <p className="admin-error">{draft.analysisError}</p> : null}
-              <JsonBlock value={{ metadata: draft.metadata, scanner: draft.scanner, status: draft.status }} />
+              <details className="review-raw-details">
+                <summary>Raw scan details</summary>
+                <JsonBlock value={{ metadata: draft.metadata, scanner: draft.scanner, status: draft.status, analysis: draft.scanAnalysis }} />
+              </details>
             </div>
             <div className="review-actions">
               <button type="button" onClick={() => analyze(draft)} disabled={busyId === draft.id}>{busyId === draft.id ? 'Working...' : 'Analyze Scan'}</button>
@@ -2029,7 +2084,8 @@ function PendingReview({ drafts, onUpdateDraft, onCreateMore }) {
               <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Review Later' })}>Review Later</button>
             </div>
           </div>
-        ))}
+          )
+        })}
       </div>
     </section>
   )

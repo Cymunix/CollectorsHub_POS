@@ -2688,6 +2688,41 @@ button:disabled {
   max-height: 160px;
 }
 
+.scan-metadata-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.scan-metadata-summary span {
+  background: #ffffff;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  color: #17253d;
+  display: inline-flex;
+  gap: 6px;
+  margin: 0;
+  max-width: 100%;
+  padding: 7px 9px;
+}
+
+.scan-metadata-summary strong {
+  color: #526176;
+  text-transform: capitalize;
+}
+
+.review-raw-details {
+  margin-top: 10px;
+}
+
+.review-raw-details summary {
+  color: #526176;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .review-draft-card > div:last-child {
   display: grid;
   gap: 8px;
