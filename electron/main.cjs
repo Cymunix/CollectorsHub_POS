@@ -704,6 +704,18 @@ async function createWindow() {
   }
 }
 
+// Electron on Windows can leave the page unable to receive keystrokes after a
+// native confirm()/alert() or another process's window (the WIA scan dialog):
+// inputs show a caret but typing goes nowhere. Blurring and refocusing the
+// window restores keyboard input.
+function refocusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.blur()
+  mainWindow.focus()
+  mainWindow.webContents.focus()
+}
+
 let pendingUpdate = null
 
 function configureAutoUpdates() {
@@ -742,6 +754,7 @@ ipcMain.handle('store:save', async (_event, nextStore) => saveStore(nextStore))
 ipcMain.handle('app:get-data-path', () => getStoreFile())
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('app:exit', () => app.quit())
+ipcMain.handle('app:refocus', () => refocusMainWindow())
 ipcMain.handle('app:get-pending-update', () => pendingUpdate)
 ipcMain.handle('app:install-update', () => {
   if (pendingUpdate) autoUpdater.quitAndInstall(false, true)
@@ -1017,6 +1030,9 @@ ipcMain.handle('scanner:scan-image', async (_event, options = {}) => {
       ? 'Scanner acquisition timed out. Cancel the scanner dialog or try the scan again.'
       : cleanPowerShellError(error.stderr || error.message) || 'Windows could not acquire an image from the scanner.'
     throw new Error(`Scanner acquisition failed: ${detail}`)
+  } finally {
+    // The WIA transfer window belongs to another process; take keyboard focus back.
+    refocusMainWindow()
   }
 })
 

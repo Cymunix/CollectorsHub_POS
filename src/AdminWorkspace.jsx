@@ -2134,7 +2134,9 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
               <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Rejected' })}>Reject</button>
               <button type="button" onClick={() => onUpdateDraft(draft.id, { status: 'Review Later' })}>Review Later</button>
               <button className="danger" type="button" onClick={() => {
-                if (window.confirm('Delete this scan draft from the pending review queue?')) onDeleteDraft?.(draft.id)
+                const confirmed = window.confirm('Delete this scan draft from the pending review queue?')
+                adminDesktopApi().refocusWindow?.()
+                if (confirmed) onDeleteDraft?.(draft.id)
               }}>Delete</button>
             </div>
           </div>
@@ -2227,6 +2229,12 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const extrasReady = !matchItem || matchExtras.itemId === matchItem.item_id
   const reviewItem = matchItem ? { ...matchItem, _property_id: extrasReady ? matchExtras.propertyId : '' } : null
   const hasScanImages = Boolean(draft.frontImage?.path || draft.backImage?.path)
+
+  // Opening the review often follows the WIA scan window or a native confirm(),
+  // after which Electron on Windows can stop delivering keystrokes to inputs.
+  useEffect(() => {
+    adminDesktopApi().refocusWindow?.()
+  }, [])
 
   useEffect(() => {
     function onKey(event) { if (event.key === 'Escape' && !busy) onClose() }

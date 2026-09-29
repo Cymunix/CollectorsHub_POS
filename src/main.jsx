@@ -403,6 +403,8 @@ function App() {
     if (nextView === activeView) return
     if (activeView === 'register' && registerHasDraft) {
       const shouldLeave = window.confirm('Leaving will erase the current transaction. Leave Register and erase this transaction?')
+      // Native confirm() can leave Electron unable to take keystrokes on Windows.
+      window.nordvikDesktop?.refocusWindow?.()
       if (!shouldLeave) return
       setRegisterHasDraft(false)
     }

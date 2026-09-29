@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   getDataPath: () => ipcRenderer.invoke('app:get-data-path'),
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   exitApp: () => ipcRenderer.invoke('app:exit'),
+  refocusWindow: () => ipcRenderer.invoke('app:refocus'),
   getPendingUpdate: () => ipcRenderer.invoke('app:get-pending-update'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),
   onUpdateReady: (callback) => {
