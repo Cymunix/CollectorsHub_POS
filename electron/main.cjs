@@ -8,6 +8,7 @@ const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
 const { autoUpdater } = require('electron-updater')
 const { createWorker } = require('tesseract.js')
+const { OllamaCardRecognitionProvider } = require('./cardRecognition.cjs')
 
 const execFileAsync = promisify(execFile)
 
@@ -1057,6 +1058,58 @@ function getOcrWorker() {
   }
   return ocrWorkerPromise
 }
+
+// ---------------------------------------------------------------------------
+// Local AI card recognition (Ollama + Qwen3-VL). The renderer only sends the
+// draft's image references; paths are validated to the scan folder here.
+const cardRecognition = new OllamaCardRecognitionProvider()
+const recognitionJobs = new Map()
+let modelInstall = null
+
+ipcMain.handle('ai:status', async () => cardRecognition.getStatus())
+
+ipcMain.handle('ai:install-model', async (event) => {
+  if (modelInstall) return modelInstall.promise
+  const controller = new AbortController()
+  const send = (payload) => { if (!event.sender.isDestroyed()) event.sender.send('ai:install-progress', payload) }
+  const promise = cardRecognition.installModel((progress) => send(progress), controller.signal)
+    .then(() => ({ ok: true }))
+    .catch((error) => ({ ok: false, code: error.code || 'AI_ERROR', message: error.message }))
+    .finally(() => { modelInstall = null })
+  modelInstall = { controller, promise }
+  return promise
+})
+
+ipcMain.handle('ai:cancel-install', () => {
+  modelInstall?.controller.abort(new Error('cancelled'))
+})
+
+// Returns { ok, result, model, durationMs } or { ok: false, code, message } so
+// one failed card never throws across the batch loop in the renderer.
+ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back } = {}) => {
+  const controller = new AbortController()
+  if (jobId) recognitionJobs.set(jobId, controller)
+  try {
+    let frontPath
+    let backPath
+    try {
+      frontPath = front ? resolveScanImagePath(front) : ''
+      backPath = back ? resolveScanImagePath(back) : ''
+    } catch (error) {
+      return { ok: false, code: 'IMAGE_MISSING', message: error.message }
+    }
+    const output = await cardRecognition.recognizeCard({ frontPath, backPath }, controller.signal)
+    return { ok: true, ...output, provider: cardRecognition.id, providerLabel: cardRecognition.label }
+  } catch (error) {
+    return { ok: false, code: error.code || 'AI_ERROR', message: error.message || 'Local AI analysis failed.' }
+  } finally {
+    if (jobId) recognitionJobs.delete(jobId)
+  }
+})
+
+ipcMain.handle('ai:cancel-recognition', (_event, jobId) => {
+  recognitionJobs.get(jobId)?.abort(new Error('cancelled'))
+})
 
 // Returns a saved scan's bytes so the renderer can upload it as a catalogue image.
 ipcMain.handle('scanner:read-image', async (_event, image) => {

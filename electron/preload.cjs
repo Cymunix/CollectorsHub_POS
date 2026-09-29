@@ -23,4 +23,14 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   scanImage: (options) => ipcRenderer.invoke('scanner:scan-image', options),
   analyzeCardScan: (image, options) => ipcRenderer.invoke('scanner:analyze-card', image, options),
   readScanImage: (image) => ipcRenderer.invoke('scanner:read-image', image),
+  getAiStatus: () => ipcRenderer.invoke('ai:status'),
+  installAiModel: () => ipcRenderer.invoke('ai:install-model'),
+  cancelAiModelInstall: () => ipcRenderer.invoke('ai:cancel-install'),
+  onAiInstallProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress)
+    ipcRenderer.on('ai:install-progress', listener)
+    return () => ipcRenderer.removeListener('ai:install-progress', listener)
+  },
+  recognizeCard: (request) => ipcRenderer.invoke('ai:recognize-card', request),
+  cancelCardRecognition: (jobId) => ipcRenderer.invoke('ai:cancel-recognition', jobId),
 })

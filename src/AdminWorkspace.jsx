@@ -37,6 +37,10 @@ import {
   loadTaxonomyData,
   loadUsersData,
   identifyScannedDraft,
+  analyseRecognizedCard,
+  findSpecDuplicates,
+  AI_FIELD_FOR_REVIEW_KEY,
+  recognitionResult,
   catalogueCategoryName,
   catalogueFieldValue,
   categoryIdForName,
@@ -237,7 +241,11 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     let cancelled = false
     adminDesktopApi().loadStore().then((store) => {
       if (!cancelled) {
-        scanDraftsRef.current = store?.admin?.scanDrafts || []
+        // A card that was mid-analysis when the app closed goes back to the
+        // queue so it can be analysed again; nothing in the batch is lost.
+        scanDraftsRef.current = (store?.admin?.scanDrafts || []).map((draft) => (
+          draft.recognition?.status === 'analysing' ? { ...draft, recognition: { ...draft.recognition, status: 'queued' } } : draft
+        ))
         setScanDrafts(scanDraftsRef.current)
         setStoreContext({
           storeId: session?.storeId || store?.sync?.context?.storeId || syncStatus?.context?.storeId || '',
@@ -294,6 +302,137 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     await saveScanDrafts((drafts) => drafts.filter((draft) => draft.id !== draftId))
   }
 
+  // ---- Local AI card recognition (scan batch -> analyse -> review) ----
+  const [aiStatus, setAiStatus] = useState({ state: 'checking', label: 'Qwen3-VL 8B', message: 'Checking…' })
+  const [aiInstall, setAiInstall] = useState(null)
+  const [aiAnalysis, setAiAnalysis] = useState(null)
+  const aiRunRef = useRef({ cancelled: false, jobId: '' })
+
+  async function refreshAiStatus() {
+    const api = adminDesktopApi()
+    if (typeof api.getAiStatus !== 'function') {
+      setAiStatus({ state: 'unsupported', label: 'Qwen3-VL 8B', message: 'Local AI is only available in the installed desktop app.' })
+      return
+    }
+    setAiStatus((current) => ({ ...current, state: current.state === 'ready' ? 'ready' : 'checking' }))
+    try {
+      setAiStatus(await api.getAiStatus())
+    } catch (error) {
+      setAiStatus({ state: 'error', label: 'Qwen3-VL 8B', message: error.message || 'Local AI status check failed.' })
+    }
+  }
+
+  useEffect(() => { refreshAiStatus() }, [])
+  useEffect(() => { if (activeView === 'scan') refreshAiStatus() }, [activeView])
+
+  useEffect(() => {
+    const api = adminDesktopApi()
+    if (typeof api.onAiInstallProgress !== 'function') return undefined
+    return api.onAiInstallProgress((progress) => setAiInstall((current) => (current ? { ...current, ...progress } : current)))
+  }, [])
+
+  async function installAiModel() {
+    if (aiInstall?.active) return
+    setAiInstall({ active: true, status: 'Starting download…', percent: null, error: '' })
+    const result = await adminDesktopApi().installAiModel()
+    setAiInstall(result.ok ? null : { active: false, error: result.code === 'CANCELLED' ? '' : result.message, status: '', percent: null })
+    await refreshAiStatus()
+  }
+
+  function cancelAiInstall() {
+    adminDesktopApi().cancelAiModelInstall?.()
+  }
+
+  function patchRecognition(draftId, patch, extra = {}) {
+    return saveScanDrafts((drafts) => drafts.map((draft) => (
+      draft.id === draftId ? { ...draft, ...extra, recognition: { ...(draft.recognition || {}), ...patch }, updatedAt: new Date().toISOString() } : draft
+    )))
+  }
+
+  async function addCardToQueue(card) {
+    await saveScanDrafts((drafts) => [{
+      id: createLocalId('scan_draft'),
+      status: 'Queued for AI',
+      createdBy: session?.userId || session?.email || 'admin',
+      createdAt: new Date().toISOString(),
+      recognition: { status: 'queued' },
+      ...card,
+    }, ...drafts])
+  }
+
+  // Cards are analysed one at a time: parallel vision requests could exhaust a
+  // 12 GB GPU. A failed card is marked retryable and the batch carries on.
+  async function analyseCards(draftIds) {
+    if (aiAnalysis) return
+    const api = adminDesktopApi()
+    const ids = draftIds.filter((id) => scanDraftsRef.current.some((draft) => draft.id === id))
+    if (!ids.length) return
+    aiRunRef.current = { cancelled: false, jobId: '' }
+    for (let index = 0; index < ids.length; index += 1) {
+      if (aiRunRef.current.cancelled) break
+      const draft = scanDraftsRef.current.find((entry) => entry.id === ids[index])
+      if (!draft) continue
+      setAiAnalysis({ index: index + 1, total: ids.length, draftId: draft.id })
+      await patchRecognition(draft.id, { status: 'analysing', error: '', code: '' })
+      const jobId = createLocalId('ai_job')
+      aiRunRef.current.jobId = jobId
+      const response = await api.recognizeCard({ jobId, front: draft.frontImage ? { path: draft.frontImage.path } : null, back: draft.backImage ? { path: draft.backImage.path } : null })
+        .catch((error) => ({ ok: false, code: 'AI_ERROR', message: error.message }))
+
+      if (!response.ok) {
+        if (response.code === 'CANCELLED') {
+          await patchRecognition(draft.id, { status: 'queued' })
+          break
+        }
+        await patchRecognition(draft.id, { status: 'failed', code: response.code, error: response.message }, { status: 'AI Analysis Failed' })
+        // Without Ollama or the model every remaining card would fail the same way.
+        if (['OLLAMA_UNAVAILABLE', 'MODEL_MISSING'].includes(response.code)) {
+          await refreshAiStatus()
+          break
+        }
+        continue
+      }
+
+      try {
+        const { taxonomy, scanAnalysis } = await analyseRecognizedCard(response.result, draft.category)
+        await patchRecognition(draft.id, {
+          status: 'done',
+          result: response.result,
+          provider: response.provider,
+          providerLabel: response.providerLabel,
+          model: response.model,
+          durationMs: response.durationMs,
+          analysedAt: new Date().toISOString(),
+          taxonomy,
+        }, { category: taxonomy.category || draft.category, scanAnalysis, status: scanAnalysis.status, review: null, analysisError: '' })
+      } catch (error) {
+        // Recognition succeeded; only the catalogue lookup failed. Keep the AI
+        // result and let the reviewer continue in the catalogue form.
+        await patchRecognition(draft.id, {
+          status: 'done',
+          result: response.result,
+          provider: response.provider,
+          providerLabel: response.providerLabel,
+          model: response.model,
+          analysedAt: new Date().toISOString(),
+        }, { scanAnalysis: null, status: 'AI Review', analysisError: `Catalogue matching failed: ${error.message || 'unknown error'}` })
+      }
+    }
+    setAiAnalysis(null)
+  }
+
+  function cancelAnalysis() {
+    aiRunRef.current.cancelled = true
+    if (aiRunRef.current.jobId) adminDesktopApi().cancelCardRecognition?.(aiRunRef.current.jobId)
+  }
+
+  async function retryAi(draftId) {
+    await patchRecognition(draftId, { status: 'queued', error: '', code: '' }, { status: 'Queued for AI' })
+    await analyseCards([draftId])
+  }
+
+  const aiQueue = scanDrafts.filter((draft) => ['queued', 'analysing', 'failed'].includes(draft.recognition?.status))
+
   return (
     <main className="admin-shell">
       <aside className="admin-sidebar">
@@ -340,8 +479,27 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
 
         {activeView === 'overview' ? <AdminOverview onNavigate={setActiveView} /> : null}
         {activeView === 'catalogue' ? <AdminCatalogue /> : null}
-        {activeView === 'scan' ? <ScanIntake onCreateDraft={createScanDraft} /> : null}
-        {activeView === 'review' ? <PendingReview drafts={scanDrafts} onUpdateDraft={updateScanDraft} onDeleteDraft={deleteScanDraft} onCreateMore={() => setActiveView('scan')} /> : null}
+        {activeView === 'scan' ? (
+          <ScanIntake
+            onCreateDraft={createScanDraft}
+            ai={{
+              status: aiStatus,
+              install: aiInstall,
+              analysis: aiAnalysis,
+              queue: aiQueue,
+              onRefresh: refreshAiStatus,
+              onInstall: installAiModel,
+              onCancelInstall: cancelAiInstall,
+              onAddToQueue: addCardToQueue,
+              onRemove: deleteScanDraft,
+              onAnalyse: analyseCards,
+              onCancel: cancelAnalysis,
+              onRetry: retryAi,
+              onOpenReview: () => setActiveView('review'),
+            }}
+          />
+        ) : null}
+        {activeView === 'review' ? <PendingReview drafts={scanDrafts} onUpdateDraft={updateScanDraft} onDeleteDraft={deleteScanDraft} onCreateMore={() => setActiveView('scan')} onRetryAi={retryAi} aiBusy={Boolean(aiAnalysis)} queuedCount={aiQueue.length} /> : null}
         {activeView === 'explorer' ? <DataExplorer /> : null}
         {activeView === 'taxonomy' ? <TaxonomyAdmin /> : null}
         {activeView === 'media' ? <AdminSectionBrowser title="Images & Media" kicker="Catalogue media administration" loader={loadImagesMediaData} /> : null}
@@ -1756,7 +1914,7 @@ function DataExplorer() {
   )
 }
 
-function ScanIntake({ onCreateDraft }) {
+function ScanIntake({ onCreateDraft, ai }) {
   const [category, setCategory] = useState('Trading Cards')
   const [mode, setMode] = useState('Create Catalogue Items')
   const [frontImage, setFrontImage] = useState(null)
@@ -1938,6 +2096,28 @@ function ScanIntake({ onCreateDraft }) {
     }
   }
 
+  // Local AI path: queue the front/back pair; analysis is a separate action.
+  async function addToQueue() {
+    if (busy) return
+    if (!frontImage || !backImage) {
+      setError(!frontImage ? 'Scan or import the front of the card first.' : 'Scan or import the back of the card first.')
+      return
+    }
+    setError('')
+    await ai.onAddToQueue({
+      type: 'Scanned catalogue draft',
+      scanner: frontImage?.scannerName || backImage?.scannerName || 'Imported image',
+      category,
+      mode,
+      frontImage,
+      backImage,
+      metadata,
+    })
+    setFrontImage(null)
+    setBackImage(null)
+    setScannerMessage(`Card added to the queue (${ai.queue.length + 1} waiting). Scan the next card, or press Analyse when ready.`)
+  }
+
   function textField(key, label, placeholder = '') {
     return <label key={key}>{label}<input value={metadata[key] || ''} onChange={(event) => setMetadata((current) => ({ ...current, [key]: event.target.value }))} placeholder={placeholder} /></label>
   }
@@ -1991,21 +2171,141 @@ function ScanIntake({ onCreateDraft }) {
           <button className="admin-gold-button" type="button" disabled={Boolean(busy)} onClick={() => scanFromDevice('back')}>Scan Back with Canon</button>
           <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('front')}>Import Front File</button>
           <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('back')}>Import Back File</button>
-          <button type="button" disabled={Boolean(busy)} onClick={createDraft}>{busy === 'draft' ? 'Analysing...' : 'Create Review Draft'}</button>
+          <button className="admin-gold-button" type="button" disabled={Boolean(busy) || !frontImage || !backImage} onClick={addToQueue} title={!frontImage || !backImage ? 'Scan the front and back first' : undefined}>Add Card to Queue</button>
+          <button type="button" disabled={Boolean(busy)} onClick={createDraft} title="Legacy text recognition (OCR), analysed immediately">{busy === 'draft' ? 'Analysing...' : 'Analyse Now with OCR'}</button>
         </div>
       </section>
-      <section className="admin-panel scan-workflow-panel">
-        <div className="admin-panel-header"><div><p className="admin-kicker">Quick status</p><h2>Scan Workflow</h2></div></div>
-        <ol className="admin-flow">
-          <li>Click Scan Front with Canon or Scan Back with Canon</li>
-          <li>Windows opens the Canon WIA scan control</li>
-          <li>Captured images are saved into the Desktop local scan cache</li>
-          <li>Catalogue search / recognition</li>
-          <li>Possible match + confidence score</li>
-          <li>Review queue: match existing, create draft, or publish after admin review</li>
-        </ol>
-      </section>
+      <LocalAiPanel ai={ai} />
     </div>
+  )
+}
+
+const AI_STATUS_TEXT = {
+  checking: ['Checking…', ''],
+  ready: ['Ready', 'ready'],
+  'model-missing': ['Model required', 'warning'],
+  unavailable: ['Unavailable', 'error'],
+  error: ['Error', 'error'],
+  unsupported: ['Desktop app only', 'warning'],
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return ''
+  const gb = bytes / (1024 ** 3)
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / (1024 ** 2))} MB`
+}
+
+function LocalAiPanel({ ai }) {
+  const { status, install, analysis, queue } = ai
+  const [label, tone] = AI_STATUS_TEXT[status.state] || AI_STATUS_TEXT.error
+  const ready = status.state === 'ready'
+  const pending = queue.filter((draft) => draft.recognition?.status !== 'analysing')
+  const analysable = queue.filter((draft) => ['queued', 'failed'].includes(draft.recognition?.status)).map((draft) => draft.id)
+
+  return (
+    <section className="admin-panel local-ai-panel">
+      <div className={`local-ai-status ${tone}`}>
+        <div>
+          <p className="admin-kicker">Local AI</p>
+          <strong>{status.label || 'Qwen3-VL 8B'}</strong>
+        </div>
+        <span className="local-ai-pill"><span />{label}</span>
+      </div>
+
+      {status.state === 'unavailable' ? (
+        <div className="local-ai-callout">
+          <strong>Local AI unavailable</strong>
+          <span>CollectorsHub could not connect to Ollama. Make sure Ollama is installed and running on this computer.</span>
+          <button type="button" onClick={ai.onRefresh}>Retry</button>
+        </div>
+      ) : null}
+
+      {status.state === 'error' ? (
+        <div className="local-ai-callout">
+          <strong>Local AI error</strong>
+          <span>{status.message}</span>
+          <button type="button" onClick={ai.onRefresh}>Retry</button>
+        </div>
+      ) : null}
+
+      {status.state === 'model-missing' ? (
+        <div className="local-ai-callout">
+          <strong>Local AI Model Required</strong>
+          <span>Qwen3-VL 8B runs locally on this computer. Card images do not need to leave the machine.</span>
+          {install?.active ? (
+            <div className="local-ai-progress">
+              <div className="local-ai-progress-bar"><span style={{ width: `${install.percent ?? 2}%` }} /></div>
+              <small>
+                {install.percent != null ? `${install.percent}%` : ''} {install.total ? `of ${formatBytes(install.total)}` : ''} · {install.status || 'Downloading…'}
+              </small>
+              <button type="button" onClick={ai.onCancelInstall}>Cancel</button>
+            </div>
+          ) : (
+            <button className="admin-gold-button" type="button" onClick={ai.onInstall}>Install Model</button>
+          )}
+          {install?.error ? <p className="admin-error">{install.error}</p> : null}
+        </div>
+      ) : null}
+
+      {status.state === 'unsupported' ? (
+        <div className="local-ai-callout"><span>{status.message}</span></div>
+      ) : null}
+
+      <div className="local-ai-queue">
+        <div className="local-ai-queue-header">
+          <strong>Scanned Cards</strong>
+          <span>{queue.length ? `${queue.length} in queue` : 'Queue empty'}</span>
+        </div>
+        {!queue.length ? (
+          <p className="local-ai-empty">Scan the front and back of a card, then press Add Card to Queue. Nothing is analysed until you press Analyse.</p>
+        ) : (
+          <ol className="local-ai-queue-list">
+            {queue.map((draft, index) => {
+              const state = draft.recognition?.status
+              return (
+                <li key={draft.id} className={state}>
+                  <div className="local-ai-thumbs">
+                    {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="" /> : <span />}
+                    {draft.backImage?.url ? <img src={draft.backImage.url} alt="" /> : <span />}
+                  </div>
+                  <div>
+                    <strong>Card {queue.length - index}</strong>
+                    <small>Front {draft.frontImage ? '✓' : '—'} · Back {draft.backImage ? '✓' : '—'}</small>
+                    {state === 'analysing' ? <small className="local-ai-state">Analysing…</small> : null}
+                    {state === 'failed' ? <small className="local-ai-state failed">{draft.recognition?.error || 'Analysis failed.'}</small> : null}
+                  </div>
+                  <div className="local-ai-row-actions">
+                    {state === 'failed' ? <button type="button" onClick={() => ai.onRetry(draft.id)} disabled={Boolean(analysis) || !ready}>Retry</button> : null}
+                    {state !== 'analysing' ? (
+                      <button type="button" className="danger" onClick={() => {
+                        const confirmed = window.confirm('Remove this card from the queue? The scanned images will be discarded.')
+                        adminDesktopApi().refocusWindow?.()
+                        if (confirmed) ai.onRemove(draft.id)
+                      }} disabled={Boolean(analysis)}>Remove</button>
+                    ) : null}
+                  </div>
+                </li>
+              )
+            })}
+          </ol>
+        )}
+        {analysis ? (
+          <div className="local-ai-progress">
+            <div className="local-ai-progress-bar"><span style={{ width: `${Math.round(((analysis.index - 1) / analysis.total) * 100)}%` }} /></div>
+            <small>Analysing {analysis.index} of {analysis.total} card{analysis.total === 1 ? '' : 's'}…</small>
+            <button type="button" onClick={ai.onCancel}>Cancel</button>
+          </div>
+        ) : (
+          <div className="local-ai-actions">
+            <button className="admin-gold-button" type="button" disabled={!ready || !analysable.length} onClick={() => ai.onAnalyse([...analysable].reverse())}>
+              Analyse {analysable.length || ''} Card{analysable.length === 1 ? '' : 's'}
+            </button>
+            <button type="button" onClick={ai.onOpenReview}>Go to Review</button>
+          </div>
+        )}
+        {pending.length && !ready && status.state !== 'checking' ? <small className="local-ai-note">Cards stay in the queue until Local AI is ready.</small> : null}
+      </div>
+    </section>
   )
 }
 
@@ -2030,8 +2330,10 @@ function draftIdentityKey(draft) {
   return [name, number, year].join('|')
 }
 
-function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
-  const rows = drafts || []
+function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
+  // Cards still waiting for (or being retried by) local AI live in the Scan
+  // Intake queue; every analysed card comes here for review.
+  const rows = (drafts || []).filter((draft) => !['queued', 'analysing', 'failed'].includes(draft.recognition?.status))
   const draftsByIdentity = useMemo(() => {
     const groups = new Map()
     rows.filter((draft) => draft.status !== 'Rejected').forEach((draft) => {
@@ -2081,6 +2383,12 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
         </div>
         <button className="admin-gold-button" type="button" onClick={onCreateMore}>Scan New Item</button>
       </div>
+      {queuedCount ? (
+        <div className="review-queue-note">
+          <span>{queuedCount} scanned card{queuedCount === 1 ? ' is' : 's are'} waiting in the Scan Intake queue for analysis.</span>
+          <button type="button" onClick={onCreateMore}>Open Scan Queue</button>
+        </div>
+      ) : null}
       {!rows.length ? <EmptyAdminState text="No scanned drafts yet. Import front/back scanner images from Scan Intake to create review drafts." /> : null}
       <div className="review-draft-list">
         {rows.map((draft) => {
@@ -2093,6 +2401,28 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
           const finished = ['Catalogue Item Created', 'Matched and Updated', 'Matched'].includes(draft.status)
           const siblings = (draftsByIdentity.get(draftIdentityKey(draft)) || []).filter((other) => other.id !== draft.id)
           const catalogedSibling = siblings.find((other) => other.createdItemId || other.matchedItemId)
+          if (['done', 'declined'].includes(draft.recognition?.status)) {
+            return (
+              <AiReviewCard
+                key={draft.id}
+                draft={draft}
+                finished={finished}
+                exactMatch={draft.scanAnalysis?.matchStatus === 'exact' && inDraftCategory(draft, draft.scanAnalysis?.bestMatch) ? draft.scanAnalysis.bestMatch : null}
+                siblingNote={!finished && catalogedSibling
+                  ? 'Already added to the catalogue from another scan in this queue.'
+                  : !finished && siblings.length ? `${siblings.length + 1} scans of this card are in the queue.` : ''}
+                aiBusy={aiBusy}
+                onEdit={() => setReviewDraftId(draft.id)}
+                onUpdateDraft={onUpdateDraft}
+                onRetry={() => onRetryAi?.(draft.id)}
+                onRemove={() => {
+                  const confirmed = window.confirm('Remove this scan? The scanned images will be discarded.')
+                  adminDesktopApi().refocusWindow?.()
+                  if (confirmed) onDeleteDraft?.(draft.id)
+                }}
+              />
+            )
+          }
           return (
           <div className="review-draft-card" key={draft.id}>
             <div className="review-draft-images">
@@ -2165,6 +2495,149 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
   )
 }
 
+const AI_MATCH_TEXT = {
+  exact: ['Exact match found', 'Approve links this scan to the existing catalogue item. No duplicate is created.'],
+  likely: ['Likely match', 'Approve opens the catalogue form so you can confirm the match.'],
+  multiple: ['Several possible matches', 'Approve opens the catalogue form so you can choose the right one.'],
+  none: ['No catalogue match', 'Approve opens the catalogue form pre-filled with this card, ready to add.'],
+}
+
+// Summary of one AI-analysed card. Only fields the model flagged as uncertain
+// are highlighted, so the reviewer checks those instead of every field.
+function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit, onUpdateDraft, onRetry, onRemove }) {
+  const recognition = draft.recognition || {}
+  const result = recognition.result || {}
+  const taxonomy = recognition.taxonomy || { names: {}, unresolved: {} }
+  const uncertain = new Set((result.uncertain_fields || []).map((field) => String(field).toLowerCase()))
+  const declined = recognition.status === 'declined'
+  const matchStatus = draft.scanAnalysis?.matchStatus || 'none'
+  const [matchTitle, matchHelp] = AI_MATCH_TEXT[matchStatus] || AI_MATCH_TEXT.none
+  const shownMatch = exactMatch || draft.scanAnalysis?.bestMatch || null
+
+  const flag = (key) => (uncertain.has(key) ? ' uncertain' : '')
+  const yesNoText = (value) => (value == null ? '—' : value ? 'Yes' : 'No')
+  const taxonomyName = (level, aiKey) => taxonomy.names?.[level] || result[aiKey] || ''
+  const title = `${result.subject || 'Unidentified card'}${result.id_number ? ` #${result.id_number}` : ''}`
+  const path = [draft.category, taxonomyName('subcategory', 'subcategory'), taxonomyName('franchise', 'franchise'), taxonomyName('subset', 'subfranchise')].filter(Boolean)
+  const unresolved = Object.entries(taxonomy.unresolved || {})
+  const fields = [
+    ['Team', result.team, 'team'],
+    ['Publisher', taxonomyName('publisher', 'publisher_manufacturer'), 'publisher_manufacturer'],
+    ['Card Type', result.card_type, 'card_type'],
+    ['Rookie', yesNoText(result.rookie), 'rookie'],
+    ['Parallel', result.parallel, 'parallel'],
+    ['Variation', result.variation, 'variation'],
+    ['Serial Number', result.serial_numbering, 'serial_numbering'],
+    ['Autograph', result.autograph ? `Yes${result.autograph_type ? ` (${result.autograph_type})` : ''}` : yesNoText(result.autograph), 'autograph'],
+    ['Memorabilia', yesNoText(result.memorabilia_relic), 'memorabilia_relic'],
+    ['Finish', result.finish, 'finish'],
+  ]
+
+  function approve() {
+    if (exactMatch) {
+      onUpdateDraft(draft.id, {
+        status: 'Matched',
+        matchedItemId: exactMatch.item.item_id,
+        audit: [...(draft.audit || []), { action: 'match', source: 'local-ai', itemId: exactMatch.item.item_id, at: new Date().toISOString() }],
+      })
+      return
+    }
+    onEdit()
+  }
+
+  function decline() {
+    onUpdateDraft(draft.id, {
+      status: 'Needs Manual Identification',
+      recognition: { ...recognition, status: 'declined', declinedAt: new Date().toISOString() },
+    })
+  }
+
+  return (
+    <div className={`review-draft-card ai-review-card${declined ? ' declined' : ''}`}>
+      <div className="review-draft-images">
+        {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="Front" /> : <span>Front</span>}
+        {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back" /> : <span>Back</span>}
+      </div>
+      <div>
+        <p className="ai-review-source">Local AI · {recognition.providerLabel || 'Qwen3-VL 8B'}</p>
+        <strong className={`ai-review-title${flag('subject')}${flag('id_number')}`}>{title}</strong>
+        {taxonomyName('property', 'property') || result.collection ? (
+          <span className={`ai-review-release${flag('property')}${flag('collection')}`}>
+            {[taxonomyName('property', 'property'), result.collection].filter(Boolean).join(' · ')}
+          </span>
+        ) : null}
+        {path.length ? <small className={`ai-review-path${flag('subcategory')}${flag('franchise')}${flag('subfranchise')}`}>{path.join(' › ')}</small> : null}
+        <dl className="ai-review-fields">
+          {fields.map(([label, value, key]) => (
+            <div key={label} className={flag(key).trim()}>
+              <dt>{label}</dt>
+              <dd>{value || '—'}</dd>
+            </div>
+          ))}
+        </dl>
+        {uncertain.size ? <small className="ai-review-uncertain-note">Highlighted fields were uncertain. Check those before approving.</small> : null}
+        {unresolved.length ? (
+          <small className="ai-review-unresolved">
+            Not in the catalogue taxonomy yet: {unresolved.map(([level, text]) => `${level.replace('_', ' ')} “${text}”`).join(', ')}. Choose or create these in Edit.
+          </small>
+        ) : null}
+        {siblingNote ? <p className="scan-queue-duplicate">{siblingNote}</p> : null}
+        {declined ? (
+          <div className="ai-review-match declined">
+            <strong>Needs Manual Identification</strong>
+            <span>The AI result was declined. Retry the AI, identify the card manually, or remove the scan.</span>
+          </div>
+        ) : finished ? (
+          <div className="ai-review-match exact">
+            <strong>{draft.status}</strong>
+            <span>{draft.matchedItemId ? 'Linked to an existing catalogue item.' : draft.createdItemId ? 'Added to the catalogue.' : ''}</span>
+          </div>
+        ) : (
+          <div className={`ai-review-match ${matchStatus}`}>
+            {shownMatch?.item?.imageUrl ? <img src={shownMatch.item.imageUrl} alt="" /> : null}
+            <div>
+              <strong>Catalogue match: {matchTitle}</strong>
+              {shownMatch && matchStatus !== 'multiple' ? (
+                <span>
+                  {shownMatch.item.name}
+                  {shownMatch.item.card_number ? ` #${shownMatch.item.card_number}` : ''}
+                  {[shownMatch.item.dynamic_fields?.collection, shownMatch.item.dynamic_fields?.parallel].filter(Boolean).length
+                    ? ` · ${[shownMatch.item.dynamic_fields?.collection, shownMatch.item.dynamic_fields?.parallel].filter(Boolean).join(' · ')}`
+                    : ''}
+                </span>
+              ) : null}
+              {shownMatch?.differences?.length && matchStatus === 'likely' ? <small>Differs on: {shownMatch.differences.join(', ')}</small> : null}
+              <small>{matchHelp}</small>
+            </div>
+          </div>
+        )}
+        {draft.analysisError ? <p className="admin-error">{draft.analysisError}</p> : null}
+        <details className="review-raw-details">
+          <summary>Raw AI result</summary>
+          <JsonBlock value={{ result, taxonomy, match: { status: matchStatus, best: shownMatch?.item?.item_id || null }, model: recognition.model, durationMs: recognition.durationMs }} />
+        </details>
+      </div>
+      <div className="review-actions">
+        {declined ? (
+          <>
+            <button className="admin-gold-button" type="button" onClick={onRetry} disabled={aiBusy}>Retry AI</button>
+            <button type="button" onClick={onEdit}>Edit Manually</button>
+            <button className="danger" type="button" onClick={onRemove}>Remove Scan</button>
+          </>
+        ) : finished ? (
+          <button className="danger" type="button" onClick={onRemove}>Remove</button>
+        ) : (
+          <>
+            <button className="admin-gold-button" type="button" onClick={approve}>Approve</button>
+            <button type="button" onClick={onEdit}>Edit</button>
+            <button type="button" onClick={decline}>Decline</button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // A name match alone scores 28, + year 36; number + year alone is 26.
 const REVIEW_CANDIDATE_MIN_SCORE = 30
 const MATCH_PICK_MIN_SCORE = 40
@@ -2205,6 +2678,8 @@ function initialReviewValues(draft, category, matchItem) {
   return Object.fromEntries(reviewFields(category).map((field) => {
     const current = catalogueFieldValue(matchItem, field)
     if (field.taxonomy) return [field.key, matchItem ? current : '']
+    // Provenance describes how a record was created; never re-stamp an existing item.
+    if (field.key === 'source' && matchItem) return [field.key, current]
     const scanned = scannedFieldValue(draft, field)
     if (!matchItem) return [field.key, scanned]
     return [field.key, current || (SCAN_PLACEHOLDER_VALUES.has(scanned) ? '' : scanned)]
@@ -2245,7 +2720,10 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     .filter((candidate) => !scopeReady || candidate.item.category_id === categoryScope.categoryId)
     .filter((candidate) => candidate.score >= REVIEW_CANDIDATE_MIN_SCORE || candidate.likelyDuplicate || candidate.item.item_id === matchId)
     .sort((a, b) => b.score - a.score)
-  const autoMatchedRef = useRef(Boolean(saved))
+  // AI-analysed cards keep the catalogue matcher's verdict (it may be "several
+  // possible matches"); only plain scans auto-pick the top candidate.
+  const autoMatchedRef = useRef(Boolean(saved) || ['done', 'declined'].includes(draft.recognition?.status))
+  const uncertainFields = new Set((recognitionResult(draft)?.uncertain_fields || []).map((field) => String(field).toLowerCase()))
   const matchCandidate = candidates.find((candidate) => candidate.item.item_id === matchId) || null
   const matchItem = matchCandidate?.item || null
   const [values, setValues] = useState(() => saved?.values || initialReviewValues(draft, category, matchItem))
@@ -2493,7 +2971,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
         // Checked live: another scan in the queue may have added this item
         // since this draft was analysed. The selected match is excluded when
         // the reviewer deliberately chose "Add as New Item Instead".
-        const found = (await findDuplicateCatalogueItems(duplicateCheckValues(), { category })).filter((candidate) => candidate.item.item_id !== matchId)
+        const found = (spec ? await findSpecDuplicates({ category, values }) : await findDuplicateCatalogueItems(duplicateCheckValues(), { category })).filter((candidate) => candidate.item.item_id !== matchId)
         if (found.length) {
           setDuplicates(found)
           return false
@@ -2698,7 +3176,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
               <tbody key={group.id}>
                 <tr className="scan-review-group"><th colSpan={matchItem ? 4 : 3}>{group.label}</th></tr>
                 {group.rows.map((row) => (
-                  <tr key={row.field.key} className={row.conflict ? 'conflict' : row.fills ? 'fills' : ''}>
+                  <tr key={row.field.key} className={[row.conflict ? 'conflict' : row.fills ? 'fills' : '', uncertainFields.has(AI_FIELD_FOR_REVIEW_KEY[row.field.key]) ? 'uncertain' : ''].filter(Boolean).join(' ')}>
                     <th scope="row">{row.field.label}{row.field.required ? ' *' : ''}</th>
                     {matchItem ? (
                       <td>

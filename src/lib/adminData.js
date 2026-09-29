@@ -1487,9 +1487,49 @@ const SPORTS_REVIEW_GROUPS = [
       { key: 'autograph', label: 'Autograph', path: ['autograph'], options: YES_NO_OPTIONS, scan: (meta) => meta.autograph },
       { key: 'autograph_type', label: 'Autograph Type', path: ['autograph_type'], scan: (meta) => meta.autographType },
       { key: 'relic', label: 'Memorabilia / Relic', path: ['relic'], options: YES_NO_OPTIONS, scan: (meta) => meta.memorabiliaRelic },
+      // dynamic_fields.finish is already read by the completion views.
+      { key: 'finish', label: 'Finish', path: ['finish'], scan: (meta) => meta.finish },
     ],
   },
 ]
+
+// Review field key -> local AI recognition result key.
+export const AI_FIELD_FOR_REVIEW_KEY = {
+  subcategory_id: 'subcategory',
+  franchise_id: 'franchise',
+  subset_id: 'subfranchise',
+  property_id: 'property',
+  item_type_id: 'item_type',
+  collection: 'collection',
+  subject: 'subject',
+  name: 'subject',
+  card_number: 'id_number',
+  publisher_id: 'publisher_manufacturer',
+  manufacturer: 'publisher_manufacturer',
+  description: 'description',
+  release_year: 'release_year',
+  upc: 'barcodes',
+  card_type: 'card_type',
+  team: 'team',
+  rookie: 'rookie',
+  parallel: 'parallel',
+  variation: 'variation',
+  serial_numbering: 'serial_numbering',
+  autograph: 'autograph',
+  autograph_type: 'autograph_type',
+  relic: 'memorabilia_relic',
+  finish: 'finish',
+}
+
+export function recognitionResult(draft) {
+  return draft?.recognition?.status === 'done' ? draft.recognition.result || null : null
+}
+
+function aiValueText(value) {
+  if (value == null) return ''
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  return String(value).trim()
+}
 
 export function isSpecCategory(category) {
   return category === 'Sports Cards'
@@ -1533,7 +1573,15 @@ function titleCaseIfShouting(value) {
 // resolves it to a taxonomy row.
 export function scannedFieldValue(draft, field) {
   let value
-  if (field.scan) {
+  const ai = recognitionResult(draft)
+  if (ai && field.key === 'source') {
+    // Provenance is set by the app, never by the model.
+    value = 'AI Card Scan'
+  } else if (ai && AI_FIELD_FOR_REVIEW_KEY[field.key]) {
+    // The AI reading replaces OCR and the intake form's defaults entirely: a
+    // null means "not determinable", not "fall back to a guess".
+    value = aiValueText(ai[AI_FIELD_FOR_REVIEW_KEY[field.key]])
+  } else if (field.scan) {
     value = reviewText(field.scan(draft?.metadata || {}))
   } else {
     const proposed = proposedScanFields(draft)
@@ -1840,4 +1888,261 @@ export function matchTaxonomyOption(options = [], text = '') {
     return wanted.every((token) => tokens.includes(token))
   })
   return containing.length === 1 ? containing[0].id : ''
+}
+
+// ---------------------------------------------------------------------------
+// Local AI recognition: taxonomy resolver + catalogue matcher.
+//
+// The model's strings are never written to the taxonomy. They are resolved to
+// existing rows (exact names preferred, "Football" -> "American Football" via
+// matchTaxonomyOption); anything unresolved is left for the reviewer, who can
+// pick an existing row or explicitly create one.
+
+function reverseCategoryLabel(catalogueName) {
+  const entry = Object.entries(CATALOGUE_CATEGORY_NAMES).find(([, name]) => name.toLowerCase() === String(catalogueName || '').toLowerCase())
+  return entry ? entry[0] : catalogueName
+}
+
+export async function resolveRecognizedTaxonomy(result = {}, fallbackCategory = '') {
+  const { data: categoryRows } = await supabase.from('categories').select('category_id, name').order('name')
+  const categories = optionRows(categoryRows, 'category_id')
+  const categoryOptionId = matchTaxonomyOption(categories, result.category || '')
+    || (fallbackCategory ? matchTaxonomyOption(categories, catalogueCategoryName(fallbackCategory)) : '')
+  const categoryRow = categories.find((row) => row.id === categoryOptionId)
+  const category = categoryRow ? reverseCategoryLabel(categoryRow.name) : fallbackCategory
+  const resolution = {
+    category,
+    categoryId: categoryRow?.id || null,
+    ids: {},
+    names: {},
+    unresolved: {},
+  }
+  if (!isSpecCategory(category)) return resolution
+
+  const pick = (level, options, text, { allowSingle = true } = {}) => {
+    const id = matchTaxonomyOption(options, text || '') || (!text && allowSingle && options.length === 1 ? options[0].id : '')
+    if (id) {
+      resolution.ids[`${level}_id`] = id
+      resolution.names[level] = options.find((option) => option.id === id)?.name || ''
+    } else if (text) {
+      resolution.unresolved[level] = text
+    }
+    return id
+  }
+
+  const top = await loadSportsTaxonomyOptions({ category })
+  const subcategoryId = pick('subcategory', top.subcategory, result.subcategory)
+  pick('publisher', top.publisher, result.publisher_manufacturer, { allowSingle: false })
+  if (!subcategoryId) return resolution
+
+  const bySport = await loadSportsTaxonomyOptions({ category, subcategoryId })
+  const franchiseId = pick('franchise', bySport.franchise, result.franchise)
+  pick('item_type', bySport.item_type, result.item_type)
+  if (!franchiseId) return resolution
+
+  const byLeague = await loadSportsTaxonomyOptions({ category, subcategoryId, franchiseId })
+  const subsetId = pick('subset', byLeague.subset, result.subfranchise)
+  const properties = subsetId
+    ? (await loadSportsTaxonomyOptions({ category, subcategoryId, franchiseId, subsetId })).property
+    : byLeague.property
+  pick('property', properties, result.property, { allowSingle: Boolean(subsetId) })
+  return resolution
+}
+
+function matchText(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function cardNumberText(value) {
+  return matchText(value).replace(/^(no\.?|#)\s*/, '')
+}
+
+function yesNo(value) {
+  if (value === true || /^(yes|true)$/i.test(String(value ?? ''))) return 'yes'
+  if (value === false || /^(no|false)$/i.test(String(value ?? ''))) return 'no'
+  return ''
+}
+
+function serialDenominator(value) {
+  const match = String(value ?? '').match(/\/\s*(\d+)/)
+  return match ? match[1] : ''
+}
+
+// Refinement fields that separate variants of the same player/number/release.
+// Each returns 'match', 'mismatch' or 'unknown'.
+const REFINE_FIELDS = [
+  { key: 'collection', weight: 10, compare: (card, item) => matchText(card.collection) === matchText(item.dynamic_fields?.collection) ? 'match' : 'mismatch' },
+  // No parallel read from the card means a base card: it matches items with no parallel.
+  { key: 'parallel', weight: 10, compare: (card, item) => matchText(card.parallel) === matchText(item.dynamic_fields?.parallel) ? 'match' : 'mismatch' },
+  { key: 'variation', weight: 4, compare: (card, item) => matchText(card.variation) === matchText(item.dynamic_fields?.variation) ? 'match' : 'mismatch' },
+  {
+    key: 'serial_numbering',
+    weight: 4,
+    compare: (card, item) => {
+      const cardDen = serialDenominator(card.serial_numbering)
+      const itemDen = serialDenominator(item.dynamic_fields?.serial_numbering)
+      if (!cardDen && !itemDen) return 'match'
+      return cardDen === itemDen ? 'match' : 'mismatch'
+    },
+  },
+  {
+    key: 'autograph',
+    weight: 4,
+    compare: (card, item) => {
+      const cardValue = yesNo(card.autograph)
+      const itemValue = yesNo(item.dynamic_fields?.autograph)
+      if (!cardValue || !itemValue) return cardValue === 'yes' || itemValue === 'yes' ? 'mismatch' : 'unknown'
+      return cardValue === itemValue ? 'match' : 'mismatch'
+    },
+  },
+  {
+    key: 'memorabilia_relic',
+    weight: 4,
+    compare: (card, item) => {
+      const cardValue = yesNo(card.memorabilia_relic)
+      const itemValue = yesNo(item.dynamic_fields?.relic)
+      if (!cardValue || !itemValue) return cardValue === 'yes' || itemValue === 'yes' ? 'mismatch' : 'unknown'
+      return cardValue === itemValue ? 'match' : 'mismatch'
+    },
+  },
+]
+
+// Matches a recognised card against catalogue records. CollectorsHub decides
+// the match from database fields; the model's own confidence is never used.
+//   card: { subject, id_number, release_year, collection, parallel, variation,
+//           serial_numbering, autograph, memorabilia_relic, uncertain_fields }
+//   ids:  resolved taxonomy ids { subset_id, property_id, ... }
+// Returns { status: 'exact' | 'likely' | 'multiple' | 'none', best, candidates }.
+export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
+  const subject = String(card.subject || '').trim()
+  const number = cardNumberText(card.id_number)
+  if (!categoryId || (!subject && !number)) return { status: 'none', best: null, candidates: [] }
+
+  let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId)
+  if (subject) query = query.or([orContains('name', subject), orContains('subject', subject)].join(','))
+  if (number) query = query.in('card_number', [number, `#${number}`, number.toUpperCase()])
+  const { data, error } = await query.limit(300)
+  if (error) throw error
+  const rows = data || []
+
+  const propertyByItem = new Map()
+  if (rows.length) {
+    const { data: links } = await supabase.from('item_properties').select('item_id, property_id').in('item_id', rows.map((row) => row.item_id))
+    ;(links || []).forEach((link) => { if (!propertyByItem.has(link.item_id)) propertyByItem.set(link.item_id, link.property_id) })
+  }
+
+  const uncertain = new Set((card.uncertain_fields || []).map((field) => String(field).toLowerCase()))
+  const candidates = rows.map((row) => {
+    const item = { ...row, imageUrl: publicImageUrl(row.image_path), _property_id: propertyByItem.get(row.item_id) || '' }
+    const reasons = []
+    const differences = []
+    // Score = share of comparable evidence that agrees, so a card matching on
+    // collection AND parallel outranks one matching on collection alone.
+    let score = 0
+    let possible = 55
+
+    const subjectMatch = Boolean(subject) && (matchText(item.subject) === matchText(subject) || matchText(item.name) === matchText(subject))
+    if (subjectMatch) { score += 30; reasons.push('Same player/subject') }
+    const numberMatch = Boolean(number) && cardNumberText(item.card_number) === number
+    if (numberMatch) { score += 25; reasons.push('Same card number') }
+
+    // Release: the resolved Property is strongest, then the Subfranchise, then the year.
+    let releaseMatch = true
+    if (ids.property_id) {
+      possible += 20
+      releaseMatch = item._property_id === ids.property_id
+      if (releaseMatch) { score += 20; reasons.push('Same release/set') } else differences.push('release/set')
+    } else if (ids.subset_id) {
+      possible += 15
+      releaseMatch = item.subset_id === ids.subset_id
+      if (releaseMatch) { score += 15; reasons.push('Same product line') } else differences.push('product line')
+    }
+    if (card.release_year) {
+      possible += 5
+      const sameYear = String(item.release_year || '') === String(card.release_year)
+      if (sameYear) { score += 5; reasons.push('Same year') } else if (!ids.property_id) { releaseMatch = false; differences.push('year') }
+    }
+
+    const identity = subjectMatch && numberMatch && releaseMatch
+    let refineAllMatch = true
+    REFINE_FIELDS.forEach((field) => {
+      const outcome = field.compare(card, item)
+      if (outcome !== 'unknown') possible += field.weight
+      if (outcome === 'match') { score += field.weight; if (['collection', 'parallel'].includes(field.key)) reasons.push(`Same ${field.key}`) }
+      if (outcome === 'mismatch') { refineAllMatch = false; differences.push(field.key.replace('_', ' ')) }
+      if (uncertain.has(field.key)) refineAllMatch = false
+    })
+
+    return {
+      item,
+      score: Math.round((100 * score) / possible),
+      reasons,
+      differences,
+      identity,
+      exact: identity && refineAllMatch,
+      likelyDuplicate: identity && refineAllMatch,
+    }
+  })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score)
+
+  const exact = candidates.filter((candidate) => candidate.exact)
+  if (exact.length === 1) return { status: 'exact', best: exact[0], candidates }
+  if (exact.length > 1) return { status: 'multiple', best: null, candidates }
+  const identities = candidates.filter((candidate) => candidate.identity)
+  if (!identities.length) return { status: 'none', best: null, candidates }
+  if (identities.length === 1 || identities[0].score > identities[1].score) return { status: 'likely', best: identities[0], candidates }
+  return { status: 'multiple', best: null, candidates }
+}
+
+const MATCH_STATUS_ROUTE = {
+  exact: ['existing_match', 'Exact catalogue match'],
+  likely: ['manual_review_existing_item', 'Likely catalogue match'],
+  multiple: ['possible_duplicate', 'Several possible matches'],
+  none: ['new_item_proposal', 'No catalogue match'],
+}
+
+// Full pipeline for one recognised card: taxonomy resolver -> catalogue matcher.
+// The result is stored on the draft as scanAnalysis (same shape the review
+// screen already uses) plus the resolved taxonomy.
+export async function analyseRecognizedCard(result, fallbackCategory) {
+  const taxonomy = await resolveRecognizedTaxonomy(result, fallbackCategory)
+  const match = await matchRecognizedCard({ categoryId: taxonomy.categoryId, ids: taxonomy.ids, card: result })
+  const [route, status] = MATCH_STATUS_ROUTE[match.status]
+  return {
+    taxonomy,
+    scanAnalysis: {
+      source: 'local-ai',
+      route,
+      status,
+      matchStatus: match.status,
+      bestMatch: match.best,
+      candidates: match.candidates.slice(0, 15),
+      confidence: match.best?.score || 0,
+      analyzedAt: new Date().toISOString(),
+    },
+  }
+}
+
+// Duplicate check for the Sports Cards review form, using the same matcher:
+// only an item with the same identity AND the same collection/parallel/etc.
+// counts, so adding a new parallel of an existing card is not blocked.
+export async function findSpecDuplicates({ category, values = {} }) {
+  const categoryId = await categoryIdForName(category)
+  const match = await matchRecognizedCard({
+    categoryId,
+    ids: { property_id: values.property_id || '', subset_id: values.subset_id || '' },
+    card: {
+      subject: values.subject,
+      id_number: values.card_number,
+      release_year: values.release_year,
+      collection: values.collection,
+      parallel: values.parallel,
+      variation: values.variation,
+      serial_numbering: values.serial_numbering,
+      autograph: values.autograph,
+      memorabilia_relic: values.relic,
+    },
+  })
+  return match.candidates.filter((candidate) => candidate.exact)
 }
