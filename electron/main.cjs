@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
 const { autoUpdater } = require('electron-updater')
-const { recognize } = require('tesseract.js')
+const { createWorker } = require('tesseract.js')
 
 const execFileAsync = promisify(execFile)
 
@@ -85,9 +85,35 @@ function hasVowel(value) {
   return /[AEIOUY]/i.test(value)
 }
 
+const NFL_TEAMS = [
+  'Arizona Cardinals', 'Atlanta Falcons', 'Baltimore Ravens', 'Buffalo Bills', 'Carolina Panthers', 'Chicago Bears',
+  'Cincinnati Bengals', 'Cleveland Browns', 'Dallas Cowboys', 'Denver Broncos', 'Detroit Lions', 'Green Bay Packers',
+  'Houston Texans', 'Indianapolis Colts', 'Jacksonville Jaguars', 'Kansas City Chiefs', 'Las Vegas Raiders',
+  'Los Angeles Chargers', 'Los Angeles Rams', 'Miami Dolphins', 'Minnesota Vikings', 'New England Patriots',
+  'New Orleans Saints', 'New York Giants', 'New York Jets', 'Philadelphia Eagles', 'Pittsburgh Steelers',
+  'San Francisco 49ers', 'Seattle Seahawks', 'Tampa Bay Buccaneers', 'Tennessee Titans', 'Washington Commanders',
+]
+const NFL_TEAM_NICKNAMES = NFL_TEAMS.map((team) => team.toUpperCase().split(' ').pop())
+const SPORTS_CARD_BRANDS = [['UPPER DECK', 'Upper Deck'], ['PANINI', 'Panini'], ['TOPPS', 'Topps'], ['DONRUSS', 'Donruss'], ['BOWMAN', 'Bowman'], ['FLEER', 'Fleer'], ['LEAF', 'Leaf']]
+const SPORTS = [['BASKETBALL', 'Basketball'], ['FOOTBALL', 'Football'], ['BASEBALL', 'Baseball'], ['HOCKEY', 'Hockey'], ['SOCCER', 'Soccer']]
+const TCG_FRANCHISES = [
+  // Pokémon first: WotC-era Pokémon cards also print "Wizards of the Coast".
+  { pattern: /POK[EÉ]MON|GAME\s*FREAK|CREATURES/i, franchiseGame: 'Pokémon', manufacturerPublisher: 'The Pokémon Company' },
+  { pattern: /YU-?GI-?OH|KONAMI/i, franchiseGame: 'Yu-Gi-Oh!', manufacturerPublisher: 'Konami' },
+  { pattern: /LORCANA|RAVENSBURGER/i, franchiseGame: 'Disney Lorcana', manufacturerPublisher: 'Ravensburger' },
+  { pattern: /ONE\s*PIECE/i, franchiseGame: 'One Piece Card Game', manufacturerPublisher: 'Bandai' },
+  { pattern: /WIZARDS\s+OF\s+THE\s+COAST/i, franchiseGame: 'Magic: The Gathering', manufacturerPublisher: 'Wizards of the Coast' },
+]
+const NAME_STOP_WORDS = new Set([
+  'SEASON', 'TICKET', 'NFL', 'NFLPA', 'MLB', 'NBA', 'NHL', 'CONTENDERS', 'ROOKIE', 'CARD', 'TEAM', 'TOTALS', 'YEAR', 'NO',
+  ...NFL_TEAM_NICKNAMES,
+  ...SPORTS_CARD_BRANDS.flatMap(([word]) => word.split(' ')),
+  ...SPORTS.map(([word]) => word),
+])
+
 function scorePersonNameCandidate(value) {
   const text = String(value || '').toUpperCase().replace(/[^A-Z\s'.-]/g, ' ').replace(/\s+/g, ' ').trim()
-  const stopWords = new Set(['SEASON', 'TICKET', 'DALLAS', 'COWBOYS', 'NFL', 'NFLPA', 'PANINI', 'CONTENDERS', 'FOOTBALL', 'ROOKIE', 'CARD', 'TEAM', 'TOTALS'])
+  const stopWords = NAME_STOP_WORDS
   const tokens = text.split(/\s+/).filter(Boolean)
   if (tokens.length < 2 || tokens.length > 4) return 0
   if (tokens.some((token) => stopWords.has(token))) return 0
@@ -101,38 +127,64 @@ function scorePersonNameCandidate(value) {
   return Math.max(0, score)
 }
 
-function parseSportsCardOcr(text) {
-  const rawLines = String(text || '').split(/\r?\n/).map(cleanOcrLine).filter(Boolean)
-  const lines = rawLines.filter((line) => !/^[\d\s.#-]+$/.test(line))
-  const upperLines = lines.map((line) => line.toUpperCase())
-  const metadata = {}
-  const confidenceNotes = []
-  const rejectedNames = []
+// "No. 27", "#101", "No. RT-12". The number must contain a digit so words
+// such as "NOTHING" are not read as "No. THING".
+const CARD_NUMBER_PATTERN = /(?:\bNO\.?|#)\s*([A-Z]{0,4}-?\d[A-Z0-9-]{0,6})\b/i
 
-  const numberMatch = String(text || '').match(/\b(?:NO\.?|#)\s*([A-Z0-9-]{1,8})\b/i)
+function titleCase(value) {
+  return String(value || '').toLowerCase().replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
+}
+
+function looksLikeSportsCard(upperText) {
+  return /\b(NFL|NFLPA|MLB|MLBPA|NBA|NBPA|NHL|NHLPA|MLS)\b/.test(upperText)
+    || (SPORTS_CARD_BRANDS.some(([word]) => upperText.includes(word)) && SPORTS.some(([word]) => upperText.includes(word)))
+}
+
+function parseSportsCardFields(text, metadata, confidenceNotes, rejectedNames) {
+  const upperText = text.toUpperCase().replace(/\s+/g, ' ')
+
+  const numberMatch = text.match(CARD_NUMBER_PATTERN)
   if (numberMatch) {
-    metadata.cardNumber = numberMatch[1].replace(/[^A-Z0-9-]/gi, '')
+    metadata.cardNumber = numberMatch[1].toUpperCase()
     confidenceNotes.push(`card number ${metadata.cardNumber}`)
   }
 
-  const teamWords = ['COWBOYS', 'DALLAS', 'EAGLES', 'GIANTS', 'COMMANDERS', 'PACKERS', 'BEARS', 'VIKINGS', 'LIONS', 'CHIEFS', 'RAIDERS', 'BRONCOS', 'CHARGERS', '49ERS', 'RAMS', 'SEAHAWKS', 'CARDINALS', 'BILLS', 'DOLPHINS', 'PATRIOTS', 'JETS', 'STEELERS', 'RAVENS', 'BROWNS', 'BENGALS', 'TEXANS', 'COLTS', 'JAGUARS', 'TITANS', 'BUCCANEERS', 'SAINTS', 'FALCONS', 'PANTHERS']
-  const teamLine = lines.find((line, index) => {
-    const textLine = `${upperLines[index - 1] || ''} ${upperLines[index] || ''}`.trim()
-    return teamWords.some((word) => textLine.includes(word))
-  })
-  if (teamLine) {
-    const previous = lines[Math.max(0, lines.indexOf(teamLine) - 1)] || ''
-    const combined = `${previous} ${teamLine}`.toUpperCase()
-    if (combined.includes('DALLAS') && combined.includes('COWBOYS')) metadata.team = 'Dallas Cowboys'
-    else metadata.team = teamLine.replace(/\b[A-Z]{1}\b/g, '').trim()
-    confidenceNotes.push(`team ${metadata.team}`)
+  // Prefer a full "City Nickname" match; fall back to the nickname alone.
+  const team = NFL_TEAMS.find((name) => upperText.includes(name.toUpperCase()))
+    || NFL_TEAMS.find((name) => new RegExp(`\\b${name.toUpperCase().split(' ').pop()}\\b`).test(upperText))
+  if (team) {
+    metadata.team = team
+    metadata.league = 'NFL'
+    confidenceNotes.push(`team ${team}`)
   }
 
-  const candidateNames = lines
-    .map((line) => line.replace(/\b(NO|DALLAS|COWBOYS|NFL|NFLPA|PANINI|CONTENDERS|FOOTBALL|YEAR|TEAM|TOTALS|SEASON|TICKET)\b/gi, '').trim())
-    .filter((line) => /^[A-Z][A-Z\s'.-]{4,}$/i.test(line) && line.split(/\s+/).length >= 2)
-    .map((line) => ({ line, score: scorePersonNameCandidate(line) }))
-    .filter((candidate) => !teamWords.some((word) => candidate.line.toUpperCase().includes(word)))
+  // Card backs print the product line as "2024 PANINI - CONTENDERS FOOTBALL".
+  // That is the set year; the copyright year is often the following year.
+  const brandPattern = SPORTS_CARD_BRANDS.map(([word]) => word.replace(' ', '\\s+')).join('|')
+  const productLine = text.match(new RegExp(`\\b((?:19|20)\\d{2})\\s+(${brandPattern})\\s*[-–—:]?\\s*([A-Z][A-Z0-9 &'.]{2,40})`, 'i'))
+  if (productLine) {
+    metadata.year = productLine[1]
+    metadata.releaseYear = productLine[1]
+    metadata.productSet = titleCase(productLine[3].trim())
+    confidenceNotes.push(`set ${productLine[1]} ${metadata.productSet}`)
+  }
+
+  const teamNamePattern = new RegExp(`\\b(${NFL_TEAMS.map((name) => name.toUpperCase()).join('|')})\\b`, 'gi')
+  const candidateNames = text.split(/\r?\n/)
+    .map((rawLine) => {
+      const line = cleanOcrLine(rawLine).replace(teamNamePattern, '').trim()
+      let score = scorePersonNameCandidate(line)
+      // Barcodes and artwork OCR as letters wrapped in | ] ( ) noise.
+      if (/[|\[\](){}<>\\]/.test(rawLine)) score -= 40
+      // The real player's surname is usually repeated in the bio on the back.
+      const surname = line.split(/\s+/).pop()
+      if (surname && surname.length >= 3) {
+        const mentions = upperText.match(new RegExp(`\\b${surname.toUpperCase().replace(/[^A-Z'-]/g, '')}\\b`, 'g')) || []
+        if (mentions.length > 1) score += 30
+      }
+      return { line, score }
+    })
+    .filter(({ line }) => /^[A-Z][A-Z\s'.-]{4,}$/i.test(line) && line.split(/\s+/).length >= 2 && line.split(/\s+/).length <= 4)
     .sort((a, b) => b.score - a.score)
   candidateNames.filter((candidate) => candidate.score < 55).slice(0, 3).forEach((candidate) => rejectedNames.push(candidate.line))
   const player = candidateNames.find((candidate) => candidate.score >= 55)?.line
@@ -143,19 +195,72 @@ function parseSportsCardOcr(text) {
     confidenceNotes.push(`player ${metadata.player}`)
   }
 
-  const yearMatch = String(text || '').match(/\b(19\d{2}|20\d{2})\b/)
-  if (yearMatch) {
-    metadata.year = yearMatch[1]
-    metadata.releaseYear = yearMatch[1]
+  const brand = SPORTS_CARD_BRANDS.find(([word]) => upperText.includes(word))
+  if (brand) metadata.brand = brand[1]
+  const sport = SPORTS.find(([word]) => upperText.includes(word))
+  if (sport) metadata.sport = sport[1]
+  if (!metadata.productSet && /CONTENDERS/i.test(text)) metadata.productSet = sport ? `Contenders ${sport[1]}` : 'Contenders'
+}
+
+function parseTradingCardFields(text, metadata, confidenceNotes) {
+  // Collector numbers print as "199/165" on most TCGs.
+  const numberMatch = text.match(/\b(\d{1,3})\s*\/\s*(\d{1,3})\b/) || text.match(CARD_NUMBER_PATTERN)
+  if (numberMatch) {
+    metadata.cardNumber = numberMatch[2] ? `${numberMatch[1]}/${numberMatch[2]}` : numberMatch[1].toUpperCase()
+    confidenceNotes.push(`card number ${metadata.cardNumber}`)
   }
 
-  if (/PANINI/i.test(text)) metadata.brand = 'Panini'
-  if (/CONTENDERS/i.test(text)) metadata.productSet = 'Contenders Football'
-  if (/FOOTBALL/i.test(text)) metadata.sport = 'Football'
+  const franchise = TCG_FRANCHISES.find((entry) => entry.pattern.test(text))
+  if (franchise) {
+    metadata.franchiseGame = franchise.franchiseGame
+    metadata.manufacturerPublisher = franchise.manufacturerPublisher
+    confidenceNotes.push(`game ${franchise.franchiseGame}`)
+  }
+}
+
+function parseCardOcr(text, category = '') {
+  const source = String(text || '')
+  const upperText = source.toUpperCase().replace(/\s+/g, ' ')
+  const metadata = {}
+  const confidenceNotes = []
+  const rejectedNames = []
+
+  // The intake form defaults to Trading Cards, so a sports card scanned without
+  // changing the category would otherwise never get player/team parsing.
+  let detectedCategory = category
+  const isCardCategory = category === 'Trading Cards' || category === 'Sports Cards'
+  if (category === 'Trading Cards' && !TCG_FRANCHISES.some((entry) => entry.pattern.test(source)) && looksLikeSportsCard(upperText)) {
+    detectedCategory = 'Sports Cards'
+    confidenceNotes.push('detected sports card')
+  }
+
+  if (detectedCategory === 'Sports Cards') {
+    parseSportsCardFields(source, metadata, confidenceNotes, rejectedNames)
+  } else if (detectedCategory === 'Trading Cards') {
+    parseTradingCardFields(source, metadata, confidenceNotes)
+  }
+
+  // A copyright line ("©2023 Pokémon", "© 1995-2024") is a better release year
+  // than the first four-digit number, which is often a stat line.
+  if (!metadata.year) {
+    const copyrightMatch = source.match(/(?:©|\(C\)|COPYRIGHT)\s*(?:(?:19|20)\d{2}\s*[-–]\s*)?((?:19|20)\d{2})/i)
+    const yearMatch = copyrightMatch || source.match(/\b(19\d{2}|20\d{2})\b/)
+    if (yearMatch) {
+      metadata.year = yearMatch[1]
+      metadata.releaseYear = yearMatch[1]
+    }
+  }
+
+  const barcodeMatch = source.replace(/(\d) (?=\d)/g, '$1').match(/\b(\d{12,13})\b/)
+  if (barcodeMatch && !isCardCategory) {
+    metadata.barcode = barcodeMatch[1]
+    confidenceNotes.push(`barcode ${metadata.barcode}`)
+  }
 
   return {
     metadata,
-    rawText: String(text || '').trim(),
+    detectedCategory,
+    rawText: source.trim(),
     confidence: Math.min(92, 35 + (confidenceNotes.length * 16)),
     confidenceNotes,
     rejectedNames,
@@ -680,7 +785,150 @@ ipcMain.handle('scanner:select-images', async () => {
   return copied
 })
 
-ipcMain.handle('scanner:scan-image', async () => {
+// Compiled into the scan PowerShell session with Add-Type. Per-pixel work in
+// PowerShell took seconds and counted against the acquisition timeout.
+const SCAN_CROP_SOURCE = `
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+
+public static class CollectorsHubScanCrop
+{
+    // Saves the scan as a JPEG, cropped to the card when one is found. Any crop
+    // failure falls back to the full scan so a good acquisition is never lost.
+    public static bool SaveCropped(string source, string destination, long quality)
+    {
+        using (var bitmap = new Bitmap(source))
+        {
+            Rectangle? crop = null;
+            try { crop = FindCardBounds(bitmap); } catch { crop = null; }
+            if (crop.HasValue)
+            {
+                try
+                {
+                    using (var cropped = bitmap.Clone(crop.Value, PixelFormat.Format24bppRgb))
+                    {
+                        SaveJpeg(cropped, destination, quality);
+                        return true;
+                    }
+                }
+                catch { }
+            }
+            SaveJpeg(bitmap, destination, quality);
+            return false;
+        }
+    }
+
+    static void SaveJpeg(Image image, string path, long quality)
+    {
+        ImageCodecInfo codec = null;
+        foreach (var candidate in ImageCodecInfo.GetImageEncoders())
+        {
+            if (candidate.FormatID == ImageFormat.Jpeg.Guid) codec = candidate;
+        }
+        using (var parameters = new EncoderParameters(1))
+        {
+            parameters.Param[0] = new EncoderParameter(Encoder.Quality, quality);
+            image.Save(path, codec, parameters);
+        }
+    }
+
+    // Find the densest block of non-white content. No fixed edge margin: cards
+    // are often placed flush in a corner of the bed. The TS3725's black frame
+    // strip is thin, so it never outweighs the card and is kept out of the
+    // padding by PadOutward.
+    static Rectangle? FindCardBounds(Bitmap bitmap)
+    {
+        int width = bitmap.Width, height = bitmap.Height;
+        if (width < 100 || height < 100) return null;
+        int step = Math.Max(1, Math.Min(width, height) / 1000);
+        var cols = new int[width];
+        var rows = new int[height];
+        int sampledRows = 0, sampledCols = 0;
+        for (int x = 0; x < width; x += step) sampledCols++;
+
+        var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+        try
+        {
+            var line = new byte[width * 3];
+            for (int y = 0; y < height; y += step)
+            {
+                sampledRows++;
+                Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), line, 0, line.Length);
+                for (int x = 0; x < width; x += step)
+                {
+                    int b = line[x * 3], g = line[x * 3 + 1], r = line[x * 3 + 2];
+                    int spread = Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b));
+                    if (r + g + b < 705 || spread > 44) { cols[x]++; rows[y]++; }
+                }
+            }
+        }
+        finally { bitmap.UnlockBits(data); }
+
+        int colThreshold = Math.Max(3, (int)(sampledRows * 0.018));
+        int rowThreshold = Math.Max(3, (int)(sampledCols * 0.018));
+        int[] xRange = DensestRun(cols, width, step, colThreshold, Math.Max(step * 2, width / 50));
+        int[] yRange = DensestRun(rows, height, step, rowThreshold, Math.Max(step * 2, height / 50));
+        if (xRange == null || yRange == null) return null;
+
+        int contentWidth = xRange[1] - xRange[0], contentHeight = yRange[1] - yRange[0];
+        double contentArea = (double)contentWidth * contentHeight, imageArea = (double)width * height;
+        if (contentWidth <= 80 || contentHeight <= 80 || contentArea <= imageArea * 0.01 || contentArea >= imageArea * 0.92) return null;
+
+        // Padding recovers a white card border that reads as "background".
+        int pad = Math.Max(24, (int)(Math.Max(contentWidth, contentHeight) * 0.065));
+        int left = PadOutward(cols, xRange[0], -step, pad, colThreshold, width);
+        int right = PadOutward(cols, xRange[1], step, pad, colThreshold, width);
+        int top = PadOutward(rows, yRange[0], -step, pad, rowThreshold, height);
+        int bottom = PadOutward(rows, yRange[1], step, pad, rowThreshold, height);
+        return new Rectangle(left, top, right - left + 1, bottom - top + 1);
+    }
+
+    // Extends an edge outward by up to pad pixels, stopping before any separate dark
+    // feature (the bed frame, another card) so it is not pulled into the crop.
+    static int PadOutward(int[] counts, int edge, int direction, int pad, int threshold, int length)
+    {
+        int result = edge;
+        for (int i = edge + direction; Math.Abs(i - edge) <= pad; i += direction)
+        {
+            if (i < 0 || i >= length || counts[i] >= threshold) break;
+            result = i;
+        }
+        if (direction < 0) return Math.Max(0, result - Math.Abs(direction) + 1);
+        return Math.Min(length - 1, result + direction - 1);
+    }
+
+    // Heaviest run of active positions, bridging gaps up to maxGap, so a stray
+    // lid shadow or dust line cannot stretch the crop out to the scan edge.
+    static int[] DensestRun(int[] counts, int length, int step, int threshold, int maxGap)
+    {
+        int[] best = null;
+        long bestWeight = 0, weight = 0;
+        int runStart = -1, runEnd = -1;
+        for (int i = 0; i < length; i += step)
+        {
+            if (counts[i] < threshold) continue;
+            if (runStart >= 0 && i - runEnd > maxGap)
+            {
+                if (weight > bestWeight) { best = new[] { runStart, runEnd }; bestWeight = weight; }
+                runStart = -1;
+                weight = 0;
+            }
+            if (runStart < 0) runStart = i;
+            runEnd = i;
+            weight += counts[i];
+        }
+        if (runStart >= 0 && weight > bestWeight) best = new[] { runStart, runEnd };
+        return best;
+    }
+}
+`
+// Always scan at 600 DPI: at the driver default (150) card text is too small
+// for OCR to read reliably.
+const SCAN_DPI = 600
+
+ipcMain.handle('scanner:scan-image', async (_event, options = {}) => {
   if (process.platform !== 'win32') {
     throw new Error('Direct scanner control is currently available on Windows through the Canon WIA driver.')
   }
@@ -691,6 +939,13 @@ ipcMain.handle('scanner:scan-image', async () => {
   const transferPath = `${destinationPath}.wia.bmp`
   const escapedPath = destinationPath.replace(/'/g, "''")
   const escapedTransferPath = transferPath.replace(/'/g, "''")
+  // The crop helper is too large to inline in -EncodedCommand (32K limit).
+  const cropSourcePath = path.join(getDataDir(), 'scan-crop.cs')
+  await writeFile(cropSourcePath, SCAN_CROP_SOURCE, 'utf8')
+  const escapedCropSourcePath = cropSourcePath.replace(/'/g, "''")
+  const dpi = SCAN_DPI
+  // WIA_IPS_CUR_INTENT: 1 = colour, 2 = greyscale.
+  const intent = options?.colourMode === 'Greyscale' ? 2 : 1
   const script = [
     "$ErrorActionPreference = 'Stop'",
     // Suppress the "Preparing modules for first use" progress record, which
@@ -711,72 +966,26 @@ ipcMain.handle('scanner:scan-image', async () => {
     "$scannerName = [string]$scanner.Properties['Name'].Value",
     "$device = $scanner.Connect()",
     "$item = $device.Items.Item(1)",
+    // Apply intent first (it resets other properties), then DPI, then widen the
+    // extents to the full bed at that DPI. Drivers that reject a property keep
+    // their defaults rather than failing the scan.
+    "function Set-WiaProperty($id, $value) { try { $item.Properties.Item([string]$id).Value = $value } catch {} }",
+    "function Set-WiaMax($id) { try { $property = $item.Properties.Item([string]$id); $property.Value = $property.SubTypeMax } catch {} }",
+    `Set-WiaProperty 6146 ${intent}`,
+    `Set-WiaProperty 6147 ${dpi}`,
+    `Set-WiaProperty 6148 ${dpi}`,
+    "Set-WiaProperty 6149 0",
+    "Set-WiaProperty 6150 0",
+    "Set-WiaMax 6151",
+    "Set-WiaMax 6152",
     "$dialog = New-Object -ComObject WIA.CommonDialog",
     "$jpeg = '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}'",
     "$image = $dialog.ShowTransfer($item, $jpeg, $false)",
     "if ($null -eq $image) { Write-Output (@{ canceled = $true; scannerName = $scannerName } | ConvertTo-Json -Compress); exit 0 }",
     `$image.SaveFile('${escapedTransferPath}')`,
     "Add-Type -AssemblyName System.Drawing",
-    `$bitmap = [System.Drawing.Image]::FromFile('${escapedTransferPath}')`,
-    // Ignore the outer scanner frame and crop around dense non-white content.
-    // The TS3725 flatbed may have a black border at (0, 0), so using one
-    // corner as the background makes the white bed look like the object.
-    "$step = [Math]::Max(2, [Math]::Floor([Math]::Min($bitmap.Width, $bitmap.Height) / 420))",
-    "$marginX = [Math]::Max(12, [Math]::Floor($bitmap.Width * 0.018))",
-    "$marginY = [Math]::Max(12, [Math]::Floor($bitmap.Height * 0.018))",
-    "$cols = @{}; $rows = @{}",
-    "$sampleRows = 0; $sampleCols = 0",
-    "for ($y = $marginY; $y -lt ($bitmap.Height - $marginY); $y += $step) { $sampleRows++ }",
-    "for ($x = $marginX; $x -lt ($bitmap.Width - $marginX); $x += $step) { $sampleCols++ }",
-    "for ($y = $marginY; $y -lt ($bitmap.Height - $marginY); $y += $step) {",
-    "  for ($x = $marginX; $x -lt ($bitmap.Width - $marginX); $x += $step) {",
-    "    $pixel = $bitmap.GetPixel($x, $y)",
-    "    $brightness = [int]$pixel.R + [int]$pixel.G + [int]$pixel.B",
-    "    $spread = [Math]::Max([Math]::Max([int]$pixel.R, [int]$pixel.G), [int]$pixel.B) - [Math]::Min([Math]::Min([int]$pixel.R, [int]$pixel.G), [int]$pixel.B)",
-    "    if ($brightness -lt 705 -or $spread -gt 44) {",
-    "      $cols[$x] = 1 + [int]$cols[$x]",
-    "      $rows[$y] = 1 + [int]$rows[$y]",
-    "    }",
-    "  }",
-    "}",
-    "$colThreshold = [Math]::Max(6, [Math]::Floor($sampleRows * 0.018))",
-    "$rowThreshold = [Math]::Max(6, [Math]::Floor($sampleCols * 0.018))",
-    "$activeX = @($cols.Keys | Where-Object { $cols[$_] -ge $colThreshold } | Sort-Object)",
-    "$activeY = @($rows.Keys | Where-Object { $rows[$_] -ge $rowThreshold } | Sort-Object)",
-    "$cropApplied = $false",
-    "try {",
-    "  if ($activeX.Count -gt 0 -and $activeY.Count -gt 0) {",
-    "    $minX = [int]$activeX[0]",
-    "    $maxX = [int]$activeX[$activeX.Count - 1]",
-    "    $minY = [int]$activeY[0]",
-    "    $maxY = [int]$activeY[$activeY.Count - 1]",
-    "  } else {",
-    "    $minX = 0; $minY = 0; $maxX = $bitmap.Width - 1; $maxY = $bitmap.Height - 1",
-    "  }",
-    "  $contentWidth = $maxX - $minX",
-    "  $contentHeight = $maxY - $minY",
-    "  $contentArea = $contentWidth * $contentHeight",
-    "  $imageArea = $bitmap.Width * $bitmap.Height",
-    "  if ($contentWidth -gt 80 -and $contentHeight -gt 80 -and $contentArea -gt ($imageArea * 0.01) -and $contentArea -lt ($imageArea * 0.92)) {",
-    "    $pad = [Math]::Max(24, [Math]::Floor([Math]::Max($contentWidth, $contentHeight) * 0.065))",
-    "    $cropX = [Math]::Max(0, $minX - $pad)",
-    "    $cropY = [Math]::Max(0, $minY - $pad)",
-    "    $cropRight = [Math]::Min($bitmap.Width - 1, $maxX + $pad)",
-    "    $cropBottom = [Math]::Min($bitmap.Height - 1, $maxY + $pad)",
-    "    $crop = New-Object System.Drawing.Rectangle($cropX, $cropY, ($cropRight - $cropX + 1), ($cropBottom - $cropY + 1))",
-    "    $cropped = $bitmap.Clone($crop, $bitmap.PixelFormat)",
-    "    try {",
-    `      $cropped.Save('${escapedPath}', [System.Drawing.Imaging.ImageFormat]::Jpeg)`,
-    "      $cropApplied = $true",
-    "    } finally {",
-    "      $cropped.Dispose()",
-    "    }",
-    "  } else {",
-    `    $bitmap.Save('${escapedPath}', [System.Drawing.Imaging.ImageFormat]::Jpeg)`,
-    "  }",
-    "} finally {",
-    "  $bitmap.Dispose()",
-    "}",
+    `Add-Type -ReferencedAssemblies System.Drawing -Path '${escapedCropSourcePath}'`,
+    `$cropApplied = [CollectorsHubScanCrop]::SaveCropped('${escapedTransferPath}', '${escapedPath}', 92)`,
     `Remove-Item -LiteralPath '${escapedTransferPath}' -Force -ErrorAction SilentlyContinue`,
     `Write-Output (@{ canceled = $false; path = '${escapedPath}'; scannerName = $scannerName; cropped = $cropApplied } | ConvertTo-Json -Compress)`,
   ].join('; ')
@@ -789,7 +998,7 @@ ipcMain.handle('scanner:scan-image', async () => {
       'Bypass',
       '-EncodedCommand',
       encoded,
-    ], { windowsHide: true, maxBuffer: 1024 * 1024, timeout: 120000, killSignal: 'SIGKILL' })
+    ], { windowsHide: true, maxBuffer: 1024 * 1024, timeout: 300000, killSignal: 'SIGKILL' })
     const result = JSON.parse(stdout.trim().split(/\r?\n/).filter(Boolean).pop() || '{}')
     if (result.needsSelection) return result
     if (result.canceled) return { canceled: true }
@@ -811,15 +1020,33 @@ ipcMain.handle('scanner:scan-image', async () => {
   }
 })
 
-ipcMain.handle('scanner:analyze-card', async (_event, image) => {
+let ocrWorkerPromise = null
+
+// One long-lived worker (tesseract queues jobs) instead of a new worker per
+// image. Sparse-text mode (PSM 11) reads the scattered labels on a card; the
+// default page mode only picked up paragraph text such as the bio.
+function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = (async () => {
+      await mkdir(getDataDir(), { recursive: true })
+      const langPath = path.dirname(require.resolve('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz'))
+      const worker = await createWorker('eng', 1, {
+        langPath,
+        cachePath: path.join(getDataDir(), 'ocr-cache'),
+      })
+      await worker.setParameters({ tessedit_pageseg_mode: '11' })
+      return worker
+    })()
+    ocrWorkerPromise.catch(() => { ocrWorkerPromise = null })
+  }
+  return ocrWorkerPromise
+}
+
+ipcMain.handle('scanner:analyze-card', async (_event, image, options = {}) => {
   const imagePath = resolveScanImagePath(image)
-  await mkdir(getDataDir(), { recursive: true })
-  const langPath = path.dirname(require.resolve('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz'))
-  const result = await recognize(imagePath, 'eng', {
-    langPath,
-    cachePath: path.join(getDataDir(), 'ocr-cache'),
-  })
-  return parseSportsCardOcr(result?.data?.text || '')
+  const worker = await getOcrWorker()
+  const result = await worker.recognize(imagePath)
+  return parseCardOcr(result?.data?.text || '', String(options?.category || ''))
 })
 
 app.whenReady().then(async () => {

@@ -23,6 +23,21 @@ export const ADMIN_EXPLORER_TABLES = [
   { label: 'Profiles', table: 'profiles', order: 'created_at', pk: 'id', editable: true },
 ]
 
+// PostgREST `or=(...)` values containing , . : ( ) break the filter unless
+// double-quoted; inside quotes only \ and " need escaping.
+function orValue(value) {
+  return `"${String(value).replace(/[\\"]/g, '\\$&')}"`
+}
+
+function orEq(column, value) {
+  return `${column}.eq.${orValue(value)}`
+}
+
+// Case-insensitive "contains" with LIKE wildcards in the user's text escaped.
+function orContains(column, value) {
+  return `${column}.ilike.${orValue(`%${String(value).replace(/[\\%_]/g, '\\$&')}%`)}`
+}
+
 const LEGO_EXCLUDE_PHRASES = [
   'replica',
   'generic',
@@ -145,13 +160,13 @@ export async function loadCatalogueItems({ search = '', categoryId = '', missing
   const term = search.trim()
   if (term) {
     const searchFilters = [
-      `name.ilike.%${term}%`,
-      `subject.ilike.%${term}%`,
-      `upc.eq.${term}`,
-      `catalog_code.ilike.%${term}%`,
-      `card_number.ilike.%${term}%`,
-      `lego_set_number.ilike.%${term}%`,
-      `minifig_code.ilike.%${term}%`,
+      orContains('name', term),
+      orContains('subject', term),
+      orEq('upc', term),
+      orContains('catalog_code', term),
+      orContains('card_number', term),
+      orContains('lego_set_number', term),
+      orContains('minifig_code', term),
     ]
     if (UUID_RE.test(term)) searchFilters.push(`item_id.eq.${term}`)
     query = query.or(searchFilters.join(','))
@@ -736,12 +751,12 @@ export async function loadExplorerRecords({ table, search = '', page = 1, pageSi
   const term = search.trim()
   if (term) {
     if (selected.table === 'items') {
-      const filters = [`name.ilike.%${term}%`, `subject.ilike.%${term}%`]
+      const filters = [orContains('name', term), orContains('subject', term)]
       if (UUID_RE.test(term)) filters.push(`item_id.eq.${term}`)
       query = query.or(filters.join(','))
     }
     if (selected.table === 'item_details') {
-      const filters = [`subject.ilike.%${term}%`, `description.ilike.%${term}%`]
+      const filters = [orContains('subject', term), orContains('description', term)]
       if (UUID_RE.test(term)) filters.push(`item_id.eq.${term}`)
       query = query.or(filters.join(','))
     }
@@ -1227,11 +1242,11 @@ function compareScanFields(current, proposed) {
 export async function identifyScannedDraft(draft) {
   const proposed = proposedScanFields(draft)
   const filters = []
-  if (proposed.upc) filters.push(`upc.eq.${proposed.upc}`)
-  if (proposed.card_number) filters.push(`card_number.ilike.%${proposed.card_number}%`)
-  if (proposed.lego_set_number) filters.push(`lego_set_number.eq.${proposed.lego_set_number}`)
-  if (proposed.catalog_code) filters.push(`catalog_code.ilike.%${proposed.catalog_code}%`)
-  if (proposed.name) filters.push(`name.ilike.%${proposed.name}%`, `subject.ilike.%${proposed.name}%`)
+  if (proposed.upc) filters.push(orEq('upc', proposed.upc))
+  if (proposed.card_number) filters.push(orContains('card_number', proposed.card_number))
+  if (proposed.lego_set_number) filters.push(orEq('lego_set_number', proposed.lego_set_number))
+  if (proposed.catalog_code) filters.push(orContains('catalog_code', proposed.catalog_code))
+  if (proposed.name) filters.push(orContains('name', proposed.name), orContains('subject', proposed.name))
 
   const hasIdentity = Boolean(proposed.upc || proposed.card_number || proposed.lego_set_number || proposed.catalog_code || proposed.name)
   if (!hasIdentity && draft?.ocr?.rawText) {

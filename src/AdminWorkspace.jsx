@@ -132,14 +132,26 @@ function mergeScanMetadata(metadata = {}, ocr = {}) {
 }
 
 async function enrichDraftWithOcr(draft) {
-  const image = draft.frontImage || draft.backImage
-  if (!image?.path) return draft
-  const ocr = await adminDesktopApi().analyzeCardScan(image)
-  return {
-    ...draft,
-    metadata: mergeScanMetadata(draft.metadata, ocr),
-    ocr,
+  const images = [draft.frontImage, draft.backImage].filter((image) => image?.path)
+  if (!images.length) return draft
+  const api = adminDesktopApi()
+  // Read both sides: card backs usually carry the number, year and set text.
+  // Merge the more confident side first: merging only fills empty fields, so a
+  // noisy guess from the artwork-heavy front must not beat a clean back read.
+  const results = (await Promise.all(images.map((image) => api.analyzeCardScan(image, { category: draft.category }))))
+    .sort((a, b) => (Number(b.confidence) || 0) - (Number(a.confidence) || 0))
+  const metadata = results.reduce((current, result) => mergeScanMetadata(current, result), draft.metadata)
+  // OCR can tell a sports card apart from a TCG card left on the default category.
+  const detectedCategory = results.map((result) => result.detectedCategory).find((value) => value && value !== draft.category)
+  const ocr = {
+    detectedCategory: detectedCategory || draft.category,
+    metadata: results.reduce((current, result) => ({ ...(result.metadata || {}), ...current }), {}),
+    rawText: results.map((result) => result.rawText).filter(Boolean).join('\n\n'),
+    confidence: Math.max(0, ...results.map((result) => Number(result.confidence) || 0)),
+    confidenceNotes: [...new Set(results.flatMap((result) => result.confidenceNotes || []))],
+    rejectedNames: [...new Set(results.flatMap((result) => result.rejectedNames || []))],
   }
+  return { ...draft, category: detectedCategory || draft.category, metadata, ocr }
 }
 
 function JsonBlock({ value }) {
@@ -197,6 +209,10 @@ function createLocalId(prefix) {
 export default function AdminWorkspace({ session, syncStatus, onLogout }) {
   const [activeView, setActiveView] = useState('overview')
   const [scanDrafts, setScanDrafts] = useState([])
+  // Draft writes happen after slow OCR/Supabase calls, so they must apply to the
+  // latest list (not a render-time snapshot) and persist one at a time.
+  const scanDraftsRef = useRef([])
+  const scanDraftSaveQueue = useRef(Promise.resolve())
   const [storeContext, setStoreContext] = useState({
     storeId: session?.storeId || syncStatus?.context?.storeId || '',
     storeCode: session?.storeCode || '',
@@ -206,7 +222,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     let cancelled = false
     adminDesktopApi().loadStore().then((store) => {
       if (!cancelled) {
-        setScanDrafts(store?.admin?.scanDrafts || [])
+        scanDraftsRef.current = store?.admin?.scanDrafts || []
+        setScanDrafts(scanDraftsRef.current)
         setStoreContext({
           storeId: session?.storeId || store?.sync?.context?.storeId || syncStatus?.context?.storeId || '',
           storeCode: session?.storeCode || store?.sync?.context?.storeCode || '',
@@ -216,16 +233,22 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     return () => { cancelled = true }
   }, [session?.storeCode, session?.storeId, syncStatus?.context?.storeId])
 
-  async function saveScanDrafts(nextDrafts) {
+  function saveScanDrafts(updateDrafts) {
+    const nextDrafts = updateDrafts(scanDraftsRef.current)
+    scanDraftsRef.current = nextDrafts
     setScanDrafts(nextDrafts)
-    const store = await adminDesktopApi().loadStore()
-    await adminDesktopApi().saveStore({
-      ...store,
-      admin: {
-        ...(store.admin || {}),
-        scanDrafts: nextDrafts,
-      },
+    const persist = scanDraftSaveQueue.current.then(async () => {
+      const store = await adminDesktopApi().loadStore()
+      await adminDesktopApi().saveStore({
+        ...store,
+        admin: {
+          ...(store.admin || {}),
+          scanDrafts: scanDraftsRef.current,
+        },
+      })
     })
+    scanDraftSaveQueue.current = persist.catch(() => {})
+    return persist
   }
 
   async function createScanDraft(draft) {
@@ -244,16 +267,16 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     } catch (error) {
       nextDraft = { ...draftWithIdentity, analysisError: error.message || 'Scan analysis failed.' }
     }
-    await saveScanDrafts([nextDraft, ...scanDrafts])
+    await saveScanDrafts((drafts) => [nextDraft, ...drafts])
     setActiveView('review')
   }
 
   async function updateScanDraft(draftId, patch) {
-    await saveScanDrafts(scanDrafts.map((draft) => draft.id === draftId ? { ...draft, ...patch, updatedAt: new Date().toISOString() } : draft))
+    await saveScanDrafts((drafts) => drafts.map((draft) => draft.id === draftId ? { ...draft, ...patch, updatedAt: new Date().toISOString() } : draft))
   }
 
   async function deleteScanDraft(draftId) {
-    await saveScanDrafts(scanDrafts.filter((draft) => draft.id !== draftId))
+    await saveScanDrafts((drafts) => drafts.filter((draft) => draft.id !== draftId))
   }
 
   return (
@@ -1725,6 +1748,8 @@ function ScanIntake({ onCreateDraft }) {
   const [backImage, setBackImage] = useState(null)
   const [scannerMessage, setScannerMessage] = useState('')
   const [scannerError, setScannerError] = useState('')
+  const [colourMode, setColourMode] = useState('Colour')
+  const [busy, setBusy] = useState('')
   const [metadata, setMetadata] = useState({
     cardName: '',
     set: '',
@@ -1838,13 +1863,15 @@ function ScanIntake({ onCreateDraft }) {
   }
 
   async function scanFromDevice(side) {
+    if (busy) return
+    setBusy('scan')
     setScannerError('')
     setScannerMessage('Detecting scanner...')
     const waitingTimer = window.setTimeout(() => {
       setScannerMessage('Waiting for the scanner transfer window...')
     }, 1500)
     try {
-      const image = await adminDesktopApi().scanImage()
+      const image = await adminDesktopApi().scanImage({ colourMode })
       window.clearTimeout(waitingTimer)
       if (image?.needsSelection) {
         const names = (image.scanners || []).map((scanner) => scanner.name).filter(Boolean)
@@ -1855,34 +1882,45 @@ function ScanIntake({ onCreateDraft }) {
         setScannerMessage('Scan canceled.')
         return
       }
-      setScannerMessage('Processing scanned image...')
       if (side === 'front') setFrontImage(image)
       if (side === 'back') setBackImage(image)
-      setScannerMessage(`${side === 'front' ? 'Front' : 'Back'} scan captured.`)
+      setScannerMessage(`${side === 'front' ? 'Front' : 'Back'} scan captured${image.cropped ? ' and auto-cropped' : ''}.`)
     } catch (error) {
       window.clearTimeout(waitingTimer)
       setScannerMessage('')
       setScannerError(error.message || 'Could not connect to the Canon scanner.')
+    } finally {
+      setBusy('')
     }
   }
 
   async function createDraft() {
+    if (busy) return
     if (!frontImage && !backImage) {
       setError('Add at least one scanned image before creating a draft.')
       return
     }
 
-    await onCreateDraft({
-      type: 'Scanned catalogue draft',
-      scanner: 'Canon flatbed scanner',
-      category,
-      mode,
-      confidence: null,
-      possibleMatch: null,
-      frontImage,
-      backImage,
-      metadata,
-    })
+    setBusy('draft')
+    setError('')
+    setScannerMessage('Reading card text and searching the catalogue...')
+    try {
+      await onCreateDraft({
+        type: 'Scanned catalogue draft',
+        scanner: frontImage?.scannerName || backImage?.scannerName || 'Imported image',
+        category,
+        mode,
+        confidence: null,
+        possibleMatch: null,
+        frontImage,
+        backImage,
+        metadata,
+      })
+    } catch (error) {
+      setScannerMessage('')
+      setError(error.message || 'Could not create the review draft.')
+      setBusy('')
+    }
   }
 
   function textField(key, label, placeholder = '') {
@@ -1901,7 +1939,7 @@ function ScanIntake({ onCreateDraft }) {
             <p className="admin-kicker">Scanner</p>
             <h2>Canon flatbed scanner</h2>
           </div>
-          <span className="admin-status-pill"><span /> File import ready</span>
+          <span className="admin-status-pill"><span /> {busy === 'scan' ? 'Scanning...' : busy === 'draft' ? 'Analysing...' : (frontImage?.scannerName || backImage?.scannerName || 'Ready')}</span>
         </div>
         {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
         {scannerMessage ? <p className="admin-success">{scannerMessage}</p> : null}
@@ -1909,8 +1947,7 @@ function ScanIntake({ onCreateDraft }) {
         <div className="scan-controls">
           <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Trading Cards</option><option>Sports Cards</option><option>Coins</option><option>LEGO / Building Blocks</option><option>Comics</option><option>Video Games</option></select></label>
           <label>Scan Mode<select value={mode} onChange={(event) => setMode(event.target.value)}><option>Create Catalogue Items</option><option>Match Existing Catalogue</option><option>Image Capture Only</option></select></label>
-          <label>Resolution<select><option>300 DPI</option><option>600 DPI</option></select></label>
-          <label>Colour Mode<select><option>Colour</option><option>Greyscale</option></select></label>
+          <label>Colour Mode<select value={colourMode} onChange={(event) => setColourMode(event.target.value)}><option>Colour</option><option>Greyscale</option></select></label>
         </div>
         <div className="scan-image-grid">
           <ScanImageSlot label="Front Image" image={frontImage} onPick={() => pickImage('front')} />
@@ -1935,11 +1972,11 @@ function ScanIntake({ onCreateDraft }) {
         </div></div>
         </> : <div className="scan-category-note">Category-specific scanner fields are not configured yet.</div>}
         <div className="admin-quick-actions">
-          <button className="admin-gold-button" type="button" onClick={() => scanFromDevice('front')}>Scan Front with Canon</button>
-          <button className="admin-gold-button" type="button" onClick={() => scanFromDevice('back')}>Scan Back with Canon</button>
-          <button type="button" onClick={() => pickImage('front')}>Import Front File</button>
-          <button type="button" onClick={() => pickImage('back')}>Import Back File</button>
-          <button type="button" onClick={createDraft}>Create Review Draft</button>
+          <button className="admin-gold-button" type="button" disabled={Boolean(busy)} onClick={() => scanFromDevice('front')}>Scan Front with Canon</button>
+          <button className="admin-gold-button" type="button" disabled={Boolean(busy)} onClick={() => scanFromDevice('back')}>Scan Back with Canon</button>
+          <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('front')}>Import Front File</button>
+          <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('back')}>Import Back File</button>
+          <button type="button" disabled={Boolean(busy)} onClick={createDraft}>{busy === 'draft' ? 'Analysing...' : 'Create Review Draft'}</button>
         </div>
       </section>
       <section className="admin-panel scan-workflow-panel">
@@ -1962,6 +1999,7 @@ function ScanImageSlot({ label, image, onPick }) {
     <button className="scan-image-slot" type="button" onClick={onPick}>
       {image?.url ? <img src={image.url} alt="" /> : <span><Image size={24} />{label}</span>}
       <strong>{image?.fileName || 'Choose image'}</strong>
+      {image?.cropped ? <small>Auto-cropped</small> : null}
     </button>
   )
 }
@@ -1975,7 +2013,7 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
     try {
       const ocrDraft = await enrichDraftWithOcr(draft)
       const scanAnalysis = await identifyScannedDraft(ocrDraft)
-      await onUpdateDraft(draft.id, { metadata: ocrDraft.metadata, ocr: ocrDraft.ocr, scanAnalysis, status: scanAnalysis.status, analysisError: '' })
+      await onUpdateDraft(draft.id, { category: ocrDraft.category, metadata: ocrDraft.metadata, ocr: ocrDraft.ocr, scanAnalysis, status: scanAnalysis.status, analysisError: '' })
     } catch (error) {
       await onUpdateDraft(draft.id, { analysisError: error.message || 'Scan analysis failed.' })
     } finally {
