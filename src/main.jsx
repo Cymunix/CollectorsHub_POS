@@ -4317,7 +4317,7 @@ function UpdatePrompt() {
   return (
     <div className="register-modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
       <section>
-        <img className="update-prompt-logo" src="/collectorshub-logo.png" alt="CollectorsHub" />
+        <img className="update-prompt-logo" src="/collectorshub-pos-logo.png" alt="CollectorsHub POS" />
         <p className="update-prompt-kicker">Update ready</p>
         <h2 id="update-prompt-title">CollectorsHub POS {update.version ? `v${update.version}` : ''} is ready to install</h2>
         <p>
