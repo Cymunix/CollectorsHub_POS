@@ -116,6 +116,26 @@ function scanRouteLabel(route) {
   return labels[route] || 'Awaiting analysis'
 }
 
+function mergeScanMetadata(metadata = {}, ocrMetadata = {}) {
+  const next = { ...metadata }
+  Object.entries(ocrMetadata || {}).forEach(([key, value]) => {
+    const text = String(value || '').trim()
+    if (text && !String(next[key] || '').trim()) next[key] = text
+  })
+  return next
+}
+
+async function enrichDraftWithOcr(draft) {
+  const image = draft.frontImage || draft.backImage
+  if (!image?.path) return draft
+  const ocr = await adminDesktopApi().analyzeCardScan(image)
+  return {
+    ...draft,
+    metadata: mergeScanMetadata(draft.metadata, ocr.metadata),
+    ocr,
+  }
+}
+
 function JsonBlock({ value }) {
   return <pre className="admin-json">{JSON.stringify(value || {}, null, 2)}</pre>
 }
@@ -147,12 +167,20 @@ function adminDesktopApi() {
     async scanImage() {
       throw new Error('Direct scanner control is only available in the installed Windows desktop app.')
     },
+    async analyzeCardScan() {
+      return { metadata: {}, rawText: '', confidence: 0, confidenceNotes: [] }
+    },
   }
 
   // Older running Electron windows may have a preload bridge without scanImage.
   // Keep the rest of the bridge usable and surface a clear scanner message.
   return window.nordvikDesktop
-    ? { ...fallback, ...window.nordvikDesktop, scanImage: typeof window.nordvikDesktop.scanImage === 'function' ? window.nordvikDesktop.scanImage : fallback.scanImage }
+    ? {
+        ...fallback,
+        ...window.nordvikDesktop,
+        scanImage: typeof window.nordvikDesktop.scanImage === 'function' ? window.nordvikDesktop.scanImage : fallback.scanImage,
+        analyzeCardScan: typeof window.nordvikDesktop.analyzeCardScan === 'function' ? window.nordvikDesktop.analyzeCardScan : fallback.analyzeCardScan,
+      }
     : fallback
 }
 
@@ -204,8 +232,9 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     }
     let nextDraft = draftWithIdentity
     try {
-      const scanAnalysis = await identifyScannedDraft(draftWithIdentity)
-      nextDraft = { ...draftWithIdentity, scanAnalysis, status: scanAnalysis.status }
+      const ocrDraft = await enrichDraftWithOcr(draftWithIdentity)
+      const scanAnalysis = await identifyScannedDraft(ocrDraft)
+      nextDraft = { ...ocrDraft, scanAnalysis, status: scanAnalysis.status }
     } catch (error) {
       nextDraft = { ...draftWithIdentity, analysisError: error.message || 'Scan analysis failed.' }
     }
@@ -1934,8 +1963,9 @@ function PendingReview({ drafts, onUpdateDraft, onCreateMore }) {
   async function analyze(draft) {
     setBusyId(draft.id)
     try {
-      const scanAnalysis = await identifyScannedDraft(draft)
-      await onUpdateDraft(draft.id, { scanAnalysis, status: scanAnalysis.status, analysisError: '' })
+      const ocrDraft = await enrichDraftWithOcr(draft)
+      const scanAnalysis = await identifyScannedDraft(ocrDraft)
+      await onUpdateDraft(draft.id, { metadata: ocrDraft.metadata, ocr: ocrDraft.ocr, scanAnalysis, status: scanAnalysis.status, analysisError: '' })
     } catch (error) {
       await onUpdateDraft(draft.id, { analysisError: error.message || 'Scan analysis failed.' })
     } finally {

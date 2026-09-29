@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
 const { autoUpdater } = require('electron-updater')
+const { recognize } = require('tesseract.js')
 
 const execFileAsync = promisify(execFile)
 
@@ -62,6 +63,78 @@ function getScanDir() {
 function getScanImageUrl(fileName, filePath) {
   if (isDev) return pathToFileURL(filePath).toString()
   return `collectorshub-pos://scan-images/${encodeURIComponent(fileName)}`
+}
+
+function resolveScanImagePath(image = {}) {
+  const candidate = image.path || ''
+  if (!candidate) throw new Error('No scan image path was provided for OCR.')
+  const resolved = path.resolve(candidate)
+  const scanDir = path.resolve(getScanDir())
+  if (!resolved.startsWith(scanDir + path.sep)) {
+    throw new Error('Scan OCR can only read images saved by CollectorsHub.')
+  }
+  if (!existsSync(resolved)) throw new Error('Scan image file was not found.')
+  return resolved
+}
+
+function cleanOcrLine(line) {
+  return String(line || '').replace(/[^\w\s.#/&-]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function parseSportsCardOcr(text) {
+  const rawLines = String(text || '').split(/\r?\n/).map(cleanOcrLine).filter(Boolean)
+  const lines = rawLines.filter((line) => !/^[\d\s.#-]+$/.test(line))
+  const upperLines = lines.map((line) => line.toUpperCase())
+  const metadata = {}
+  const confidenceNotes = []
+
+  const numberMatch = String(text || '').match(/\b(?:NO\.?|#)\s*([A-Z0-9-]{1,8})\b/i)
+  if (numberMatch) {
+    metadata.cardNumber = numberMatch[1].replace(/[^A-Z0-9-]/gi, '')
+    confidenceNotes.push(`card number ${metadata.cardNumber}`)
+  }
+
+  const teamWords = ['COWBOYS', 'DALLAS', 'EAGLES', 'GIANTS', 'COMMANDERS', 'PACKERS', 'BEARS', 'VIKINGS', 'LIONS', 'CHIEFS', 'RAIDERS', 'BRONCOS', 'CHARGERS', '49ERS', 'RAMS', 'SEAHAWKS', 'CARDINALS', 'BILLS', 'DOLPHINS', 'PATRIOTS', 'JETS', 'STEELERS', 'RAVENS', 'BROWNS', 'BENGALS', 'TEXANS', 'COLTS', 'JAGUARS', 'TITANS', 'BUCCANEERS', 'SAINTS', 'FALCONS', 'PANTHERS']
+  const teamLine = lines.find((line, index) => {
+    const textLine = `${upperLines[index - 1] || ''} ${upperLines[index] || ''}`.trim()
+    return teamWords.some((word) => textLine.includes(word))
+  })
+  if (teamLine) {
+    const previous = lines[Math.max(0, lines.indexOf(teamLine) - 1)] || ''
+    const combined = `${previous} ${teamLine}`.toUpperCase()
+    if (combined.includes('DALLAS') && combined.includes('COWBOYS')) metadata.team = 'Dallas Cowboys'
+    else metadata.team = teamLine.replace(/\b[A-Z]{1}\b/g, '').trim()
+    confidenceNotes.push(`team ${metadata.team}`)
+  }
+
+  const candidateNames = lines
+    .map((line) => line.replace(/\b(NO|DALLAS|COWBOYS|NFL|NFLPA|PANINI|CONTENDERS|FOOTBALL|YEAR|TEAM|TOTALS)\b/gi, '').trim())
+    .filter((line) => /^[A-Z][A-Z\s'.-]{4,}$/.test(line) && line.split(/\s+/).length >= 2)
+    .sort((a, b) => b.length - a.length)
+  const player = candidateNames.find((line) => !teamWords.some((word) => line.toUpperCase().includes(word)))
+  if (player) {
+    metadata.player = player.toUpperCase().replace(/\s+/g, ' ')
+    metadata.cardName = metadata.player
+    metadata.name = metadata.player
+    confidenceNotes.push(`player ${metadata.player}`)
+  }
+
+  const yearMatch = String(text || '').match(/\b(19\d{2}|20\d{2})\b/)
+  if (yearMatch) {
+    metadata.year = yearMatch[1]
+    metadata.releaseYear = yearMatch[1]
+  }
+
+  if (/PANINI/i.test(text)) metadata.brand = 'Panini'
+  if (/CONTENDERS/i.test(text)) metadata.productSet = 'Contenders Football'
+  if (/FOOTBALL/i.test(text)) metadata.sport = 'Football'
+
+  return {
+    metadata,
+    rawText: String(text || '').trim(),
+    confidence: Math.min(92, 35 + (confidenceNotes.length * 16)),
+    confidenceNotes,
+  }
 }
 
 function getEbayConfigFile() {
@@ -711,6 +784,17 @@ ipcMain.handle('scanner:scan-image', async () => {
       : cleanPowerShellError(error.stderr || error.message) || 'Windows could not acquire an image from the scanner.'
     throw new Error(`Scanner acquisition failed: ${detail}`)
   }
+})
+
+ipcMain.handle('scanner:analyze-card', async (_event, image) => {
+  const imagePath = resolveScanImagePath(image)
+  await mkdir(getDataDir(), { recursive: true })
+  const langPath = path.dirname(require.resolve('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz'))
+  const result = await recognize(imagePath, 'eng', {
+    langPath,
+    cachePath: path.join(getDataDir(), 'ocr-cache'),
+  })
+  return parseSportsCardOcr(result?.data?.text || '')
 })
 
 app.whenReady().then(async () => {

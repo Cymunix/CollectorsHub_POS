@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   listEbayItem: (item) => ipcRenderer.invoke('ebay:list-item', item),
   selectScanImages: () => ipcRenderer.invoke('scanner:select-images'),
   scanImage: () => ipcRenderer.invoke('scanner:scan-image'),
+  analyzeCardScan: (image) => ipcRenderer.invoke('scanner:analyze-card', image),
 })
