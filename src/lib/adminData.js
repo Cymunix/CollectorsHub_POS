@@ -79,6 +79,9 @@ const CATALOGUE_SELECT = [
   'attributes',
   'completion_eligible',
   'availability',
+  'subset_id',
+  'item_type_id',
+  'description',
 ]
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -1364,15 +1367,6 @@ export async function identifyScannedDraft(draft) {
 // values. `column` fields live on the items row; `path` fields live under
 // items.dynamic_fields in the same shape scans have always been written in.
 
-const SPORTS_CARD_KEYS = [
-  'player', 'subset_insert_set', 'sport', 'league', 'team', 'position', 'rookie_card', 'base_insert', 'parallel',
-  'parallel_colour', 'variation', 'serial_numbered', 'serial_number', 'print_run', 'autograph', 'autograph_type',
-  'memorabilia_relic', 'memorabilia_type', 'memorabilia_source', 'patch_type', 'rookie_patch_auto', 'short_print',
-  'super_short_print', 'case_hit', 'error_correction', 'multi_player_card', 'other_players', 'draft_team',
-  'college_junior_team', 'grading_company', 'grade', 'subgrades', 'certification_number', 'raw_condition',
-  'market_value', 'last_sale', 'price_updated', 'external_ids',
-]
-
 const TRADING_CARD_KEYS = [
   'series_block', 'franchise_game', 'release_date', 'rarity', 'variant_parallel', 'finish', 'language', 'edition',
   'card_type', 'character_subject', 'card_attributes', 'artist', 'serial_number', 'print_run', 'promo', 'promo_number',
@@ -1409,12 +1403,6 @@ export const SCAN_REVIEW_GROUPS = [
     ],
   },
   {
-    id: 'sports',
-    label: 'Sports card details',
-    categories: ['Sports Cards'],
-    fields: SPORTS_CARD_KEYS.map((key) => ({ key: `sports_card.${key}`, label: fieldLabel(key), path: ['sports_card', key], proposedKey: key })),
-  },
-  {
     id: 'trading',
     label: 'Trading card details',
     categories: ['Trading Cards'],
@@ -1432,7 +1420,73 @@ export const SCAN_REVIEW_GROUPS = [
   },
 ]
 
+// Sports Cards follows the website's finalized Add Item spec exactly
+// (Nordvik docs/add-item-form-spec.md, "Sports Cards — FINALIZED"): the same
+// sections, fields, columns, link tables and dynamic_fields keys as the
+// website's form, so scanned cards and website-created cards are identical.
+export const SPORTS_CARD_TYPE_OPTIONS = ['Base', 'Insert', 'Autograph', 'Patch', 'Autograph Patch']
+const YES_NO_OPTIONS = ['Yes', 'No']
+
+function joinScanText(...parts) {
+  return parts.map((part) => String(part || '').trim()).filter(Boolean).join(' ')
+}
+
+const SPORTS_REVIEW_GROUPS = [
+  {
+    id: 'taxonomy',
+    label: 'Cascading Taxonomy',
+    fields: [
+      { key: 'subcategory_id', label: 'Subcategory (sport)', column: 'subcategory_id', taxonomy: 'subcategory', required: true, scan: (meta) => meta.sport },
+      { key: 'franchise_id', label: 'Franchise (league)', column: 'franchise_id', taxonomy: 'franchise', scan: (meta) => meta.league },
+      { key: 'subset_id', label: 'Subfranchise (product line)', column: 'subset_id', taxonomy: 'subset', scan: (meta) => meta.productSet },
+      // Property is linked through item_properties, not an items column.
+      { key: 'property_id', label: 'Property (release/set)', taxonomy: 'property', scan: (meta) => joinScanText(meta.year || meta.releaseYear, meta.brand, meta.productSet) },
+      { key: 'item_type_id', label: 'Item Type', column: 'item_type_id', taxonomy: 'item_type', scan: () => 'Card' },
+    ],
+  },
+  {
+    id: 'facets',
+    label: 'Attached Facets',
+    fields: [
+      { key: 'collection', label: 'Collection', path: ['collection'], scan: (meta) => meta.subsetInsertSet || meta.collection },
+      { key: 'subject', label: 'Subject (player)', column: 'subject', required: true, personName: true, scan: (meta) => meta.player || meta.cardName || meta.subject || meta.name },
+      { key: 'card_number', label: 'ID Number', column: 'card_number', scan: (meta) => meta.cardNumber || meta.idNumber },
+      { key: 'publisher_id', label: 'Publisher / Manufacturer', column: 'publisher_id', taxonomy: 'publisher', scan: (meta) => meta.brand || meta.manufacturerPublisher },
+    ],
+  },
+  {
+    id: 'item',
+    label: 'Item Metadata',
+    fields: [
+      { key: 'description', label: 'Description', column: 'description', multiline: true, scan: (meta) => meta.description },
+      { key: 'release_year', label: 'Release Year', column: 'release_year', type: 'number', scan: (meta) => meta.year || meta.releaseYear },
+      { key: 'upc', label: 'Barcodes', column: 'upc', scan: (meta) => meta.barcodes || meta.barcode },
+      { key: 'source', label: 'Source (internal provenance)', path: ['source'], scan: () => '' },
+    ],
+  },
+  {
+    id: 'card',
+    label: 'Card Metadata',
+    fields: [
+      { key: 'card_type', label: 'Card Type', path: ['card_type'], options: SPORTS_CARD_TYPE_OPTIONS, scan: (meta) => meta.baseInsert },
+      { key: 'team', label: 'Team', path: ['team'], scan: (meta) => meta.team },
+      { key: 'rookie', label: 'Rookie', path: ['rookie'], options: YES_NO_OPTIONS, scan: (meta) => meta.rookieCard },
+      { key: 'parallel', label: 'Parallel', path: ['parallel'], scan: (meta) => joinScanText(meta.parallelColour, meta.parallel) },
+      { key: 'variation', label: 'Variation', path: ['variation'], scan: (meta) => meta.variation },
+      { key: 'serial_numbering', label: 'Serial Numbering', path: ['serial_numbering'], scan: (meta) => meta.serialNumber },
+      { key: 'autograph', label: 'Autograph', path: ['autograph'], options: YES_NO_OPTIONS, scan: (meta) => meta.autograph },
+      { key: 'autograph_type', label: 'Autograph Type', path: ['autograph_type'], scan: (meta) => meta.autographType },
+      { key: 'relic', label: 'Memorabilia / Relic', path: ['relic'], options: YES_NO_OPTIONS, scan: (meta) => meta.memorabiliaRelic },
+    ],
+  },
+]
+
+export function isSpecCategory(category) {
+  return category === 'Sports Cards'
+}
+
 export function scanReviewGroups(category) {
+  if (category === 'Sports Cards') return SPORTS_REVIEW_GROUPS
   return SCAN_REVIEW_GROUPS
     .filter((group) => !group.categories || group.categories.includes(category))
     .map((group) => ({ ...group, fields: group.fields.filter((field) => !field.categories || field.categories.includes(category)) }))
@@ -1450,24 +1504,33 @@ function reviewText(value) {
 
 export function catalogueFieldValue(item, field) {
   if (!item) return ''
+  // Property is a link-table value, loaded onto the item as _property_id.
+  if (field.taxonomy === 'property') return reviewText(item._property_id)
   if (field.column) return reviewText(item[field.column])
   const leaf = field.path[field.path.length - 1]
   return reviewText(readPath(item.dynamic_fields, field.path) ?? item.dynamic_fields?.[leaf] ?? item.attributes?.[leaf])
 }
 
 // OCR returns names in capitals ("MICAH PARSONS"); store them as "Micah Parsons".
-const PERSON_NAME_FIELDS = new Set(['name', 'subject', 'sports_card.player', 'sports_card.other_players'])
+const PERSON_NAME_FIELDS = new Set(['name', 'subject'])
 
 function titleCaseIfShouting(value) {
   if (!/[A-Z]{2}/.test(value) || value !== value.toUpperCase()) return value
   return value.toLowerCase().replace(/(^|[\s'.-])([a-z])/g, (match, separator, letter) => separator + letter.toUpperCase())
 }
 
+// For taxonomy fields this is the scanned text (e.g. "NFL"); the review screen
+// resolves it to a taxonomy row.
 export function scannedFieldValue(draft, field) {
-  const proposed = proposedScanFields(draft)
-  const key = field.proposedKey || field.key
-  const value = key === 'upc' ? reviewText(proposed.upc || proposed.barcodes) : reviewText(proposed[key])
-  return PERSON_NAME_FIELDS.has(field.key) ? titleCaseIfShouting(value) : value
+  let value
+  if (field.scan) {
+    value = reviewText(field.scan(draft?.metadata || {}))
+  } else {
+    const proposed = proposedScanFields(draft)
+    const key = field.proposedKey || field.key
+    value = key === 'upc' ? reviewText(proposed.upc || proposed.barcodes) : reviewText(proposed[key])
+  }
+  return field.personName || PERSON_NAME_FIELDS.has(field.key) ? titleCaseIfShouting(value) : value
 }
 
 function reviewColumnValue(field, value) {
@@ -1477,7 +1540,7 @@ function reviewColumnValue(field, value) {
   return text
 }
 
-function writeDynamicFields(baseDynamicFields, groups, values) {
+function writeDynamicFields(baseDynamicFields, groups, values, { dropEmpty = false } = {}) {
   const dynamicFields = JSON.parse(JSON.stringify(baseDynamicFields || {}))
   groups.flatMap((group) => group.fields).filter((field) => field.path).forEach((field) => {
     let target = dynamicFields
@@ -1485,51 +1548,269 @@ function writeDynamicFields(baseDynamicFields, groups, values) {
       if (!target[key] || typeof target[key] !== 'object') target[key] = {}
       target = target[key]
     })
-    target[field.path[field.path.length - 1]] = String(values[field.key] ?? '').trim()
+    const leaf = field.path[field.path.length - 1]
+    const value = String(values[field.key] ?? '').trim()
+    // The website's form stores only filled dynamic fields.
+    if (dropEmpty && !value) delete target[leaf]
+    else target[leaf] = value
   })
   return dynamicFields
 }
 
 async function categoryIdForName(categoryName) {
   if (!categoryName) return null
+  const exact = await supabase.from('categories').select('category_id').ilike('name', categoryName).limit(1).maybeSingle()
+  if (exact.data?.category_id) return exact.data.category_id
   const { data } = await supabase.from('categories').select('category_id').ilike('name', `%${categoryName}%`).limit(1).maybeSingle()
   return data?.category_id || null
 }
 
-export async function createCatalogueItemFromReview({ category, values, confidence = null }) {
+// Uploads scan images the same way the website's Add Item form does:
+// item-images/items/<item_id>/<timestamp>_<position>.<ext> + an item_images row.
+async function attachItemImages(itemId, images = []) {
+  if (!images.length) return []
+  const { data: existing } = await supabase.from('item_images').select('position').eq('item_id', itemId)
+  const taken = new Set((existing || []).map((row) => row.position))
+  const errors = []
+  for (const image of images) {
+    let position = image.position
+    while (taken.has(position)) position += 1
+    taken.add(position)
+    const path = `items/${itemId}/${Date.now()}_${position}.${image.ext || 'jpg'}`
+    const { error: uploadError } = await supabase.storage.from(IMAGE_BUCKET).upload(path, image.blob, { contentType: image.blob.type || 'image/jpeg' })
+    if (uploadError) {
+      errors.push(`Image upload failed: ${uploadError.message}`)
+      continue
+    }
+    const { error: rowError } = await supabase.from('item_images').insert({ item_id: itemId, image_path: path, position })
+    if (rowError) errors.push(`Image record save failed: ${rowError.message}`)
+  }
+  return errors
+}
+
+function itemNameFromValues(category, values) {
+  return String((isSpecCategory(category) ? values.subject : values.name) || '').trim()
+}
+
+export async function createCatalogueItemFromReview({ category, values, confidence = null, images = [] }) {
   const groups = scanReviewGroups(category)
-  if (!String(values.name || '').trim()) throw new Error('A name is required before adding the item to the catalogue.')
+  const name = itemNameFromValues(category, values)
+  if (!name) throw new Error(isSpecCategory(category) ? 'A Subject (player) is required before adding the card to the catalogue.' : 'A name is required before adding the item to the catalogue.')
+  if (isSpecCategory(category) && !values.subcategory_id) throw new Error('Select a Subcategory (sport) before adding the card to the catalogue.')
 
   const payload = { category_id: await categoryIdForName(category) }
   groups.flatMap((group) => group.fields).filter((field) => field.column).forEach((field) => {
     payload[field.column] = reviewColumnValue(field, values[field.key])
   })
+  if (isSpecCategory(category)) {
+    // Matches the website's Add Item insert: the display name is the Subject.
+    payload.name = name
+    payload.completion_eligible = true
+  }
   payload.dynamic_fields = writeDynamicFields({
     scanner_source: 'CollectorsHub Desktop scanner',
     scanner_confidence: confidence,
-  }, groups, values)
+  }, groups, values, { dropEmpty: isSpecCategory(category) })
 
   const { data, error } = await supabase.from('items').insert(payload).select(CATALOGUE_SELECT.join(',')).single()
   if (error) throw error
-  return data
+
+  const warnings = []
+  if (values.property_id) {
+    const { error: propertyError } = await supabase.from('item_properties').insert({ item_id: data.item_id, property_id: values.property_id })
+    if (propertyError) warnings.push(`Property link failed: ${propertyError.message}`)
+  }
+  warnings.push(...await attachItemImages(data.item_id, images))
+  return { ...data, warnings }
 }
 
 // Writes only the fields whose final value differs from the catalogue item, and
 // keeps any dynamic_fields keys the review table does not know about.
-export async function updateCatalogueItemFromReview({ item, category, values }) {
+export async function updateCatalogueItemFromReview({ item, category, values, images = [] }) {
   const groups = scanReviewGroups(category)
   const fields = groups.flatMap((group) => group.fields)
   const changed = fields.filter((field) => String(values[field.key] ?? '').trim() !== catalogueFieldValue(item, field))
-  if (!changed.length) return { item, changed: [] }
+  const warnings = []
+  let updated = item
 
-  const patch = {}
-  changed.filter((field) => field.column).forEach((field) => {
-    patch[field.column] = reviewColumnValue(field, values[field.key])
-  })
-  if (changed.some((field) => field.path)) {
-    patch.dynamic_fields = writeDynamicFields(item.dynamic_fields, groups, values)
+  if (changed.length) {
+    const patch = {}
+    changed.filter((field) => field.column).forEach((field) => {
+      patch[field.column] = reviewColumnValue(field, values[field.key])
+    })
+    if (isSpecCategory(category) && changed.some((field) => field.key === 'subject')) patch.name = itemNameFromValues(category, values)
+    if (changed.some((field) => field.path)) {
+      patch.dynamic_fields = writeDynamicFields(item.dynamic_fields, groups, values, { dropEmpty: isSpecCategory(category) })
+    }
+    if (Object.keys(patch).length) updated = await updateCatalogueItemRecord(item.item_id, patch)
+
+    if (changed.some((field) => field.taxonomy === 'property')) {
+      const { error: deleteError } = await supabase.from('item_properties').delete().eq('item_id', item.item_id)
+      if (deleteError) warnings.push(`Property link update failed: ${deleteError.message}`)
+      else if (values.property_id) {
+        const { error: insertError } = await supabase.from('item_properties').insert({ item_id: item.item_id, property_id: values.property_id })
+        if (insertError) warnings.push(`Property link update failed: ${insertError.message}`)
+      }
+    }
   }
 
-  const updated = await updateCatalogueItemRecord(item.item_id, patch)
-  return { item: updated, changed: changed.map((field) => field.key) }
+  warnings.push(...await attachItemImages(item.item_id, images))
+  return { item: updated, changed: changed.map((field) => field.key), warnings }
+}
+
+// ---------------------------------------------------------------------------
+// Cascading taxonomy for the Sports Cards review, loaded exactly as the
+// website's Add Item form loads it:
+//   Subcategory  <- subcategories.category_id
+//   Franchise    <- franchise_subcategory links (+ franchises already used by
+//                   items in the subcategory)
+//   Subfranchise <- subsets.franchise_id
+//   Property     <- properties.franchise_id (+ subset_id when one is chosen)
+//   Item Type    <- item_types.subcategory_id
+//   Publisher    <- publishers (unscoped)
+
+function optionRows(data, idKey) {
+  return (data || []).map((row) => ({ id: row[idKey], name: String(row.name || '').trim() })).filter((row) => row.id && row.name)
+}
+
+async function franchiseOptions(subcategoryId) {
+  const [links, used] = await Promise.all([
+    supabase.from('franchise_subcategory').select('franchise_id').eq('subcategory_id', subcategoryId),
+    supabase.from('items').select('franchise_id').eq('subcategory_id', subcategoryId).not('franchise_id', 'is', null).limit(1000),
+  ])
+  const ids = [...new Set([...(links.data || []), ...(used.data || [])].map((row) => row.franchise_id).filter(Boolean))]
+  if (!ids.length) return []
+  const { data } = await supabase.from('franchises').select('franchise_id, name').in('franchise_id', ids).order('name')
+  // Duplicate franchise names exist; keep one row per name.
+  const byName = new Map()
+  optionRows(data, 'franchise_id').forEach((row) => {
+    if (!byName.has(row.name.toLowerCase())) byName.set(row.name.toLowerCase(), row)
+  })
+  return [...byName.values()]
+}
+
+export async function loadSportsTaxonomyOptions({ category = 'Sports Cards', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
+  const categoryId = await categoryIdForName(category)
+  const propertyQuery = () => {
+    let query = supabase.from('properties').select('property_id, name').eq('franchise_id', franchiseId).order('name')
+    if (subsetId) query = query.eq('subset_id', subsetId)
+    return query.then(({ data }) => optionRows(data, 'property_id'))
+  }
+  const [subcategory, franchise, subset, property, itemType, publisher] = await Promise.all([
+    categoryId ? supabase.from('subcategories').select('subcategory_id, name').eq('category_id', categoryId).order('name').then(({ data }) => optionRows(data, 'subcategory_id')) : [],
+    subcategoryId ? franchiseOptions(subcategoryId) : [],
+    franchiseId ? supabase.from('subsets').select('subset_id, name').eq('franchise_id', franchiseId).order('name').then(({ data }) => optionRows(data, 'subset_id')) : [],
+    franchiseId ? propertyQuery() : [],
+    subcategoryId ? supabase.from('item_types').select('item_type_id, name').eq('subcategory_id', subcategoryId).order('name').then(({ data }) => optionRows(data, 'item_type_id')) : [],
+    supabase.from('publishers').select('publisher_id, name').order('name').then(({ data }) => optionRows(data, 'publisher_id')),
+  ])
+  return { subcategory, franchise, subset, property, item_type: itemType, publisher }
+}
+
+// Names for a catalogue item's current taxonomy ids (which may sit outside the
+// options currently loaded for the review's selected parents).
+export async function loadTaxonomyNames(item) {
+  if (!item) return {}
+  const lookups = [
+    ['subcategory', 'subcategories', 'subcategory_id', item.subcategory_id],
+    ['franchise', 'franchises', 'franchise_id', item.franchise_id],
+    ['subset', 'subsets', 'subset_id', item.subset_id],
+    ['property', 'properties', 'property_id', item._property_id],
+    ['item_type', 'item_types', 'item_type_id', item.item_type_id],
+    ['publisher', 'publishers', 'publisher_id', item.publisher_id],
+  ].filter(([, , , id]) => id)
+  const results = await Promise.all(lookups.map(([level, table, idKey, id]) => (
+    supabase.from(table).select(`${idKey}, name`).eq(idKey, id).maybeSingle().then(({ data }) => [level, data?.name || ''])
+  )))
+  return Object.fromEntries(results)
+}
+
+export async function loadItemPropertyId(itemId) {
+  if (!itemId) return ''
+  const { data } = await supabase.from('item_properties').select('property_id').eq('item_id', itemId).limit(1).maybeSingle()
+  return data?.property_id || ''
+}
+
+// Inline "+ New" for a taxonomy level, mirroring the website's inline create
+// (and reusing an existing row with the same name where the website does).
+export async function createTaxonomyOption(level, name, { category = 'Sports Cards', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
+  const clean = String(name || '').trim()
+  if (!clean) throw new Error('Enter a name first.')
+  if (level === 'subcategory') {
+    const categoryId = await categoryIdForName(category)
+    if (!categoryId) throw new Error(`Category "${category}" was not found.`)
+    const { data, error } = await supabase.from('subcategories').insert({ name: clean, category_id: categoryId }).select('subcategory_id, name').single()
+    if (error) throw error
+    return { id: data.subcategory_id, name: data.name }
+  }
+  if (level === 'franchise') {
+    if (!subcategoryId) throw new Error('Select a Subcategory first.')
+    const { data: existing } = await supabase.from('franchises').select('franchise_id, name').ilike('name', clean).limit(1).maybeSingle()
+    let row = existing
+    if (!row) {
+      const { data, error } = await supabase.from('franchises').insert({ name: clean }).select('franchise_id, name').single()
+      if (error) throw error
+      row = data
+    }
+    await supabase.from('franchise_subcategory').upsert({ franchise_id: row.franchise_id, subcategory_id: subcategoryId }, { onConflict: 'franchise_id,subcategory_id', ignoreDuplicates: true })
+    return { id: row.franchise_id, name: row.name }
+  }
+  if (level === 'subset') {
+    if (!franchiseId) throw new Error('Select a Franchise first.')
+    const { data, error } = await supabase.from('subsets').insert({ name: clean, franchise_id: franchiseId }).select('subset_id, name').single()
+    if (error) throw error
+    return { id: data.subset_id, name: data.name }
+  }
+  if (level === 'property') {
+    if (!franchiseId) throw new Error('Select a Franchise first.')
+    const { data, error } = await supabase.from('properties').insert({ name: clean, franchise_id: franchiseId, subset_id: subsetId || null }).select('property_id, name').single()
+    if (error) throw error
+    return { id: data.property_id, name: data.name }
+  }
+  if (level === 'item_type') {
+    if (!subcategoryId) throw new Error('Select a Subcategory first.')
+    const { data, error } = await supabase.from('item_types').insert({ name: clean, subcategory_id: subcategoryId }).select('item_type_id, name').single()
+    if (error) throw error
+    return { id: data.item_type_id, name: data.name }
+  }
+  if (level === 'publisher') {
+    const { data: existing } = await supabase.from('publishers').select('publisher_id, name').ilike('name', clean).limit(1).maybeSingle()
+    if (existing) return { id: existing.publisher_id, name: existing.name }
+    const { data, error } = await supabase.from('publishers').insert({ name: clean }).select('publisher_id, name').single()
+    if (error) throw error
+    return { id: data.publisher_id, name: data.name }
+  }
+  throw new Error(`Unknown taxonomy level: ${level}`)
+}
+
+function scanTokens(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean)
+}
+
+// Picks the taxonomy option that best matches scanned text, e.g. "Contenders
+// Football" -> "Panini Contenders Football". Returns '' when nothing is close.
+export function matchTaxonomyOption(options = [], text = '') {
+  const wanted = scanTokens(text)
+  if (!wanted.length) return ''
+  let best = null
+  options.forEach((option) => {
+    const tokens = scanTokens(option.name)
+    if (!tokens.length) return
+    const shared = wanted.filter((token) => tokens.includes(token)).length
+    if (!shared) return
+    const exact = tokens.join(' ') === wanted.join(' ')
+    // Share of the option's words found in the scan, and of the scan's in the option.
+    const score = (exact ? 10 : 0) + shared / tokens.length + shared / wanted.length
+    if (!best || score > best.score) best = { id: option.id, score, covers: shared / tokens.length }
+  })
+  // Most of the option's own words must be in the scan, so that "Football" alone
+  // never picks "Panini Contenders Football"...
+  if (best && best.covers >= 0.6) return best.id
+  // ...unless exactly one option contains every scanned word ("Football" ->
+  // "American Football" when no other sport mentions football).
+  const containing = options.filter((option) => {
+    const tokens = scanTokens(option.name)
+    return wanted.every((token) => tokens.includes(token))
+  })
+  return containing.length === 1 ? containing[0].id : ''
 }

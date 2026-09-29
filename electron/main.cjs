@@ -1042,6 +1042,14 @@ function getOcrWorker() {
   return ocrWorkerPromise
 }
 
+// Returns a saved scan's bytes so the renderer can upload it as a catalogue image.
+ipcMain.handle('scanner:read-image', async (_event, image) => {
+  const imagePath = resolveScanImagePath(image)
+  const ext = path.extname(imagePath).slice(1).toLowerCase() || 'jpg'
+  const mime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff' }[ext] || 'application/octet-stream'
+  return { data: await readFile(imagePath), ext, mime }
+})
+
 ipcMain.handle('scanner:analyze-card', async (_event, image, options = {}) => {
   const imagePath = resolveScanImagePath(image)
   const worker = await getOcrWorker()

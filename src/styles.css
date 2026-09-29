@@ -3104,6 +3104,80 @@ button:disabled {
   outline: 2px solid rgba(214, 166, 50, 0.25);
 }
 
+.scan-review-table select {
+  background: #ffffff;
+  border: 1px solid #d5dfeb;
+  border-radius: 6px;
+  color: #07142b;
+  font: inherit;
+  font-size: 13px;
+  min-height: 34px;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.scan-review-table select:disabled {
+  background: #f4f6f8;
+  color: #9aa8bb;
+}
+
+.scan-review-taxonomy {
+  display: grid;
+  gap: 4px;
+}
+
+.scan-review-table .scan-review-link-button {
+  background: none;
+  border: 0;
+  color: #8a5d00;
+  justify-self: start;
+  margin: 0;
+  min-height: 0;
+  padding: 2px 0;
+}
+
+.scan-review-inline-create {
+  display: flex;
+  gap: 4px;
+}
+
+.scan-review-inline-create input {
+  flex: 1;
+}
+
+.scan-review-table .scan-review-inline-create button {
+  margin-top: 0;
+  min-height: 34px;
+}
+
+.scan-review-note {
+  color: #8a5d00;
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+.scan-review-images-option {
+  align-items: center;
+  border-top: 1px solid #e3e8ef;
+  color: #34455f;
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 14px 8px 4px;
+}
+
+.scan-review-images-option strong {
+  color: #8a5d00;
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .scan-review-footer {
   border-top: 1px solid #e3e8ef;
   display: flex;

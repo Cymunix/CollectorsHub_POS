@@ -39,6 +39,12 @@ import {
   identifyScannedDraft,
   catalogueFieldValue,
   createCatalogueItemFromReview,
+  createTaxonomyOption,
+  isSpecCategory,
+  loadItemPropertyId,
+  loadSportsTaxonomyOptions,
+  loadTaxonomyNames,
+  matchTaxonomyOption,
   findDuplicateCatalogueItems,
   scanReviewGroups,
   scannedFieldValue,
@@ -2014,7 +2020,7 @@ function ScanImageSlot({ label, image, onPick }) {
 function draftIdentityKey(draft) {
   const values = draft.review?.values || {}
   const meta = draft.metadata || {}
-  const name = String(values.name || meta.cardName || meta.player || meta.name || '').trim().toLowerCase()
+  const name = String(values.name || values.subject || meta.cardName || meta.player || meta.name || '').trim().toLowerCase()
   const number = String(values.card_number || meta.cardNumber || '').trim().toLowerCase()
   const year = String(values.release_year || meta.year || meta.releaseYear || '').trim()
   if (!name || !(number || year)) return ''
@@ -2143,6 +2149,20 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore }) {
 const SCAN_REVIEW_CATEGORIES = ['Trading Cards', 'Sports Cards', 'Coins', 'LEGO / Building Blocks', 'Comics', 'Video Games']
 // Scan Intake form defaults; not a real reading when the catalogue is blank.
 const SCAN_PLACEHOLDER_VALUES = new Set(['No', 'Base', 'Available'])
+// Changing a taxonomy level invalidates the levels scoped beneath it.
+const TAXONOMY_CHILDREN = {
+  subcategory_id: ['franchise_id', 'subset_id', 'property_id', 'item_type_id'],
+  franchise_id: ['subset_id', 'property_id'],
+  subset_id: ['property_id'],
+}
+const TAXONOMY_PARENT_READY = {
+  subcategory: () => true,
+  franchise: (values) => Boolean(values.subcategory_id),
+  subset: (values) => Boolean(values.franchise_id),
+  property: (values) => Boolean(values.franchise_id),
+  item_type: (values) => Boolean(values.subcategory_id),
+  publisher: () => true,
+}
 
 function sameReviewValue(a, b) {
   return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
@@ -2152,14 +2172,33 @@ function reviewFields(category) {
   return scanReviewGroups(category).flatMap((group) => group.fields)
 }
 
-// Keep what the catalogue already has; fill blanks from the scan.
+function reviewItemName(category, values) {
+  return String((isSpecCategory(category) ? values.subject : values.name) || '').trim()
+}
+
+// Keep what the catalogue already has; fill blanks from the scan. Taxonomy
+// levels start empty for new items and are resolved against the live
+// taxonomy once its options load.
 function initialReviewValues(draft, category, matchItem) {
   return Object.fromEntries(reviewFields(category).map((field) => {
     const current = catalogueFieldValue(matchItem, field)
+    if (field.taxonomy) return [field.key, matchItem ? current : '']
     const scanned = scannedFieldValue(draft, field)
     if (!matchItem) return [field.key, scanned]
     return [field.key, current || (SCAN_PLACEHOLDER_VALUES.has(scanned) ? '' : scanned)]
   }))
+}
+
+async function loadScanImageBlobs(draft) {
+  const api = adminDesktopApi()
+  if (typeof api.readScanImage !== 'function') return []
+  const images = []
+  for (const [image, position] of [[draft.frontImage, 0], [draft.backImage, 1]]) {
+    if (!image?.path) continue
+    const file = await api.readScanImage(image)
+    images.push({ position, ext: file.ext, blob: new Blob([file.data], { type: file.mime }) })
+  }
+  return images
 }
 
 function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
@@ -2175,9 +2214,19 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const matchItem = matchCandidate?.item || null
   const [values, setValues] = useState(() => saved?.values || initialReviewValues(draft, category, matchItem))
   const [showAll, setShowAll] = useState(!matchItem)
+  const [attachImages, setAttachImages] = useState(saved?.attachImages ?? !matchItem)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const spec = isSpecCategory(category)
   const groups = scanReviewGroups(category)
+  // Taxonomy picks the reviewer made; auto-selection never overrides these.
+  const touchedRef = useRef(new Set(saved ? Object.keys(saved.values || {}) : []))
+  const [options, setOptions] = useState({})
+  const [creating, setCreating] = useState(null)
+  const [matchExtras, setMatchExtras] = useState({ itemId: '', propertyId: '', names: {} })
+  const extrasReady = !matchItem || matchExtras.itemId === matchItem.item_id
+  const reviewItem = matchItem ? { ...matchItem, _property_id: extrasReady ? matchExtras.propertyId : '' } : null
+  const hasScanImages = Boolean(draft.frontImage?.path || draft.backImage?.path)
 
   useEffect(() => {
     function onKey(event) { if (event.key === 'Escape' && !busy) onClose() }
@@ -2185,52 +2234,158 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [busy, onClose])
 
+  // Options for each taxonomy level, scoped by the levels above it.
+  useEffect(() => {
+    if (!spec) return undefined
+    let cancelled = false
+    loadSportsTaxonomyOptions({ category, subcategoryId: values.subcategory_id, franchiseId: values.franchise_id, subsetId: values.subset_id })
+      .then((next) => { if (!cancelled) setOptions(next) })
+      .catch((err) => { if (!cancelled) setError(err.message || 'Could not load the catalogue taxonomy.') })
+    return () => { cancelled = true }
+  }, [spec, category, values.subcategory_id, values.franchise_id, values.subset_id])
+
+  // The matched item's Property link and taxonomy names.
+  useEffect(() => {
+    if (!spec || !matchItem) return undefined
+    let cancelled = false
+    loadItemPropertyId(matchItem.item_id).then(async (propertyId) => {
+      const names = await loadTaxonomyNames({ ...matchItem, _property_id: propertyId })
+      if (cancelled) return
+      setMatchExtras({ itemId: matchItem.item_id, propertyId, names })
+      if (propertyId) {
+        setValues((current) => (current.property_id || touchedRef.current.has('property_id') ? current : { ...current, property_id: propertyId }))
+      }
+    }).catch(() => {
+      if (!cancelled) setMatchExtras({ itemId: matchItem.item_id, propertyId: '', names: {} })
+    })
+    return () => { cancelled = true }
+  }, [spec, matchItem?.item_id])
+
+  // Fill empty taxonomy levels from the scan ("NFL", "Contenders Football", ...)
+  // or pick the only option, like the website's auto-select rule.
+  useEffect(() => {
+    if (!spec || !extrasReady) return
+    setValues((current) => {
+      let next = current
+      groups.flatMap((group) => group.fields).filter((field) => field.taxonomy).forEach((field) => {
+        const list = options[field.taxonomy]
+        if (!list || next[field.key] || touchedRef.current.has(field.key) || !TAXONOMY_PARENT_READY[field.taxonomy](next)) return
+        const pick = matchTaxonomyOption(list, scannedFieldValue(draft, field)) || (list.length === 1 && field.taxonomy !== 'publisher' ? list[0].id : '')
+        if (pick) next = { ...next, [field.key]: pick }
+      })
+      return next
+    })
+  }, [spec, options, extrasReady])
+
+  function taxonomyName(level, id) {
+    if (!id) return ''
+    return options[level]?.find((option) => option.id === id)?.name
+      || (reviewItem && catalogueFieldValue(reviewItem, { taxonomy: level, column: `${level}_id`, key: `${level}_id` }) === id ? matchExtras.names[level] : '')
+      || 'Unknown'
+  }
+
   function chooseMatch(nextId, nextCandidate = null) {
     const nextItem = nextCandidate?.item || candidates.find((candidate) => candidate.item.item_id === nextId)?.item || null
     if (nextCandidate && !candidates.some((candidate) => candidate.item.item_id === nextId)) {
       setExtraCandidates((current) => [...current, nextCandidate])
     }
+    touchedRef.current = new Set()
     setDuplicates(null)
     setMatchId(nextId)
     setValues(initialReviewValues(draft, category, nextItem))
     setShowAll(!nextItem)
+    setAttachImages(!nextItem)
   }
 
   function chooseCategory(nextCategory) {
     setCategory(nextCategory)
+    setOptions({})
     // Keep edits already made; seed any fields the new category adds.
     setValues((current) => ({ ...initialReviewValues(draft, nextCategory, matchItem), ...current }))
   }
 
   function setValue(key, value) {
-    setValues((current) => ({ ...current, [key]: value }))
+    touchedRef.current.add(key)
+    setValues((current) => {
+      const next = { ...current, [key]: value }
+      if (TAXONOMY_CHILDREN[key] && current[key] !== value) {
+        TAXONOMY_CHILDREN[key].forEach((child) => {
+          next[child] = ''
+          touchedRef.current.delete(child)
+        })
+      }
+      return next
+    })
+  }
+
+  async function createOption(field, name) {
+    setError('')
+    try {
+      const created = await createTaxonomyOption(field.taxonomy, name, {
+        category,
+        subcategoryId: values.subcategory_id,
+        franchiseId: values.franchise_id,
+        subsetId: values.subset_id,
+      })
+      setOptions((current) => ({
+        ...current,
+        [field.taxonomy]: [...(current[field.taxonomy] || []).filter((option) => option.id !== created.id), created].sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      setValue(field.key, created.id)
+      setCreating(null)
+    } catch (err) {
+      setError(err.message || `Could not create ${field.label}.`)
+    }
   }
 
   const rows = groups.map((group) => ({
     ...group,
     rows: group.fields.map((field) => {
-      const current = catalogueFieldValue(matchItem, field)
+      const current = catalogueFieldValue(reviewItem, field)
       const scanned = scannedFieldValue(draft, field)
       const finalValue = String(values[field.key] ?? '')
+      if (field.taxonomy) {
+        const resolved = matchTaxonomyOption(options[field.taxonomy] || [], scanned)
+        const currentName = taxonomyName(field.taxonomy, current)
+        const scanAgrees = !scanned || !current || resolved === current || Boolean(matchTaxonomyOption([{ id: 'current', name: currentName }], scanned))
+        return {
+          field,
+          current,
+          currentLabel: currentName,
+          scanned,
+          resolved,
+          finalValue,
+          conflict: Boolean(reviewItem && extrasReady && !scanAgrees),
+          fills: Boolean(reviewItem && scanned && !current && (resolved || scanned)),
+          edited: Boolean(reviewItem) && finalValue !== current,
+        }
+      }
       const scanIsReading = scanned && !(SCAN_PLACEHOLDER_VALUES.has(scanned) && !current)
       return {
         field,
         current,
+        currentLabel: current,
         scanned,
         finalValue,
-        conflict: Boolean(matchItem && scanIsReading && current && current.toLowerCase() !== scanned.toLowerCase()),
-        fills: Boolean(matchItem && scanIsReading && !current),
-        edited: Boolean(matchItem) && finalValue.trim() !== current,
+        conflict: Boolean(reviewItem && scanIsReading && current && current.toLowerCase() !== scanned.toLowerCase()),
+        fills: Boolean(reviewItem && scanIsReading && !current),
+        edited: Boolean(reviewItem) && finalValue.trim() !== current,
       }
     }).filter((row) => showAll || row.conflict || row.fills || row.edited),
   })).filter((group) => group.rows.length)
 
   const allRows = rows.flatMap((group) => group.rows)
-  const changeCount = matchItem ? reviewFields(category).filter((field) => String(values[field.key] ?? '').trim() !== catalogueFieldValue(matchItem, field)).length : 0
+  const changeCount = reviewItem ? reviewFields(category).filter((field) => String(values[field.key] ?? '').trim() !== catalogueFieldValue(reviewItem, field)).length : 0
   const conflictCount = allRows.filter((row) => row.conflict).length
+  const itemName = reviewItemName(category, values)
+  const missingRequired = !itemName || (spec && !values.subcategory_id)
+
+  function reviewSnapshot(extra = {}) {
+    return { category, matchId, values, extraCandidates, attachImages, savedAt: new Date().toISOString(), ...extra }
+  }
 
   async function saveForLater() {
-    await onUpdateDraft(draft.id, { category, review: { category, matchId, values, extraCandidates, savedAt: new Date().toISOString() } })
+    await onUpdateDraft(draft.id, { category, review: reviewSnapshot() })
     onClose()
   }
 
@@ -2250,38 +2405,55 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     }
   }
 
+  function duplicateCheckValues() {
+    if (!spec) return values
+    return {
+      name: values.subject,
+      card_number: values.card_number,
+      release_year: values.release_year,
+      upc: values.upc,
+      set_name: taxonomyName('property', values.property_id) || taxonomyName('subset', values.subset_id),
+      manufacturer: taxonomyName('publisher', values.publisher_id),
+    }
+  }
+
   function addAsNewItem({ skipDuplicateCheck = false } = {}) {
     return run('create', async () => {
       if (!skipDuplicateCheck) {
         // Checked live: another scan in the queue may have added this item
         // since this draft was analysed. The selected match is excluded when
         // the reviewer deliberately chose "Add as New Item Instead".
-        const found = (await findDuplicateCatalogueItems(values)).filter((candidate) => candidate.item.item_id !== matchId)
+        const found = (await findDuplicateCatalogueItems(duplicateCheckValues())).filter((candidate) => candidate.item.item_id !== matchId)
         if (found.length) {
           setDuplicates(found)
           return false
         }
       }
-      const item = await createCatalogueItemFromReview({ category, values, confidence: draft.scanAnalysis?.confidence ?? null })
+      const images = attachImages ? await loadScanImageBlobs(draft) : []
+      const item = await createCatalogueItemFromReview({ category, values, confidence: draft.scanAnalysis?.confidence ?? null, images })
       await onUpdateDraft(draft.id, {
         category,
         status: 'Catalogue Item Created',
         createdItemId: item?.item_id || null,
-        review: { category, matchId: '', values, savedAt: new Date().toISOString() },
-        audit: [...(draft.audit || []), { action: 'create', itemId: item?.item_id, at: new Date().toISOString() }],
+        analysisError: item?.warnings?.length ? item.warnings.join(' ') : '',
+        review: reviewSnapshot({ matchId: '' }),
+        audit: [...(draft.audit || []), { action: 'create', itemId: item?.item_id, images: images.length, at: new Date().toISOString() }],
       })
     })
   }
 
   function updateMatchedItem() {
     return run('update', async () => {
-      const result = await updateCatalogueItemFromReview({ item: matchItem, category, values })
+      const images = attachImages ? await loadScanImageBlobs(draft) : []
+      const result = await updateCatalogueItemFromReview({ item: reviewItem, category, values, images })
+      const updated = result.changed.length || images.length
       await onUpdateDraft(draft.id, {
         category,
-        status: result.changed.length ? 'Matched and Updated' : 'Matched',
-        matchedItemId: matchItem.item_id,
-        review: { category, matchId, values, savedAt: new Date().toISOString() },
-        audit: [...(draft.audit || []), { action: result.changed.length ? 'update_from_scan' : 'match', itemId: matchItem.item_id, fields: result.changed, at: new Date().toISOString() }],
+        status: updated ? 'Matched and Updated' : 'Matched',
+        matchedItemId: reviewItem.item_id,
+        analysisError: result.warnings?.length ? result.warnings.join(' ') : '',
+        review: reviewSnapshot(),
+        audit: [...(draft.audit || []), { action: updated ? 'update_from_scan' : 'match', itemId: reviewItem.item_id, fields: result.changed, images: images.length, at: new Date().toISOString() }],
       })
     })
   }
@@ -2297,6 +2469,75 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     })
   }
 
+  function renderFinalInput(row) {
+    const { field, finalValue } = row
+    if (field.taxonomy) {
+      const list = options[field.taxonomy] || []
+      const choices = finalValue && !list.some((option) => option.id === finalValue)
+        ? [...list, { id: finalValue, name: taxonomyName(field.taxonomy, finalValue) }]
+        : list
+      const ready = TAXONOMY_PARENT_READY[field.taxonomy](values)
+      return (
+        <div className="scan-review-taxonomy">
+          <select value={finalValue} onChange={(event) => setValue(field.key, event.target.value)} disabled={!ready}>
+            <option value="">{ready ? 'None' : 'Select the level above first'}</option>
+            {choices.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+          </select>
+          {creating?.key === field.key ? (
+            <span className="scan-review-inline-create">
+              <input autoFocus value={creating.name} onChange={(event) => setCreating({ ...creating, name: event.target.value })} onKeyDown={(event) => {
+                if (event.key === 'Enter') { event.preventDefault(); createOption(field, creating.name) }
+                if (event.key === 'Escape') { event.stopPropagation(); setCreating(null) }
+              }} placeholder={`New ${field.label}`} />
+              <button type="button" onClick={() => createOption(field, creating.name)} disabled={!creating.name.trim()}>Save</button>
+              <button type="button" onClick={() => setCreating(null)}>Cancel</button>
+            </span>
+          ) : ready ? (
+            <button type="button" className="scan-review-link-button" onClick={() => setCreating({ key: field.key, name: row.resolved ? '' : row.scanned })}>+ New</button>
+          ) : null}
+        </div>
+      )
+    }
+    if (field.options) {
+      const choices = finalValue && !field.options.includes(finalValue) ? [...field.options, finalValue] : field.options
+      return (
+        <select value={finalValue} onChange={(event) => setValue(field.key, event.target.value)}>
+          <option value="">— Select —</option>
+          {choices.map((option) => <option key={option} value={option}>{option}</option>)}
+        </select>
+      )
+    }
+    return field.multiline
+      ? <textarea value={finalValue} onChange={(event) => setValue(field.key, event.target.value)} rows={2} />
+      : <input value={finalValue} onChange={(event) => setValue(field.key, event.target.value)} type={field.type === 'number' ? 'number' : 'text'} />
+  }
+
+  function renderScanned(row) {
+    const { field, scanned, finalValue } = row
+    if (!scanned) return <span className="scan-review-value">—</span>
+    if (field.taxonomy) {
+      const ready = TAXONOMY_PARENT_READY[field.taxonomy](values)
+      return (
+        <>
+          <span className="scan-review-value">{scanned}</span>
+          {row.resolved && row.resolved !== finalValue ? <button type="button" onClick={() => setValue(field.key, row.resolved)}>Use scanned</button> : null}
+          {!row.resolved && ready ? (
+            <>
+              <small className="scan-review-note">Not in the catalogue yet</small>
+              <button type="button" onClick={() => createOption(field, scanned)}>+ Create “{scanned}”</button>
+            </>
+          ) : null}
+        </>
+      )
+    }
+    return (
+      <>
+        <span className="scan-review-value">{scanned}</span>
+        {!sameReviewValue(finalValue, scanned) ? <button type="button" onClick={() => setValue(field.key, scanned)}>Use scanned</button> : null}
+      </>
+    )
+  }
+
   return (
     <div className="scan-review-modal" role="dialog" aria-modal="true" aria-labelledby="scan-review-title">
       <section>
@@ -2306,8 +2547,8 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
             {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back scan" /> : null}
           </div>
           <div>
-            <p className="admin-kicker">Scan review</p>
-            <h2 id="scan-review-title">{String(values.name || '').trim() || scanDraftTitle(draft)}</h2>
+            <p className="admin-kicker">Scan review{spec ? ` · ${category} spec` : ''}</p>
+            <h2 id="scan-review-title">{itemName || scanDraftTitle(draft)}</h2>
             <div className="scan-review-controls">
               <label>Category
                 <select value={category} onChange={(event) => chooseCategory(event.target.value)}>
@@ -2391,39 +2632,41 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
                     <th scope="row">{row.field.label}{row.field.required ? ' *' : ''}</th>
                     {matchItem ? (
                       <td>
-                        <span className="scan-review-value">{row.current || '—'}</span>
+                        <span className="scan-review-value">{row.currentLabel || '—'}</span>
                         {row.conflict && !sameReviewValue(row.finalValue, row.current) ? <button type="button" onClick={() => setValue(row.field.key, row.current)}>Keep catalogue</button> : null}
                       </td>
                     ) : null}
-                    <td>
-                      <span className="scan-review-value">{row.scanned || '—'}</span>
-                      {row.scanned && !sameReviewValue(row.finalValue, row.scanned) ? <button type="button" onClick={() => setValue(row.field.key, row.scanned)}>Use scanned</button> : null}
-                    </td>
-                    <td>
-                      {row.field.multiline
-                        ? <textarea value={row.finalValue} onChange={(event) => setValue(row.field.key, event.target.value)} rows={2} />
-                        : <input value={row.finalValue} onChange={(event) => setValue(row.field.key, event.target.value)} />}
-                    </td>
+                    <td>{renderScanned(row)}</td>
+                    <td>{renderFinalInput(row)}</td>
                   </tr>
                 ))}
               </tbody>
             ))}
           </table>
           {!allRows.length ? <EmptyAdminState text="The scan agrees with the catalogue item. Tick Show all fields to edit anything else." /> : null}
+          {hasScanImages ? (
+            <label className="scan-review-images-option">
+              <input type="checkbox" checked={attachImages} onChange={(event) => setAttachImages(event.target.checked)} />
+              <span>
+                <strong>Images</strong>
+                {matchItem ? 'Add the front and back scans to this catalogue item' : 'Use the front and back scans as the catalogue images'}
+              </span>
+            </label>
+          ) : null}
         </div>
 
         <footer className="scan-review-footer">
           <button type="button" onClick={saveForLater} disabled={Boolean(busy)}>Save &amp; Close</button>
           {matchItem ? (
             <>
-              <button type="button" onClick={() => addAsNewItem()} disabled={Boolean(busy)}>{busy === 'create' ? 'Checking...' : 'Add as New Item Instead'}</button>
+              <button type="button" onClick={() => addAsNewItem()} disabled={Boolean(busy) || missingRequired}>{busy === 'create' ? 'Checking...' : 'Add as New Item Instead'}</button>
               <button type="button" onClick={() => linkToItem(matchItem)} disabled={Boolean(busy)}>{busy === 'link' ? 'Linking...' : 'Link Without Changes'}</button>
-              <button className="admin-gold-button" type="button" onClick={updateMatchedItem} disabled={Boolean(busy)}>
-                {busy === 'update' ? 'Saving...' : changeCount ? `Approve & Update Item (${changeCount})` : 'Approve Match'}
+              <button className="admin-gold-button" type="button" onClick={updateMatchedItem} disabled={Boolean(busy) || !extrasReady}>
+                {busy === 'update' ? 'Saving...' : changeCount ? `Approve & Update Item (${changeCount})` : attachImages && hasScanImages ? 'Approve & Add Images' : 'Approve Match'}
               </button>
             </>
           ) : (
-            <button className="admin-gold-button" type="button" onClick={() => addAsNewItem()} disabled={Boolean(busy) || !String(values.name || '').trim()}>
+            <button className="admin-gold-button" type="button" onClick={() => addAsNewItem()} disabled={Boolean(busy) || missingRequired} title={missingRequired ? (spec ? 'Subject (player) and Subcategory (sport) are required.' : 'A name is required.') : undefined}>
               {busy === 'create' ? 'Checking...' : 'Approve & Add to Catalogue'}
             </button>
           )}

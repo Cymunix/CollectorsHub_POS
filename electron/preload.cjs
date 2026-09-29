@@ -21,4 +21,5 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   selectScanImages: () => ipcRenderer.invoke('scanner:select-images'),
   scanImage: (options) => ipcRenderer.invoke('scanner:scan-image', options),
   analyzeCardScan: (image, options) => ipcRenderer.invoke('scanner:analyze-card', image, options),
+  readScanImage: (image) => ipcRenderer.invoke('scanner:read-image', image),
 })
