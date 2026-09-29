@@ -1,6 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require('electron')
 const path = require('node:path')
-const { copyFile, mkdir, readFile, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, readFile, unlink, writeFile } = require('node:fs/promises')
 const { existsSync } = require('node:fs')
 const { pathToFileURL } = require('node:url')
 const { randomUUID } = require('node:crypto')
@@ -57,6 +57,11 @@ function getStoreFile() {
 
 function getScanDir() {
   return path.join(getDataDir(), 'scan-images')
+}
+
+function getScanImageUrl(fileName, filePath) {
+  if (isDev) return pathToFileURL(filePath).toString()
+  return `collectorshub-pos://scan-images/${encodeURIComponent(fileName)}`
 }
 
 function getEbayConfigFile() {
@@ -569,7 +574,7 @@ ipcMain.handle('scanner:select-images', async () => {
     copied.push({
       sourcePath,
       path: destinationPath,
-      url: pathToFileURL(destinationPath).toString(),
+      url: getScanImageUrl(fileName, destinationPath),
       fileName,
     })
   }
@@ -585,7 +590,9 @@ ipcMain.handle('scanner:scan-image', async () => {
   await mkdir(getScanDir(), { recursive: true })
   const fileName = `${Date.now()}-${randomUUID()}.jpg`
   const destinationPath = path.join(getScanDir(), fileName)
+  const transferPath = `${destinationPath}.wia.bmp`
   const escapedPath = destinationPath.replace(/'/g, "''")
+  const escapedTransferPath = transferPath.replace(/'/g, "''")
   const script = [
     "$ErrorActionPreference = 'Stop'",
     // Suppress the "Preparing modules for first use" progress record, which
@@ -607,10 +614,18 @@ ipcMain.handle('scanner:scan-image', async () => {
     "$device = $scanner.Connect()",
     "$item = $device.Items.Item(1)",
     "$dialog = New-Object -ComObject WIA.CommonDialog",
-    "$jpeg = '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}'",
+    "$jpeg = '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}'",
     "$image = $dialog.ShowTransfer($item, $jpeg, $false)",
     "if ($null -eq $image) { Write-Output (@{ canceled = $true; scannerName = $scannerName } | ConvertTo-Json -Compress); exit 0 }",
-    `$image.SaveFile('${escapedPath}')`,
+    `$image.SaveFile('${escapedTransferPath}')`,
+    "Add-Type -AssemblyName System.Drawing",
+    `$bitmap = [System.Drawing.Image]::FromFile('${escapedTransferPath}')`,
+    "try {",
+    `  $bitmap.Save('${escapedPath}', [System.Drawing.Imaging.ImageFormat]::Jpeg)`,
+    "} finally {",
+    "  $bitmap.Dispose()",
+    "}",
+    `Remove-Item -LiteralPath '${escapedTransferPath}' -Force -ErrorAction SilentlyContinue`,
     `Write-Output (@{ canceled = $false; path = '${escapedPath}'; scannerName = $scannerName } | ConvertTo-Json -Compress)`,
   ].join('; ')
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
@@ -629,11 +644,12 @@ ipcMain.handle('scanner:scan-image', async () => {
     return {
       canceled: false,
       path: destinationPath,
-      url: pathToFileURL(destinationPath).toString(),
+      url: getScanImageUrl(fileName, destinationPath),
       fileName,
       scannerName: result.scannerName || '',
     }
   } catch (error) {
+    await unlink(transferPath).catch(() => {})
     const timedOut = error.killed || error.signal
     const detail = timedOut
       ? 'Scanner acquisition timed out. Cancel the scanner dialog or try the scan again.'
@@ -645,6 +661,13 @@ ipcMain.handle('scanner:scan-image', async () => {
 app.whenReady().then(async () => {
   if (!isDev) {
     protocol.handle('collectorshub-pos', (request) => {
+      const url = new URL(request.url)
+      if (url.hostname === 'scan-images') {
+        const fileName = path.basename(decodeURIComponent(url.pathname.replace(/^\/+/, '')))
+        const filePath = path.join(getScanDir(), fileName)
+        return net.fetch(pathToFileURL(filePath).toString())
+      }
+
       const filePath = resolveDistPath(request.url)
       return net.fetch(pathToFileURL(filePath).toString())
     })
