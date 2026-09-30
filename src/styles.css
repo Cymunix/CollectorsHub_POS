@@ -7363,3 +7363,34 @@ button:disabled {
   font-weight: 900;
   padding: 2px 8px;
 }
+
+/* Supabase sign-in could not be renewed */
+.auth-expired-banner {
+  align-items: center;
+  background: #fff4e5;
+  border: 1px solid #f0b35a;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(11, 17, 27, 0.18);
+  color: #5c3b00;
+  display: flex;
+  font-size: 14px;
+  gap: 14px;
+  left: 50%;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  position: fixed;
+  top: 12px;
+  transform: translateX(-50%);
+  z-index: 2000;
+}
+
+.auth-expired-banner button {
+  background: #d6a632;
+  border: 1px solid #d6a632;
+  border-radius: 8px;
+  color: #0b111b;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 6px 12px;
+  white-space: nowrap;
+}

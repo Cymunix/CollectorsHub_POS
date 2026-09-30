@@ -175,6 +175,11 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [authSession, setAuthSession] = useState(null)
+  // The app's own sign-in state outlives the Supabase token behind it. If the
+  // token can't be renewed (sleep, network drop, revoked), every save runs as
+  // an anonymous request and is refused by row-level security, so say so.
+  const [authExpired, setAuthExpired] = useState(false)
+  const signingOutRef = useRef(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState(emptyStore.sync)
   const [appVersion, setAppVersion] = useState('')
@@ -612,11 +617,52 @@ function App() {
     }
   }
 
+  // Keeps the Supabase sign-in alive while the app is open: renews on window
+  // focus and every minute (the library's own timer can miss a renewal after
+  // the PC sleeps), and flags when it can no longer be renewed.
+  useEffect(() => {
+    if (!isAuthenticated) return undefined
+    let cancelled = false
+    let hadSupabaseSession = false
+    const markExpired = () => { if (!cancelled && hadSupabaseSession && !signingOutRef.current) setAuthExpired(true) }
+
+    async function check() {
+      const { data } = await supabase.auth.getSession().catch(() => ({ data: {} }))
+      const current = data?.session
+      if (!current) { markExpired(); return }
+      hadSupabaseSession = true
+      // Renew when under five minutes remain.
+      if ((current.expires_at || 0) * 1000 - Date.now() < 5 * 60 * 1000) {
+        const { data: refreshed, error } = await supabase.auth.refreshSession().catch((refreshError) => ({ data: {}, error: refreshError }))
+        if (error || !refreshed?.session) { markExpired(); return }
+      }
+      if (!cancelled) setAuthExpired(false)
+    }
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session) { hadSupabaseSession = true; if (!cancelled) setAuthExpired(false) }
+      else if (event === 'SIGNED_OUT') markExpired()
+    })
+    check()
+    const timer = window.setInterval(check, 60 * 1000)
+    const onFocus = () => { check() }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      listener?.subscription?.unsubscribe()
+      window.clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [isAuthenticated])
+
   async function handleLogout() {
     const wasTransientStore = isTransientStoreSession(authSession)
+    signingOutRef.current = true
     try {
       await signOutSupabase()
     } finally {
+      signingOutRef.current = false
+      setAuthExpired(false)
       setAuthSession(null)
       setIsAuthenticated(false)
       if (wasTransientStore) {
@@ -732,18 +778,29 @@ function App() {
     )
   }
 
+  const expiredBanner = authExpired ? (
+    <div className="auth-expired-banner" role="alert">
+      <span><strong>Your sign-in has expired.</strong> Changes can't be saved until you sign in again.</span>
+      <button type="button" onClick={handleLogout}>Sign in again</button>
+    </div>
+  ) : null
+
   if (authSession?.type === 'platform_admin') {
     return (
-      <AdminWorkspace
-        session={authSession}
-        syncStatus={syncStatus}
-        onLogout={handleLogout}
-      />
+      <>
+        {expiredBanner}
+        <AdminWorkspace
+          session={authSession}
+          syncStatus={syncStatus}
+          onLogout={handleLogout}
+        />
+      </>
     )
   }
 
   return (
     <main className="app-shell">
+      {expiredBanner}
       <aside className="sidebar">
         <div className="brand-block">
           <img className="brand-logo" src="/collectorshub-logo.png" alt="CollectorsHub" />
