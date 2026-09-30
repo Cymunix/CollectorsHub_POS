@@ -3345,8 +3345,11 @@ button:disabled {
   border: 1px solid #f0d49a;
   border-radius: 8px;
   display: grid;
+  flex: 0 1 auto;
   gap: 8px;
   margin: 12px 20px 0;
+  max-height: min(260px, 32vh);
+  overflow: auto;
   padding: 12px 14px;
 }
 
@@ -3412,7 +3415,7 @@ button:disabled {
 }
 
 .scan-review-modal {
-  align-items: center;
+  align-items: stretch;
   background: rgba(11, 17, 27, 0.5);
   display: grid;
   inset: 0;
@@ -3434,8 +3437,10 @@ button:disabled {
      however many fields or notices are showing. */
   display: flex;
   flex-direction: column;
+  height: calc(100dvh - 48px);
   max-height: calc(100vh - 48px);
   max-width: 1180px;
+  min-height: 0;
   overflow: hidden;
   position: relative;
   width: 100%;
@@ -3532,6 +3537,7 @@ button:disabled {
 }
 
 .scan-review-table-wrap {
+  min-height: 0;
   overflow: auto;
   padding: 0 20px 12px;
 }
@@ -3716,8 +3722,10 @@ button:disabled {
 }
 
 .scan-review-footer {
+  background: #ffffff;
   border-top: 1px solid #e3e8ef;
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
