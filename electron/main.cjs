@@ -804,6 +804,8 @@ ipcMain.handle('scanner:select-images', async () => {
 // PowerShell took seconds and counted against the acquisition timeout.
 // Card crop + deskew helper, compiled into the scanner PowerShell session.
 const SCAN_CROP_SOURCE = readFileSync(path.join(__dirname, 'scanCrop.cs'), 'utf8')
+// WIA 2.0 sheet-feeder transfer (Epson FastFoto), compiled alongside it.
+const SCAN_FEED_SOURCE = readFileSync(path.join(__dirname, 'wiaFeed.cs'), 'utf8')
 // Always scan at 600 DPI: at the driver default (150) card text is too small
 // for OCR to read reliably.
 const SCAN_DPI = 600
@@ -822,7 +824,7 @@ const SCAN_DPI = 600
 //         carriage travel is set by the height.
 //   full: Full Bed / Large Item. Whole bed, general object detection.
 
-const scannerSession = new ScannerSession({ workDir: path.join(getDataDirSafe(), 'scanner'), cropSource: SCAN_CROP_SOURCE })
+const scannerSession = new ScannerSession({ workDir: path.join(getDataDirSafe(), 'scanner'), cropSource: SCAN_CROP_SOURCE, feedSource: SCAN_FEED_SOURCE })
 const CARD_REGION_IN = { width: 3.7, height: 3.7 }
 const DEFAULT_BED_IN = { width: 8.5, height: 11.68 }
 // WIA_IPS_CUR_INTENT: image type (colour) | WIA_INTENT_MAXIMIZE_QUALITY.
@@ -1064,6 +1066,237 @@ ipcMain.handle('scanner:recrop', async (_event, { image, rect } = {}) => {
     displayUrl: '',
     cropped: true,
     manualCrop: { x, y, width, height },
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Epson FastFoto stack scanning. The feeder scans both sides of every card in
+// one pass; pages arrive in order (side 1, side 2 per card) already cropped
+// and straightened. Here each pair is turned upright and sorted into
+// front/back using how much readable text each orientation has, then handed
+// to the renderer, which queues it for local AI recognition.
+
+// Scan strip centred on the feeder: fits a standard card either way round.
+const FEED_STRIP_IN = { width: 4, height: 4 }
+
+// Rotates a nativeImage clockwise by 0/90/180/270 degrees (BGRA bitmap copy).
+function rotateNativeImage(image, degrees) {
+  const turn = ((degrees % 360) + 360) % 360
+  if (!turn) return image
+  const { width, height } = image.getSize()
+  const source = image.toBitmap()
+  const target = Buffer.alloc(source.length)
+  const outWidth = turn === 180 ? width : height
+  const outHeight = turn === 180 ? height : width
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let tx
+      let ty
+      if (turn === 90) { tx = height - 1 - y; ty = x }
+      else if (turn === 180) { tx = width - 1 - x; ty = height - 1 - y }
+      else { tx = y; ty = width - 1 - x }
+      source.copy(target, (ty * outWidth + tx) * 4, (y * width + x) * 4, (y * width + x) * 4 + 4)
+    }
+  }
+  return nativeImage.createFromBitmap(target, { width: outWidth, height: outHeight })
+}
+
+async function rotateImageFile(filePath, degrees) {
+  if (!degrees || !filePath || !existsSync(filePath)) return
+  const image = nativeImage.createFromPath(filePath)
+  if (image.isEmpty()) return
+  const rotated = rotateNativeImage(image, degrees)
+  await writeFile(filePath, /\.png$/i.test(filePath) ? rotated.toPNG() : rotated.toJPEG(92))
+}
+
+// Confident, readable words in one orientation of a card side. Upside-down
+// or sideways text reads as a handful of low-confidence fragments.
+async function readableWordCount(image) {
+  const worker = await getOcrWorker()
+  const { data } = await worker.recognize(image.toPNG(), {}, { blocks: true, text: false })
+  let words = 0
+  for (const block of data.blocks || []) {
+    for (const paragraph of block.paragraphs || []) {
+      for (const line of paragraph.lines || []) {
+        for (const word of line.words || []) {
+          if (word.confidence >= 75 && /^[A-Za-z][A-Za-z'.-]{2,}$/.test(word.text)) words += 1
+        }
+      }
+    }
+  }
+  return words
+}
+
+// Scores the likely orientations of one side. Cards fed top edge first come
+// out upside down, so 180 is tried first; sideways only if neither reads.
+async function scoreSideOrientation(filePath) {
+  const image = nativeImage.createFromPath(filePath)
+  if (image.isEmpty()) return { best: null, lean: null, words: 0, scores: {} }
+  const small = image.resize({ width: Math.min(1000, image.getSize().width), quality: 'best' })
+  const scores = {}
+  for (const turn of [180, 0]) scores[turn] = await readableWordCount(rotateNativeImage(small, turn))
+  if (Math.max(scores[180], scores[0]) < 3) {
+    for (const turn of [90, 270]) scores[turn] = await readableWordCount(rotateNativeImage(small, turn))
+  }
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1])
+  const [bestTurn, bestWords] = ranked[0]
+  const second = ranked[1]?.[1] || 0
+  const confident = bestWords >= 3 && bestWords >= second * 2
+  // A weaker reading that still points one way (e.g. a photo-heavy front).
+  const lean = bestWords > second ? Number(bestTurn) : null
+  return { best: confident ? Number(bestTurn) : null, lean, words: bestWords, scores }
+}
+
+// Turns a scanned pair upright and decides which side is the front. The back
+// (bio, stats) nearly always carries far more text than the front; when the
+// text doesn't say, the feed order decides (cards loaded face down feed the
+// back first).
+async function orientFeedPair(first, second, { backFirst = true } = {}) {
+  const sides = [first, second].filter(Boolean)
+  const orientation = []
+  for (const side of sides) orientation.push(await scoreSideOrientation(side.path))
+  let checkRotation = false
+  const turns = orientation.map((entry, index) => {
+    if (entry.best !== null) return entry.best
+    // Turning a card over mirrors it across the feed direction, so the other
+    // side's rotation maps to its negative (180 <-> 180, 90 <-> 270).
+    const other = orientation[1 - index]?.best
+    const expected = other == null ? null : (360 - other) % 360
+    // A weak reading that agrees with the other side is trusted.
+    if (expected !== null && entry.lean === expected) return entry.lean
+    checkRotation = true
+    return expected ?? 180
+  })
+  for (let index = 0; index < sides.length; index += 1) {
+    await rotateImageFile(sides[index].path, turns[index])
+    await rotateImageFile(sides[index].rawPath, turns[index])
+  }
+  let backIndex = backFirst ? 0 : 1
+  let frontBackBy = 'feed-order'
+  if (sides.length === 2) {
+    const [a, b] = orientation.map((entry) => entry.words)
+    if (a >= b * 1.5 + 3) { backIndex = 0; frontBackBy = 'text' }
+    else if (b >= a * 1.5 + 3) { backIndex = 1; frontBackBy = 'text' }
+  } else {
+    backIndex = -1
+  }
+  const front = sides.length === 2 ? sides[1 - backIndex] : sides[0]
+  const back = sides.length === 2 ? sides[backIndex] : null
+  return { front, back, checkRotation, frontBackBy, turns, orientation }
+}
+
+function feedImageResult(side, feederName, extra = {}) {
+  return scanImageResult({ outputPath: side.path, rawPath: side.rawPath, displayPath: '' }, {
+    scannerName: feederName,
+    cropped: side.crop?.status === 'ok',
+    scanMode: 'feeder',
+    cardStatus: side.crop?.status || '',
+    orientation: side.crop?.orientation || '',
+    ...extra,
+  })
+}
+
+ipcMain.handle('scanner:refresh-feeder', async () => {
+  if (process.platform !== 'win32') return { feederName: '' }
+  return scannerSession.refreshFeeder()
+})
+
+ipcMain.handle('scanner:cancel-feed', () => scannerSession.cancelFeed())
+
+ipcMain.handle('scanner:feed-stack', async (event, options = {}) => {
+  if (process.platform !== 'win32') throw new Error('The FastFoto feeder is available in the Windows desktop app only.')
+  await mkdir(getScanDir(), { recursive: true })
+  const send = (channel, payload) => { if (!event.sender.isDestroyed()) event.sender.send(channel, payload) }
+  const backFirst = options.loadFaceDown !== false
+  const started = Date.now()
+  const pages = []
+  let cards = 0
+  let chain = Promise.resolve()
+  let feederName = scannerSession.feederName || 'Epson FastFoto'
+
+  const deliver = (first, second) => {
+    const index = cards + 1
+    cards += 1
+    chain = chain.then(async () => {
+      const oriented = await orientFeedPair(first, second, { backFirst })
+      const card = {
+        index,
+        frontImage: feedImageResult(oriented.front, feederName),
+        backImage: oriented.back ? feedImageResult(oriented.back, feederName) : null,
+        feed: { checkRotation: oriented.checkRotation, frontBackBy: oriented.frontBackBy, singleSided: !oriented.back },
+      }
+      await logScanner({
+        event: 'feed-card',
+        index,
+        crop: [first, second].filter(Boolean).map((side) => side.crop),
+        rotation: oriented.turns,
+        orientationScores: oriented.orientation.map((entry) => entry.scores),
+        frontBackBy: oriented.frontBackBy,
+        checkRotation: oriented.checkRotation,
+      })
+      send('scanner:feed-card', card)
+    }).catch((error) => {
+      send('scanner:feed-progress', { pages: pages.length, cards, error: `Card ${index} could not be prepared: ${error.message}` })
+    })
+  }
+
+  const reply = await scannerSession.feed({
+    dpi: SCAN_DPI,
+    widthIn: FEED_STRIP_IN.width,
+    heightIn: FEED_STRIP_IN.height,
+    outDir: getScanDir(),
+    onPage: (message) => {
+      pages.push({ path: message.path, rawPath: message.rawPath, crop: message.crop })
+      send('scanner:feed-progress', { pages: pages.length, cards: Math.floor(pages.length / 2) })
+      if (pages.length % 2 === 0) deliver(pages[pages.length - 2], pages[pages.length - 1])
+    },
+  }).catch((error) => ({ ok: false, code: error.code || 'FEED_FAILED', message: error.message }))
+  if (reply.feederName) feederName = reply.feederName
+
+  // An odd page means the stack stopped between a card's two sides.
+  if (pages.length % 2 === 1) deliver(pages[pages.length - 1], null)
+  await chain
+  await logScanner({ event: 'feed', ok: reply.ok, code: reply.code, hresult: reply.hresult, pages: pages.length, cards, cancelled: reply.cancelled, region: reply.region, rejectedSettings: reply.rejected, deviceMessages: reply.deviceMessages, totalMs: Date.now() - started })
+  return {
+    ok: Boolean(reply.ok) || pages.length > 0,
+    code: reply.ok ? '' : reply.code || 'FEED_FAILED',
+    message: reply.ok ? '' : reply.message || 'The FastFoto scan failed.',
+    cancelled: Boolean(reply.cancelled),
+    pages: pages.length,
+    cards,
+    feederName,
+    totalMs: Date.now() - started,
+  }
+})
+
+// Manual orientation fix from review: rotates the master and raw scan.
+ipcMain.handle('scanner:rotate-image', async (_event, image, degrees) => {
+  const imagePath = resolveScanImagePath(image)
+  const turn = ((Number(degrees) % 360) + 360) % 360
+  if (![90, 180, 270].includes(turn)) return image
+  // A new file name, so the renderer does not show a cached copy.
+  const outputPath = path.join(getScanDir(), `${Date.now()}-${randomUUID()}${path.extname(imagePath) || '.png'}`)
+  const source = nativeImage.createFromPath(imagePath)
+  if (source.isEmpty()) throw new Error('The scan could not be opened for rotating.')
+  const rotated = rotateNativeImage(source, turn)
+  await writeFile(outputPath, /\.png$/i.test(outputPath) ? rotated.toPNG() : rotated.toJPEG(92))
+  let rawPath = ''
+  let rawSource = ''
+  try { rawSource = image?.rawPath ? resolveScanImagePath({ path: image.rawPath }) : '' } catch { rawSource = '' }
+  if (rawSource && existsSync(rawSource)) {
+    rawPath = path.join(getScanDir(), `${Date.now()}-${randomUUID()}${path.extname(rawSource)}`)
+    const raw = rotateNativeImage(nativeImage.createFromPath(rawSource), turn)
+    await writeFile(rawPath, /\.png$/i.test(rawPath) ? raw.toPNG() : raw.toJPEG(92))
+  }
+  return {
+    ...image,
+    path: outputPath,
+    url: getScanImageUrl(path.basename(outputPath), outputPath),
+    fileName: path.basename(outputPath),
+    rawPath,
+    rawUrl: rawPath ? getScanImageUrl(path.basename(rawPath), rawPath) : '',
+    displayPath: '',
+    displayUrl: '',
   }
 })
 

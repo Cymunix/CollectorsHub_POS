@@ -590,4 +590,252 @@ public static class CollectorsHubScanCrop
         if (runStart >= 0 && weight > bestWeight) best = new[] { runStart, runEnd };
         return best;
     }
+
+    // ---------------------------------------------------------------------
+    // Sheet-fed pages (Epson FastFoto). The card passes over a uniform grey
+    // background; after its trailing edge the driver pads the page with white.
+    // Unlike the flatbed, the card's own edge is visible against the grey, so
+    // the crop follows the physical card edge (white borders included).
+    // Orientation (which way up) is decided later from the card's text.
+
+    const int FeedDiffThreshold = 60;
+
+    public static string ProcessFeedPage(string source, string rawPath, string outputPath, int dpi)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        using (var loaded = new Bitmap(source))
+        using (var bitmap = loaded.Clone(new Rectangle(0, 0, loaded.Width, loaded.Height), PixelFormat.Format24bppRgb))
+        {
+            int width = bitmap.Width, height = bitmap.Height;
+            if (!string.IsNullOrEmpty(rawPath)) SaveImage(bitmap, rawPath, 92);
+            var pixels = ReadPixels(bitmap);
+            int stride = width * 3;
+            int margin = Math.Max(8, (int)(0.1 * dpi));
+            int[] bg = FeedBackground(pixels, width, height, margin);
+
+            // Rows where both side margins stop being grey are past the card's
+            // trailing edge (white padding). Paint them grey so they are ignored.
+            int padStart = height;
+            int run = 0;
+            for (int y = (int)(0.5 * dpi); y < height; y++)
+            {
+                int hits = 0, samples = 0;
+                for (int x = 0; x < margin; x += 2) { samples++; if (IsForeground(pixels, y * stride + x * 3, bg)) hits++; }
+                for (int x = width - margin; x < width; x += 2) { samples++; if (IsForeground(pixels, y * stride + x * 3, bg)) hits++; }
+                if (hits >= samples * 0.9) { run++; if (run >= 8) { padStart = y - run + 1; break; } }
+                else run = 0;
+            }
+            for (int y = padStart; y < height; y++) FillRow(pixels, y * stride, width, bg);
+
+            double skew = FeedSkew(pixels, width, height, bg, dpi);
+            Bitmap working = bitmap;
+            bool rotated = false;
+            if (Math.Abs(skew) >= 0.15 && Math.Abs(skew) <= 8)
+            {
+                WritePixels(bitmap, pixels);
+                working = RotateOn(bitmap, skew, Color.FromArgb(bg[0], bg[1], bg[2]));
+                pixels = ReadPixels(working);
+                rotated = true;
+            }
+            else skew = 0;
+            try
+            {
+                int[] box = FeedBounds(pixels, width, height, bg, dpi);
+                string status;
+                Rectangle crop = new Rectangle(0, 0, width, padStart);
+                if (box == null) status = "no_card";
+                else
+                {
+                    crop = Rectangle.FromLTRB(box[0], box[1], box[2] + 1, box[3] + 1);
+                    double wIn = (double)crop.Width / dpi, hIn = (double)crop.Height / dpi;
+                    bool touches = box[0] <= 2 || box[2] >= width - 3 || padStart >= height;
+                    status = touches || Math.Max(wIn, hIn) > 3.9 ? "oversize" : Math.Min(wIn, hIn) < 1.5 ? "low_confidence" : "ok";
+                    if (status == "low_confidence") crop = new Rectangle(0, 0, width, Math.Max(1, padStart));
+                }
+                using (var cropped = working.Clone(crop, PixelFormat.Format24bppRgb)) SaveImage(cropped, outputPath, 92);
+                return Json(
+                    "status", status,
+                    "orientation", crop.Width > crop.Height ? "landscape" : "portrait",
+                    "returnedWidth", width, "returnedHeight", height, "padStart", padStart,
+                    "cropX", crop.X, "cropY", crop.Y, "cropWidth", crop.Width, "cropHeight", crop.Height,
+                    "widthIn", Math.Round((double)crop.Width / dpi, 3), "heightIn", Math.Round((double)crop.Height / dpi, 3),
+                    "skewDegrees", Math.Round(skew, 2),
+                    "background", bg[0] + "," + bg[1] + "," + bg[2],
+                    "cropped", status == "ok", "processMs", watch.ElapsedMilliseconds);
+            }
+            finally
+            {
+                if (rotated) working.Dispose();
+            }
+        }
+    }
+
+    static byte[] ReadPixels(Bitmap bitmap)
+    {
+        int width = bitmap.Width, height = bitmap.Height;
+        var pixels = new byte[width * 3 * height];
+        var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+        try { for (int y = 0; y < height; y++) Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), pixels, y * width * 3, width * 3); }
+        finally { bitmap.UnlockBits(data); }
+        return pixels;
+    }
+
+    static void WritePixels(Bitmap bitmap, byte[] pixels)
+    {
+        int width = bitmap.Width, height = bitmap.Height;
+        var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
+        try { for (int y = 0; y < height; y++) Marshal.Copy(pixels, y * width * 3, IntPtr.Add(data.Scan0, y * data.Stride), width * 3); }
+        finally { bitmap.UnlockBits(data); }
+    }
+
+    // Median background colour (BGR) from both side margins near the top.
+    static int[] FeedBackground(byte[] pixels, int width, int height, int margin)
+    {
+        var b = new System.Collections.Generic.List<int>();
+        var g = new System.Collections.Generic.List<int>();
+        var r = new System.Collections.Generic.List<int>();
+        int stride = width * 3;
+        for (int y = 2; y < Math.Min(height, margin * 6); y += 3)
+        {
+            for (int x = 2; x < margin; x += 3)
+            {
+                foreach (int px in new[] { x, width - 1 - x })
+                {
+                    int i = y * stride + px * 3;
+                    b.Add(pixels[i]); g.Add(pixels[i + 1]); r.Add(pixels[i + 2]);
+                }
+            }
+        }
+        b.Sort(); g.Sort(); r.Sort();
+        return new[] { b[b.Count / 2], g[g.Count / 2], r[r.Count / 2] };
+    }
+
+    static bool IsForeground(byte[] pixels, int i, int[] bg)
+    {
+        return Math.Abs(pixels[i] - bg[0]) + Math.Abs(pixels[i + 1] - bg[1]) + Math.Abs(pixels[i + 2] - bg[2]) > FeedDiffThreshold;
+    }
+
+    static void FillRow(byte[] pixels, int offset, int width, int[] bg)
+    {
+        for (int x = 0; x < width; x++) { pixels[offset + x * 3] = (byte)bg[0]; pixels[offset + x * 3 + 1] = (byte)bg[1]; pixels[offset + x * 3 + 2] = (byte)bg[2]; }
+    }
+
+    // First/last position along a line where 4 consecutive foreground pixels start.
+    static int EdgeInRow(byte[] pixels, int width, int y, int[] bg, bool fromLeft)
+    {
+        int stride = width * 3, count = 0;
+        for (int k = 0; k < width; k++)
+        {
+            int x = fromLeft ? k : width - 1 - k;
+            if (IsForeground(pixels, y * stride + x * 3, bg)) { if (++count >= 4) return fromLeft ? x - 3 : x + 3; }
+            else count = 0;
+        }
+        return -1;
+    }
+
+    static int EdgeInColumn(byte[] pixels, int width, int height, int x, int[] bg, bool fromTop)
+    {
+        int stride = width * 3, count = 0;
+        for (int k = 0; k < height; k++)
+        {
+            int y = fromTop ? k : height - 1 - k;
+            if (IsForeground(pixels, y * stride + x * 3, bg)) { if (++count >= 4) return fromTop ? y - 3 : y + 3; }
+            else count = 0;
+        }
+        return -1;
+    }
+
+    // Card rows: rows whose foreground spans more than an inch.
+    static int[] FeedRowRange(byte[] pixels, int width, int height, int[] bg, int dpi)
+    {
+        int top = -1, bottom = -1;
+        for (int y = 0; y < height; y += 2)
+        {
+            int left = EdgeInRow(pixels, width, y, bg, true);
+            if (left < 0) continue;
+            int right = EdgeInRow(pixels, width, y, bg, false);
+            if (right - left < dpi) continue;
+            if (top < 0) top = y;
+            bottom = y;
+        }
+        return top < 0 ? null : new[] { top, bottom };
+    }
+
+    // Skew (degrees, clockwise positive) from straight-line fits of the card's
+    // left and right edges over the middle of the card.
+    static double FeedSkew(byte[] pixels, int width, int height, int[] bg, int dpi)
+    {
+        var rows = FeedRowRange(pixels, width, height, bg, dpi);
+        if (rows == null) return 0;
+        int span = rows[1] - rows[0];
+        if (span < dpi) return 0;
+        var slopes = new System.Collections.Generic.List<double>();
+        foreach (bool fromLeft in new[] { true, false })
+        {
+            var ys = new System.Collections.Generic.List<double>();
+            var xs = new System.Collections.Generic.List<double>();
+            for (int y = rows[0] + span / 5; y < rows[1] - span / 5; y += 4)
+            {
+                int x = EdgeInRow(pixels, width, y, bg, fromLeft);
+                if (x >= 0) { ys.Add(y); xs.Add(x); }
+            }
+            if (ys.Count < 20) continue;
+            double my = 0, mx = 0;
+            for (int i = 0; i < ys.Count; i++) { my += ys[i]; mx += xs[i]; }
+            my /= ys.Count; mx /= ys.Count;
+            double num = 0, den = 0;
+            for (int i = 0; i < ys.Count; i++) { num += (ys[i] - my) * (xs[i] - mx); den += (ys[i] - my) * (ys[i] - my); }
+            if (den > 0) slopes.Add(num / den);
+        }
+        if (slopes.Count == 0) return 0;
+        double slope = slopes.Count == 2 && Math.Abs(slopes[0] - slopes[1]) < 0.01 ? (slopes[0] + slopes[1]) / 2 : slopes[0];
+        // x increases with y when the card leans clockwise; rotate back by that angle.
+        return Math.Atan(slope) * 180 / Math.PI;
+    }
+
+    // Median edges over the middle of each side (rounded corners excluded).
+    static int[] FeedBounds(byte[] pixels, int width, int height, int[] bg, int dpi)
+    {
+        var rows = FeedRowRange(pixels, width, height, bg, dpi);
+        if (rows == null) return null;
+        int span = rows[1] - rows[0];
+        var lefts = new System.Collections.Generic.List<int>();
+        var rights = new System.Collections.Generic.List<int>();
+        for (int y = rows[0] + span / 5; y < rows[1] - span / 5; y += 3)
+        {
+            int l = EdgeInRow(pixels, width, y, bg, true), r = EdgeInRow(pixels, width, y, bg, false);
+            if (l >= 0 && r > l) { lefts.Add(l); rights.Add(r); }
+        }
+        if (lefts.Count < 10) return null;
+        lefts.Sort(); rights.Sort();
+        int left = lefts[lefts.Count / 2], right = rights[rights.Count / 2];
+        int cardW = right - left;
+        var tops = new System.Collections.Generic.List<int>();
+        var bottoms = new System.Collections.Generic.List<int>();
+        for (int x = left + cardW / 5; x < right - cardW / 5; x += 3)
+        {
+            int t = EdgeInColumn(pixels, width, height, x, bg, true), b = EdgeInColumn(pixels, width, height, x, bg, false);
+            if (t >= 0 && b > t) { tops.Add(t); bottoms.Add(b); }
+        }
+        if (tops.Count < 10) return null;
+        tops.Sort(); bottoms.Sort();
+        return new[] { left, tops[tops.Count / 2], right, bottoms[bottoms.Count / 2] };
+    }
+
+    static Bitmap RotateOn(Bitmap source, double degrees, Color fill)
+    {
+        var result = new Bitmap(source.Width, source.Height, PixelFormat.Format24bppRgb);
+        result.SetResolution(source.HorizontalResolution, source.VerticalResolution);
+        using (var graphics = Graphics.FromImage(result))
+        {
+            graphics.Clear(fill);
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            graphics.TranslateTransform(source.Width / 2f, source.Height / 2f);
+            graphics.RotateTransform((float)degrees);
+            graphics.TranslateTransform(-source.Width / 2f, -source.Height / 2f);
+            graphics.DrawImage(source, new Rectangle(0, 0, source.Width, source.Height));
+        }
+        return result;
+    }
 }

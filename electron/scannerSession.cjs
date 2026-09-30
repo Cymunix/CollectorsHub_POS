@@ -4,13 +4,15 @@
 
 const { spawn } = require('node:child_process')
 const { EventEmitter } = require('node:events')
-const { readFile, writeFile, mkdir } = require('node:fs/promises')
+const { readFile, writeFile, mkdir, rm } = require('node:fs/promises')
 const path = require('node:path')
 
 const PREFERRED_SCANNER = 'TS3700|TS3725'
 const OPEN_TIMEOUT_MS = 60 * 1000
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000
 const IDLE_CLOSE_MS = 10 * 60 * 1000
+// A full FastFoto stack (~36 cards at ~8 s each) plus processing.
+const FEED_TIMEOUT_MS = 30 * 60 * 1000
 
 class ScannerSessionError extends Error {
   constructor(code, message, extra = {}) {
@@ -21,10 +23,13 @@ class ScannerSessionError extends Error {
 }
 
 class ScannerSession extends EventEmitter {
-  constructor({ workDir, cropSource }) {
+  constructor({ workDir, cropSource, feedSource = '' }) {
     super()
     this.workDir = workDir
     this.cropSource = cropSource
+    this.feedSource = feedSource
+    this.feederName = ''
+    this.feeding = false
     this.process = null
     this.pending = new Map()
     this.queue = Promise.resolve()
@@ -37,11 +42,11 @@ class ScannerSession extends EventEmitter {
 
   setState(state, message = '') {
     this.state = state
-    this.emit('status', { state, scannerName: this.scannerName, message })
+    this.emit('status', { state, scannerName: this.scannerName, feederName: this.feederName, feeding: this.feeding, message })
   }
 
   getStatus() {
-    return { state: this.state, scannerName: this.scannerName }
+    return { state: this.state, scannerName: this.scannerName, feederName: this.feederName, feeding: this.feeding }
   }
 
   async startProcess() {
@@ -53,8 +58,14 @@ class ScannerSession extends EventEmitter {
     const cropPath = path.join(this.workDir, 'scan-crop.cs')
     await writeFile(hostPath, await readFile(path.join(__dirname, 'scanner-host.ps1'), 'utf8'), 'utf8')
     await writeFile(cropPath, this.cropSource, 'utf8')
+    const args = ['-NoProfile', '-NoLogo', '-Sta', '-ExecutionPolicy', 'Bypass', '-File', hostPath, '-CropSourcePath', cropPath]
+    if (this.feedSource) {
+      const feedPath = path.join(this.workDir, 'wia-feed.cs')
+      await writeFile(feedPath, this.feedSource, 'utf8')
+      args.push('-FeedSourcePath', feedPath)
+    }
 
-    const child = spawn('powershell.exe', ['-NoProfile', '-NoLogo', '-Sta', '-ExecutionPolicy', 'Bypass', '-File', hostPath, '-CropSourcePath', cropPath], {
+    const child = spawn('powershell.exe', args, {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -106,13 +117,17 @@ class ScannerSession extends EventEmitter {
         this.setState('processing')
         continue
       }
+      if (message.event === 'page') {
+        try { pending.onEvent?.(message) } catch {}
+        continue
+      }
       this.pending.delete(message.id)
       pending.resolve(message)
     }
   }
 
   // Requests are serialised: a scanner can only do one thing at a time.
-  request(payload, timeoutMs) {
+  request(payload, timeoutMs, onEvent = null) {
     const run = async () => {
       await this.startProcess()
       const id = String(this.nextId++)
@@ -124,6 +139,7 @@ class ScannerSession extends EventEmitter {
           reject(new ScannerSessionError('TIMEOUT', 'The scanner did not respond in time.'))
         }, timeoutMs)
         this.pending.set(id, {
+          onEvent,
           resolve: (value) => { clearTimeout(timer); resolve(value) },
           reject: (error) => { clearTimeout(timer); reject(error) },
         })
@@ -147,6 +163,7 @@ class ScannerSession extends EventEmitter {
     this.setState('connecting')
     try {
       const reply = await this.request({ op: 'open', prefer: PREFERRED_SCANNER }, OPEN_TIMEOUT_MS)
+      this.feederName = reply.feederName || ''
       if (!reply.ok) {
         this.setState('unavailable', reply.message)
         return { ...this.getStatus(), ...reply }
@@ -193,6 +210,42 @@ class ScannerSession extends EventEmitter {
     } finally {
       this.touch()
     }
+  }
+
+  // Re-checks whether the sheet feeder is connected (it can be plugged in
+  // after the page opened).
+  async refreshFeeder() {
+    try {
+      const reply = await this.request({ op: 'feeder' }, OPEN_TIMEOUT_MS)
+      this.feederName = reply.feederName || ''
+    } catch {}
+    this.emit('status', this.getStatus())
+    return this.getStatus()
+  }
+
+  // Feeds the whole FastFoto stack. onPage is called for every finished,
+  // cropped page while the stack is still feeding.
+  async feed({ dpi, widthIn, heightIn, outDir, onPage }) {
+    this.touch()
+    const cancelPath = path.join(this.workDir, 'feed.cancel')
+    await rm(cancelPath, { force: true })
+    this.cancelPath = cancelPath
+    this.feeding = true
+    this.setState('scanning')
+    try {
+      const reply = await this.request({ op: 'feed', dpi, widthIn, heightIn, outDir, cancelPath }, FEED_TIMEOUT_MS, onPage)
+      if (reply.feederName) this.feederName = reply.feederName
+      return reply
+    } finally {
+      this.feeding = false
+      if (this.process) this.setState('ready')
+      this.touch()
+    }
+  }
+
+  // Stops the stack after the page currently feeding.
+  async cancelFeed() {
+    if (this.feeding && this.cancelPath) await writeFile(this.cancelPath, 'cancel', 'utf8')
   }
 
   kill() {

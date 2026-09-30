@@ -11,8 +11,10 @@
 #    "region":{"x":0,"y":0,"w":2.7,"h":3.7}|null   (inches; card mode only),
 #    "transferPath":"...","rawPath":"...","outputPath":"...","quality":92}
 #                                                           -> {"id":"2","event":"processing"} then result
+#   {"id":"3","op":"feed","dpi":600,"widthIn":4,"heightIn":4,"outDir":"...","cancelPath":"..."}
+#                                                           -> {"id":"3","event":"page",...} per page, then result
 #   {"op":"close"}
-param([string]$CropSourcePath)
+param([string]$CropSourcePath, [string]$FeedSourcePath)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -20,7 +22,9 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 Add-Type -AssemblyName System.Drawing
-Add-Type -ReferencedAssemblies System.Drawing -Path $CropSourcePath
+$sources = @($CropSourcePath)
+if ($FeedSourcePath) { $sources += $FeedSourcePath }
+Add-Type -ReferencedAssemblies System.Drawing -Path $sources
 
 $script:manager = $null
 $script:device = $null
@@ -65,7 +69,9 @@ function Open-Scanner([string]$preferredPattern) {
   if (-not $script:manager) { $script:manager = New-Object -ComObject WIA.DeviceManager }
   # Only WIA scanners (Type 1). The Canon TS3700 also exposes an eSCL entry that
   # is not the working WIA acquisition path.
-  $infos = @($script:manager.DeviceInfos | Where-Object { $_.Type -eq 1 })
+  # Sheet-fed scanners (Epson FastFoto) have no flatbed; they are driven by
+  # the feed operation instead.
+  $infos = @($script:manager.DeviceInfos | Where-Object { $_.Type -eq 1 -and ([string]$_.Properties.Item('Name').Value) -notmatch $FeederPattern })
   $rows = @($infos | ForEach-Object { @{ name = [string]$_.Properties.Item('Name').Value; deviceId = [string]$_.DeviceID } })
   if ($infos.Count -eq 0) {
     return @{ ok = $false; code = 'NO_DEVICE'; message = 'No scanner was found. Make sure the scanner is on and connected.'; scanners = $rows }
@@ -95,6 +101,50 @@ function Open-Scanner([string]$preferredPattern) {
     } catch {}
   }
   return @{ ok = $true; scannerName = $script:scannerName; bedWidthIn = $script:bedWidthIn; bedHeightIn = $script:bedHeightIn; properties = $properties }
+}
+
+$FeederPattern = 'FF-680|FastFoto'
+
+# The sheet feeder, if one is connected: @{ name; deviceId } or $null.
+function Find-Feeder {
+  if (-not $script:manager) { $script:manager = New-Object -ComObject WIA.DeviceManager }
+  $info = @($script:manager.DeviceInfos | Where-Object { ([string]$_.Properties.Item('Name').Value) -match $FeederPattern }) | Select-Object -First 1
+  if (-not $info) { return $null }
+  return @{ name = [string]$info.Properties.Item('Name').Value; deviceId = [string]$info.DeviceID }
+}
+
+function Invoke-Feed($request) {
+  $feeder = Find-Feeder
+  if (-not $feeder) { return @{ ok = $false; code = 'NO_FEEDER'; message = 'The Epson FastFoto was not found. Make sure it is on, connected, and Epson Scan 2 is installed.' } }
+  Remove-Item -LiteralPath $request.cancelPath -Force -ErrorAction SilentlyContinue
+  $json = [CollectorsHubWiaFeed]::Feed([string]$request.id, $feeder.deviceId, [string]$request.outDir, [string]$request.cancelPath, [int]$request.dpi, [double]$request.widthIn, [double]$request.heightIn, $true)
+  $result = @{}
+  foreach ($property in ($json | ConvertFrom-Json).PSObject.Properties) { $result[$property.Name] = $property.Value }
+  $result.feederName = $feeder.name
+  $hr = [string]$result.hresult
+  if (-not $result.ok) {
+    $result.code = switch ($hr) {
+      '0x80210003' { 'NO_PAPER' }
+      '0x80210002' { 'PAPER_JAM' }
+      '0x80210020' { 'DOUBLE_FEED' }
+      '0x80210004' { 'PAPER_PROBLEM' }
+      '0x80210006' { 'BUSY' }
+      default { 'FEED_FAILED' }
+    }
+    $result.message = switch ($result.code) {
+      'NO_PAPER' { 'No cards in the feeder. Load the stack and scan again.' }
+      'PAPER_JAM' { 'A card jammed in the FastFoto. Clear it, reload the remaining cards and scan again.' }
+      'DOUBLE_FEED' { 'Two cards fed at once. Reload the remaining cards and scan again.' }
+      'PAPER_PROBLEM' { 'The FastFoto reported a feeding problem. Check the cards and scan again.' }
+      'BUSY' { 'The FastFoto is busy (another program may be using it).' }
+      default { "The FastFoto scan failed ($hr)." }
+    }
+  } elseif ([int]$result.pages -eq 0 -and -not $result.cancelled) {
+    $result.ok = $false
+    $result.code = 'NO_PAPER'
+    $result.message = 'No cards in the feeder. Load the stack and scan again.'
+  }
+  return $result
 }
 
 function Set-WiaValue([string]$id, $value) {
@@ -259,6 +309,13 @@ while ($true) {
     if ($request.op -eq 'close') { break }
     if ($request.op -eq 'open') {
       if ($script:item) { $result = @{ ok = $true; scannerName = $script:scannerName } } else { $result = Open-Scanner $request.prefer }
+      $feeder = Find-Feeder
+      $result.feederName = if ($feeder) { $feeder.name } else { '' }
+    } elseif ($request.op -eq 'feeder') {
+      $feeder = Find-Feeder
+      $result = @{ ok = $true; feederName = $(if ($feeder) { $feeder.name } else { '' }) }
+    } elseif ($request.op -eq 'feed') {
+      $result = Invoke-Feed $request
     } elseif ($request.op -eq 'scan') {
       $result = Invoke-Scan $request
     } else {

@@ -7257,3 +7257,109 @@ button:disabled {
   font-size: 15px;
   padding: 8px 10px;
 }
+
+/* Epson FastFoto stack scanning */
+.feeder-panel {
+  background: #fffaf0;
+  border: 1px solid #ecd9a8;
+  border-radius: 10px;
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+}
+
+.feeder-panel.missing {
+  background: #f4f6f8;
+  border-color: #e3e8ef;
+}
+
+.feeder-panel-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.feeder-panel-head strong {
+  color: #1f2a3a;
+  display: block;
+  font-size: 14px;
+}
+
+.feeder-panel-head small {
+  color: #526176;
+  font-size: 12px;
+}
+
+.feeder-panel-head button,
+.feeder-actions button:not(.admin-gold-button),
+.ai-review-orient button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #1f2a3a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 10px;
+}
+
+.feeder-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 8px;
+}
+
+.feeder-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.feeder-progress {
+  color: #526176;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.scan-section-label {
+  color: #526176;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  margin: 14px 0 0;
+  text-transform: uppercase;
+}
+
+.ai-review-media {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-review-orient {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ai-review-orient button {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.ai-review-orient button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ai-review-orient-flag {
+  background: #fff1d6;
+  border-radius: 999px;
+  color: #8a5d00;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 2px 8px;
+}

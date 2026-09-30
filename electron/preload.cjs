@@ -30,6 +30,20 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
     return () => ipcRenderer.removeListener('scanner:status', listener)
   },
   recropScan: (image, rect) => ipcRenderer.invoke('scanner:recrop', { image, rect }),
+  feedStack: (options) => ipcRenderer.invoke('scanner:feed-stack', options),
+  cancelFeed: () => ipcRenderer.invoke('scanner:cancel-feed'),
+  refreshFeeder: () => ipcRenderer.invoke('scanner:refresh-feeder'),
+  rotateScanImage: (image, degrees) => ipcRenderer.invoke('scanner:rotate-image', image, degrees),
+  onFeedCard: (callback) => {
+    const listener = (_event, card) => callback(card)
+    ipcRenderer.on('scanner:feed-card', listener)
+    return () => ipcRenderer.removeListener('scanner:feed-card', listener)
+  },
+  onFeedProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress)
+    ipcRenderer.on('scanner:feed-progress', listener)
+    return () => ipcRenderer.removeListener('scanner:feed-progress', listener)
+  },
   analyzeCardScan: (image, options) => ipcRenderer.invoke('scanner:analyze-card', image, options),
   readScanImage: (image) => ipcRenderer.invoke('scanner:read-image', image),
   getAiStatus: () => ipcRenderer.invoke('ai:status'),

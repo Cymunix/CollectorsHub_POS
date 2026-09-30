@@ -320,6 +320,10 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
   const [aiInstall, setAiInstall] = useState(null)
   const [aiAnalysis, setAiAnalysis] = useState(null)
   const aiRunRef = useRef({ cancelled: false, jobId: '' })
+  // Cards queued while a batch is running (FastFoto stack scans) join that
+  // batch instead of waiting for another Analyse press.
+  const analysingRef = useRef(false)
+  const pendingAnalysisRef = useRef([])
 
   async function refreshAiStatus() {
     const api = adminDesktopApi()
@@ -363,25 +367,41 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
   }
 
   async function addCardToQueue(card) {
+    const id = createLocalId('scan_draft')
     await saveScanDrafts((drafts) => [{
-      id: createLocalId('scan_draft'),
+      id,
       status: 'Queued for AI',
       createdBy: session?.userId || session?.email || 'admin',
       createdAt: new Date().toISOString(),
       recognition: { status: 'queued' },
       ...card,
     }, ...drafts])
+    return id
+  }
+
+  function analyseSoon(draftId) {
+    if (analysingRef.current) pendingAnalysisRef.current.push(draftId)
+    else analyseCards([draftId])
   }
 
   // Cards are analysed one at a time: parallel vision requests could exhaust a
   // 12 GB GPU. A failed card is marked retryable and the batch carries on.
   async function analyseCards(draftIds) {
-    if (aiAnalysis) return
+    if (analysingRef.current) {
+      pendingAnalysisRef.current.push(...draftIds)
+      return
+    }
     const api = adminDesktopApi()
     const ids = draftIds.filter((id) => scanDraftsRef.current.some((draft) => draft.id === id))
     if (!ids.length) return
+    analysingRef.current = true
     aiRunRef.current = { cancelled: false, jobId: '' }
-    for (let index = 0; index < ids.length; index += 1) {
+    for (let index = 0; index < ids.length || pendingAnalysisRef.current.length; index += 1) {
+      while (pendingAnalysisRef.current.length) {
+        const next = pendingAnalysisRef.current.shift()
+        if (!ids.includes(next)) ids.push(next)
+      }
+      if (index >= ids.length) break
       if (aiRunRef.current.cancelled) break
       const draft = scanDraftsRef.current.find((entry) => entry.id === ids[index])
       if (!draft) continue
@@ -431,6 +451,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         }, { scanAnalysis: null, status: 'AI Review', analysisError: `Catalogue matching failed: ${error.message || 'unknown error'}` })
       }
     }
+    analysingRef.current = false
+    pendingAnalysisRef.current = []
     setAiAnalysis(null)
   }
 
@@ -504,6 +526,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
               onInstall: installAiModel,
               onCancelInstall: cancelAiInstall,
               onAddToQueue: addCardToQueue,
+              onAnalyseSoon: analyseSoon,
               onRemove: deleteScanDraft,
               onAnalyse: analyseCards,
               onCancel: cancelAnalysis,
@@ -2378,6 +2401,73 @@ function ScanIntake({ onCreateDraft, ai }) {
   const [busy, setBusy] = useState('')
   const autoQueuedPairRef = useRef('')
   const metadata = useMemo(() => ({}), [])
+  // Epson FastFoto stack scanning.
+  const [feed, setFeed] = useState(null)
+  const [feedAutoAnalyse, setFeedAutoAnalyse] = useState(() => readScannerPref('feedAutoAnalyse', true))
+  const [feedFaceDown, setFeedFaceDown] = useState(() => readScannerPref('feedFaceDown', true))
+  const feedContextRef = useRef({})
+  feedContextRef.current = { ai, category, mode, autoAnalyse: feedAutoAnalyse }
+  useEffect(() => { writeScannerPref('feedAutoAnalyse', feedAutoAnalyse) }, [feedAutoAnalyse])
+  useEffect(() => { writeScannerPref('feedFaceDown', feedFaceDown) }, [feedFaceDown])
+
+  // Each card is queued the moment it is ready, and analysed straight away
+  // when automatic analysis is on, while the rest of the stack still feeds.
+  useEffect(() => {
+    const api = adminDesktopApi()
+    const offCard = api.onFeedCard?.(async (card) => {
+      const context = feedContextRef.current
+      const id = await context.ai.onAddToQueue({
+        type: 'Scanned catalogue draft',
+        scanner: card.frontImage?.scannerName || 'Epson FastFoto',
+        category: context.category,
+        mode: context.mode,
+        frontImage: card.frontImage,
+        backImage: card.backImage,
+        metadata: {},
+        feed: card.feed,
+      })
+      setFeed((current) => (current ? { ...current, queued: (current.queued || 0) + 1 } : current))
+      if (context.autoAnalyse && context.ai.status.state === 'ready') context.ai.onAnalyseSoon(id)
+    })
+    const offProgress = api.onFeedProgress?.((progress) => {
+      setFeed((current) => (current ? { ...current, pages: progress.pages, warning: progress.error || current.warning } : current))
+    })
+    return () => { offCard?.(); offProgress?.() }
+  }, [])
+
+  async function scanStack() {
+    if (busy) return
+    const api = adminDesktopApi()
+    setBusy('feed')
+    setScannerError('')
+    setScannerMessage('')
+    setFeed({ running: true, pages: 0, queued: 0, stopping: false })
+    try {
+      const result = await api.feedStack({ loadFaceDown: feedFaceDown })
+      const seconds = Math.round((result.totalMs || 0) / 1000)
+      setFeed((current) => ({ ...current, running: false, result }))
+      if (result.ok && result.cards) {
+        const perCard = result.cards ? Math.round(seconds / result.cards) : 0
+        setScannerMessage(`${result.cards} card${result.cards === 1 ? '' : 's'} scanned in ${seconds}s (about ${perCard}s each)${result.cancelled ? ', stopped early' : ''}.${feedContextRef.current.autoAnalyse && ai.status.state === 'ready' ? ' The local AI is analysing them now.' : ' They are in the AI queue.'}`)
+      }
+      if (result.code) setScannerError(result.message || 'The FastFoto scan failed.')
+    } catch (error) {
+      setFeed((current) => ({ ...current, running: false }))
+      setScannerError(error.message || 'The FastFoto scan failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function stopStack() {
+    setFeed((current) => (current ? { ...current, stopping: true } : current))
+    await adminDesktopApi().cancelFeed?.()
+  }
+
+  async function checkFeeder() {
+    const status = await adminDesktopApi().refreshFeeder?.().catch(() => null)
+    if (status) setScannerStatus((current) => ({ ...current, ...status }))
+  }
 
   useEffect(() => { writeScannerPref('scanMode', scanMode) }, [scanMode])
   useEffect(() => { writeScannerPref('cardPosition', cardPosition) }, [cardPosition])
@@ -2519,7 +2609,7 @@ function ScanIntake({ onCreateDraft, ai }) {
         <div className="admin-panel-header">
           <div>
             <p className="admin-kicker">Scanner</p>
-            <h2>Canon flatbed scanner</h2>
+            <h2>Scan Intake</h2>
           </div>
           <span className={`admin-status-pill scanner-state-${scannerStatus.state}`}><span /> {busy === 'draft' ? 'Analysing...' : SCANNER_STATE_TEXT[scannerStatus.state] || 'Ready'}</span>
         </div>
@@ -2530,6 +2620,39 @@ function ScanIntake({ onCreateDraft, ai }) {
           <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Trading Cards</option><option>Sports Cards</option><option>Coins</option><option>LEGO / Building Blocks</option><option>Comics</option><option>Video Games</option></select></label>
           <label>Intake Mode<select value={mode} onChange={(event) => setMode(event.target.value)}><option>Create Catalogue Items</option><option>Match Existing Catalogue</option><option>Image Capture Only</option></select></label>
         </div>
+        {typeof adminDesktopApi().feedStack === 'function' ? (
+          <div className={`feeder-panel${scannerStatus.feederName ? '' : ' missing'}`}>
+            <div className="feeder-panel-head">
+              <div>
+                <strong>Epson FastFoto · stack scanning</strong>
+                <small>{scannerStatus.feederName ? `${scannerStatus.feederName} connected. Both sides of every card in one pass.` : 'FastFoto not detected. Turn it on and connect it, then check again.'}</small>
+              </div>
+              {scannerStatus.feederName ? null : <button type="button" onClick={checkFeeder} disabled={Boolean(busy)}>Check again</button>}
+            </div>
+            {scannerStatus.feederName ? (
+              <>
+                <p className="scan-mode-note">Load the cards {feedFaceDown ? 'face down' : 'face up'}, top edge first, straight against the centre guide. Thick relic cards, sleeved cards and slabs go on the Canon.</p>
+                <div className="feeder-options">
+                  <label className="admin-check"><input type="checkbox" checked={feedAutoAnalyse} onChange={(event) => setFeedAutoAnalyse(event.target.checked)} disabled={Boolean(busy)} /> Analyse with local AI as each card is scanned</label>
+                  <label className="admin-check"><input type="checkbox" checked={feedFaceDown} onChange={(event) => setFeedFaceDown(event.target.checked)} disabled={Boolean(busy)} /> Cards loaded face down</label>
+                </div>
+                {feedAutoAnalyse && ai.status.state !== 'ready' ? <p className="scan-mode-note">The local AI isn't ready, so scanned cards will wait in the queue.</p> : null}
+                <div className="feeder-actions">
+                  <button className="admin-gold-button" type="button" onClick={scanStack} disabled={Boolean(busy)}>{busy === 'feed' ? 'Scanning stack…' : 'Scan Stack'}</button>
+                  {busy === 'feed' ? <button type="button" onClick={stopStack} disabled={feed?.stopping}>{feed?.stopping ? 'Stopping after this card…' : 'Stop'}</button> : null}
+                  {feed ? (
+                    <span className="feeder-progress">
+                      {feed.running ? `${Math.floor((feed.pages || 0) / 2)} card${Math.floor((feed.pages || 0) / 2) === 1 ? '' : 's'} scanned` : ''}
+                      {feed.queued ? `${feed.running ? ' · ' : ''}${feed.queued} queued for AI` : ''}
+                    </span>
+                  ) : null}
+                </div>
+                {feed?.warning ? <p className="admin-error">{feed.warning}</p> : null}
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        <p className="scan-section-label">Canon flatbed · single cards and large items</p>
         <div className="scan-mode-picker" role="radiogroup" aria-label="Scan Mode">
           <span className="scan-mode-label">Scan Mode</span>
           {SCAN_MODES.map((option) => (
@@ -3164,6 +3287,25 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
     }
   }
 
+  // Orientation fixes for stack scans (turned the wrong way, or front and
+  // back the wrong way round). Re-analysing afterwards is offered.
+  async function rotateSide(side) {
+    setWorking(`rotate-${side}`)
+    setCardError('')
+    try {
+      const next = await adminDesktopApi().rotateScanImage(draft[side], 90)
+      await onUpdateDraft(draft.id, { [side]: next, feed: { ...(draft.feed || {}), checkRotation: false, adjusted: true } })
+    } catch (error) {
+      setCardError(error.message || 'Could not rotate the scan.')
+    } finally {
+      setWorking('')
+    }
+  }
+
+  function swapSides() {
+    onUpdateDraft(draft.id, { frontImage: draft.backImage, backImage: draft.frontImage, feed: { ...(draft.feed || {}), adjusted: true } })
+  }
+
   function decline() {
     onUpdateDraft(draft.id, {
       status: 'Needs Manual Identification',
@@ -3173,9 +3315,20 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
 
   return (
     <div className={`review-draft-card ai-review-card${declined ? ' declined' : ''}`}>
-      <div className="review-draft-images">
-        {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="Front" /> : <span>Front</span>}
-        {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back" /> : <span>Back</span>}
+      <div className="ai-review-media">
+        <div className="review-draft-images">
+          {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="Front" /> : <span>Front</span>}
+          {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back" /> : <span>Back</span>}
+        </div>
+        {!finished && hasScans && typeof adminDesktopApi().rotateScanImage === 'function' ? (
+          <div className="ai-review-orient">
+            {draft.feed?.checkRotation ? <span className="ai-review-orient-flag">Check rotation</span> : null}
+            <button type="button" onClick={() => rotateSide('frontImage')} disabled={Boolean(working) || !draft.frontImage} title="Rotate the front 90° clockwise">↻ Front</button>
+            <button type="button" onClick={() => rotateSide('backImage')} disabled={Boolean(working) || !draft.backImage} title="Rotate the back 90° clockwise">↻ Back</button>
+            <button type="button" onClick={swapSides} disabled={Boolean(working) || !draft.frontImage || !draft.backImage}>Swap front/back</button>
+            {draft.feed?.adjusted ? <button type="button" onClick={() => { onUpdateDraft(draft.id, { feed: { ...(draft.feed || {}), adjusted: false } }); onRetry(draft.id) }} disabled={Boolean(working) || aiBusy}>Re-analyse</button> : null}
+          </div>
+        ) : null}
       </div>
       <div>
         <p className="ai-review-source">Local AI · {recognition.providerLabel || 'Qwen3-VL 8B'}</p>
