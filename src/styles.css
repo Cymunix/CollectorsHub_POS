@@ -2930,10 +2930,6 @@ button:disabled {
 .scanner-state-unavailable > span { background: #c0392b !important; }
 .scanner-state-connecting > span { background: #9aa8bb !important; }
 
-.scan-inspector > section {
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-
 .scan-inspector-header {
   align-items: center;
   border-bottom: 1px solid #e3e8ef;
@@ -3433,13 +3429,27 @@ button:disabled {
   border-top: 4px solid #d6a632;
   box-shadow: 0 28px 70px rgba(11, 17, 27, 0.25);
   color: #07142b;
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  /* Header, notices and the button bar keep their size; only the field table
+     (or inspector body) scrolls, so the Save/Approve buttons are always visible
+     however many fields or notices are showing. */
+  display: flex;
+  flex-direction: column;
   max-height: calc(100vh - 48px);
   max-width: 1180px;
   overflow: hidden;
   position: relative;
   width: 100%;
+}
+
+.scan-review-modal > section > * {
+  flex: 0 0 auto;
+}
+
+.scan-review-modal > section > .scan-review-table-wrap,
+.scan-review-modal > section > .scan-inspector-compare,
+.scan-review-modal > section > .scan-inspector-crop {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .scan-review-header {
