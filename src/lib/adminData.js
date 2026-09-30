@@ -1566,7 +1566,8 @@ const PERSON_NAME_FIELDS = new Set(['name', 'subject'])
 
 function titleCaseIfShouting(value) {
   if (!/[A-Z]{2}/.test(value) || value !== value.toUpperCase()) return value
-  return value.toLowerCase().replace(/(^|[\s'.-])([a-z])/g, (match, separator, letter) => separator + letter.toUpperCase())
+  // '/' separates players on multi-player cards ('JORDAN TRAVIS/MALACHI CORLEY').
+  return value.toLowerCase().replace(/(^|[\s'./-])([a-z])/g, (match, separator, letter) => separator + letter.toUpperCase())
 }
 
 // For taxonomy fields this is the scanned text (e.g. "NFL"); the review screen
@@ -1969,6 +1970,14 @@ function matchText(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+function splitPlayers(value) {
+  return String(value || '').split('/').map((part) => part.trim()).filter(Boolean)
+}
+
+function playerSetKey(value) {
+  return splitPlayers(value).map(matchText).sort().join('|')
+}
+
 function cardNumberText(value) {
   return matchText(value).replace(/^(no\.?|#)\s*/, '')
 }
@@ -2035,7 +2044,9 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
   if (!categoryId || (!subject && !number)) return { status: 'none', best: null, candidates: [] }
 
   let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId)
-  if (subject) query = query.or([orContains('name', subject), orContains('subject', subject)].join(','))
+  // Search for each player on multi-player cards ('A/B'), in any order.
+  const players = splitPlayers(subject)
+  if (players.length) query = query.or(players.flatMap((player) => [orContains('name', player), orContains('subject', player)]).join(','))
   if (number) query = query.in('card_number', [number, `#${number}`, number.toUpperCase()])
   const { data, error } = await query.limit(300)
   if (error) throw error
@@ -2057,7 +2068,10 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
     let score = 0
     let possible = 55
 
-    const subjectMatch = Boolean(subject) && (matchText(item.subject) === matchText(subject) || matchText(item.name) === matchText(subject))
+    // Same set of players, in any order; a card that only shares one player
+    // of a dual card (or a solo card of one of them) is a different card.
+    const wanted = playerSetKey(subject)
+    const subjectMatch = Boolean(wanted) && (playerSetKey(item.subject) === wanted || playerSetKey(item.name) === wanted)
     if (subjectMatch) { score += 30; reasons.push('Same player/subject') }
     const numberMatch = Boolean(number) && cardNumberText(item.card_number) === number
     if (numberMatch) { score += 25; reasons.push('Same card number') }

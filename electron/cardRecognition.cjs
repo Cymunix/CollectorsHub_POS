@@ -41,6 +41,7 @@ const CARD_SCHEMA = {
     item_type: nullable('string'),
     collection: nullable('string'),
     subject: nullable('string'),
+    subjects: { type: 'array', items: { type: 'string' } },
     id_number: nullable('string'),
     publisher_manufacturer: nullable('string'),
     description: nullable('string'),
@@ -60,7 +61,7 @@ const CARD_SCHEMA = {
   },
   required: [
     'category', 'subcategory', 'franchise', 'subfranchise', 'property', 'item_type',
-    'collection', 'subject', 'id_number', 'publisher_manufacturer', 'description',
+    'collection', 'subject', 'subjects', 'id_number', 'publisher_manufacturer', 'description',
     'release_year', 'barcodes', 'card_type', 'team', 'rookie', 'parallel', 'variation',
     'serial_numbering', 'autograph', 'autograph_type', 'memorabilia_relic', 'finish',
     'uncertain_fields',
@@ -103,8 +104,12 @@ COLLECTION
 This is a collection/subset within the release, such as: Season Ticket, Rookie Ticket, Winning Ticket.
 Collection is NOT the card parallel.
 
-SUBJECT
-Main player/person/subject.
+SUBJECT / SUBJECTS
+subjects: EVERY player/person featured on the card, as a list. Dual, triple and quad cards
+(two or more players pictured or named, e.g. rookie combos, "Dual" inserts) have several; list each
+one separately, in the order printed (left to right, then top to bottom). Read the names from both sides.
+A single-player card has exactly one entry. Do not include coaches or people only mentioned in the bio text.
+subject: the first player in subjects.
 
 ID NUMBER
 Card number printed on the card.
@@ -228,7 +233,7 @@ function normaliseResult(raw) {
   const result = {}
   Object.entries(CARD_SCHEMA.properties).forEach(([key, spec]) => {
     const value = raw?.[key]
-    if (key === 'uncertain_fields') {
+    if (spec.type === 'array') {
       result[key] = Array.isArray(value) ? value.map((entry) => String(entry).trim()).filter(Boolean) : []
       return
     }
@@ -245,6 +250,17 @@ function normaliseResult(raw) {
   // made four starts...") even on later-year cards, so a positive rookie
   // reading is always flagged for the reviewer to confirm.
   if (result.rookie === true && !result.uncertain_fields.includes('rookie')) result.uncertain_fields.push('rookie')
+  // Multi-player cards: the catalogue stores every player in one subject,
+  // joined with '/' (e.g. 'Jordan Travis/Malachi Corley').
+  const players = []
+  for (const name of [...(result.subjects || []), result.subject]) {
+    for (const part of String(name || '').split('/')) {
+      const clean = part.trim()
+      if (clean && !players.some((existing) => existing.toLowerCase() === clean.toLowerCase())) players.push(clean)
+    }
+  }
+  result.subjects = players
+  result.subject = players.length ? players.join('/') : null
   return result
 }
 
@@ -348,4 +364,4 @@ class OllamaCardRecognitionProvider {
   }
 }
 
-module.exports = { OllamaCardRecognitionProvider, CardRecognitionError, QWEN_MODEL }
+module.exports = { OllamaCardRecognitionProvider, CardRecognitionError, QWEN_MODEL, normaliseResult }
