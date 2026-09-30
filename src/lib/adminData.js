@@ -1781,8 +1781,165 @@ async function franchiseOptions(subcategoryId) {
   return [...byName.values()]
 }
 
+// ---------------------------------------------------------------------------
+// Catalogue item editor: every items column, as a dropdown of existing
+// records (cascading like the website form) or a typed input.
+export const CATALOGUE_EDIT_GROUPS = [
+  {
+    id: 'classification',
+    label: 'Classification',
+    fields: [
+      { key: 'category_id', label: 'Category', taxonomy: 'category' },
+      { key: 'subcategory_id', label: 'Subcategory', taxonomy: 'subcategory' },
+      { key: 'franchise_id', label: 'Franchise', taxonomy: 'franchise' },
+      { key: 'subset_id', label: 'Subfranchise', taxonomy: 'subset' },
+      // Linked through item_properties, not an items column.
+      { key: 'property_id', label: 'Property', taxonomy: 'property', link: true },
+      { key: 'item_type_id', label: 'Item Type', taxonomy: 'item_type' },
+      { key: 'publisher_id', label: 'Publisher', taxonomy: 'publisher' },
+      { key: 'manufacturer_id', label: 'Manufacturer', taxonomy: 'manufacturer' },
+      { key: 'brand_id', label: 'Brand', taxonomy: 'brand' },
+      { key: 'collectible_set_id', label: 'Collectible Set', taxonomy: 'collectible_set' },
+    ],
+  },
+  {
+    id: 'item',
+    label: 'Item Details',
+    fields: [
+      { key: 'name', label: 'Name' },
+      { key: 'subject', label: 'Subject' },
+      { key: 'card_number', label: 'Card / ID Number' },
+      { key: 'release_year', label: 'Release Year', type: 'number' },
+      { key: 'upc', label: 'Barcodes (UPC/EAN)' },
+      { key: 'catalog_code', label: 'Catalogue Code' },
+      { key: 'lego_set_number', label: 'LEGO Set Number' },
+      { key: 'minifig_code', label: 'Minifig Code' },
+      { key: 'retail_price', label: 'Retail Price', type: 'number' },
+      { key: 'market_price', label: 'Market Price', type: 'number' },
+      { key: 'availability', label: 'Availability' },
+      { key: 'completion_eligible', label: 'Completion Eligible', type: 'boolean' },
+      { key: 'description', label: 'Description', multiline: true },
+    ],
+  },
+]
+
+// Levels cleared when a parent changes (their option lists depend on it).
+export const CATALOGUE_EDIT_CHILDREN = {
+  category_id: ['subcategory_id', 'franchise_id', 'subset_id', 'property_id', 'item_type_id', 'collectible_set_id'],
+  subcategory_id: ['franchise_id', 'subset_id', 'property_id', 'item_type_id', 'collectible_set_id'],
+  franchise_id: ['subset_id', 'property_id', 'collectible_set_id'],
+  subset_id: ['property_id'],
+}
+
+// Every dropdown's options for the current parent selection, loaded the way
+// the website's Add Item form loads them.
+export async function loadCatalogueTaxonomyOptions({ categoryId = '', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
+  const list = (table, idKey, apply = (query) => query) => apply(supabase.from(table).select(`${idKey}, name`)).order('name').then(({ data }) => optionRows(data, idKey))
+  const [category, scoped, manufacturer, brand, collectibleSet] = await Promise.all([
+    list('categories', 'category_id'),
+    loadTaxonomyLevels({ categoryId, subcategoryId, franchiseId, subsetId }),
+    list('manufacturers', 'manufacturer_id'),
+    list('brands', 'brand_id'),
+    franchiseId ? list('collectible_sets', 'collectible_set_id', (query) => query.eq('franchise_id', franchiseId)) : [],
+  ])
+  return { category, ...scoped, manufacturer, brand, collectible_set: collectibleSet }
+}
+
+// Names for an item's current ids, so a value outside the currently loaded
+// options (e.g. legacy data) still shows its name instead of a blank.
+export async function loadCatalogueValueNames(values = {}) {
+  const lookups = [
+    ['category', 'categories', 'category_id'],
+    ['subcategory', 'subcategories', 'subcategory_id'],
+    ['franchise', 'franchises', 'franchise_id'],
+    ['subset', 'subsets', 'subset_id'],
+    ['property', 'properties', 'property_id'],
+    ['item_type', 'item_types', 'item_type_id'],
+    ['publisher', 'publishers', 'publisher_id'],
+    ['manufacturer', 'manufacturers', 'manufacturer_id'],
+    ['brand', 'brands', 'brand_id'],
+    ['collectible_set', 'collectible_sets', 'collectible_set_id'],
+  ].filter(([, , idKey]) => values[idKey])
+  const results = await Promise.all(lookups.map(([level, table, idKey]) => (
+    supabase.from(table).select(`${idKey}, name`).eq(idKey, values[idKey]).maybeSingle().then(({ data }) => [`${level}:${values[idKey]}`, data?.name || ''])
+  )))
+  return Object.fromEntries(results)
+}
+
+function editValueText(field, value) {
+  if (value == null) return ''
+  if (field.type === 'boolean') return value === true || value === 'true' ? 'true' : value === false || value === 'false' ? 'false' : ''
+  return String(value)
+}
+
+// Starting values for the editor from a loaded catalogue item.
+export function catalogueEditValues(item = {}, propertyId = '') {
+  const values = {}
+  CATALOGUE_EDIT_GROUPS.flatMap((group) => group.fields).forEach((field) => {
+    values[field.key] = field.link ? (propertyId || '') : editValueText(field, item[field.key])
+  })
+  return values
+}
+
+function editColumnValue(field, text) {
+  const value = String(text ?? '').trim()
+  if (!value) return field.type === 'boolean' ? null : null
+  if (field.type === 'number') {
+    const number = Number(value.replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(number) ? number : null
+  }
+  if (field.type === 'boolean') return value === 'true'
+  return value
+}
+
+// JSON with object keys sorted, so key order never counts as a change.
+export function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value ?? null)
+}
+
+// Saves only what changed: items columns, the whole dynamic_fields object
+// when any of it changed, and the item_properties link for Property.
+export async function saveCatalogueItemEdits({ item, propertyId = '', values, dynamicFields }) {
+  const fields = CATALOGUE_EDIT_GROUPS.flatMap((group) => group.fields)
+  const original = catalogueEditValues(item, propertyId)
+  const patch = {}
+  const changed = []
+  fields.filter((field) => !field.link).forEach((field) => {
+    if (String(values[field.key] ?? '').trim() === String(original[field.key] ?? '').trim()) return
+    patch[field.key] = editColumnValue(field, values[field.key])
+    changed.push(field.key)
+  })
+  if (dynamicFields && stableJson(dynamicFields) !== stableJson(item.dynamic_fields || {})) {
+    patch.dynamic_fields = dynamicFields
+    changed.push('dynamic_fields')
+  }
+  const warnings = []
+  let updated = item
+  if (Object.keys(patch).length) updated = await updateCatalogueItemRecord(item.item_id, patch)
+  if ((values.property_id || '') !== (propertyId || '')) {
+    changed.push('property_id')
+    const { error: deleteError } = await supabase.from('item_properties').delete().eq('item_id', item.item_id)
+    if (deleteError) warnings.push(`Property was not changed: ${deleteError.message}`)
+    else if (values.property_id) {
+      const { error: insertError } = await supabase.from('item_properties').insert({ item_id: item.item_id, property_id: values.property_id })
+      if (insertError) warnings.push(`Property was not changed: ${insertError.message}`)
+    }
+  }
+  return { item: updated, changed, warnings }
+}
+
 export async function loadSportsTaxonomyOptions({ category = 'Sports Cards', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
-  const categoryId = await categoryIdForName(category)
+  return loadTaxonomyLevels({ categoryId: await categoryIdForName(category), subcategoryId, franchiseId, subsetId })
+}
+
+// Subcategory -> Franchise -> Subfranchise -> Property, Item Type and
+// Publisher, each scoped by the level above (shared by scan review and the
+// catalogue editor).
+async function loadTaxonomyLevels({ categoryId = '', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
   const propertyQuery = () => {
     let query = supabase.from('properties').select('property_id, name').eq('franchise_id', franchiseId).order('name')
     if (subsetId) query = query.eq('subset_id', subsetId)

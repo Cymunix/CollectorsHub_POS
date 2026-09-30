@@ -38,6 +38,14 @@ import {
   loadUsersData,
   identifyScannedDraft,
   analyseRecognizedCard,
+  CATALOGUE_EDIT_CHILDREN,
+  CATALOGUE_EDIT_GROUPS,
+  catalogueEditValues,
+  loadCatalogueTaxonomyOptions,
+  loadCatalogueValueNames,
+  saveCatalogueItemEdits,
+  SPORTS_CARD_TYPE_OPTIONS,
+  stableJson,
   attachScanImagesToItem,
   countItemImages,
   findSpecDuplicates,
@@ -782,13 +790,277 @@ function CatalogueTable({ rows, selectedId, onSelect }) {
   )
 }
 
+// dynamic_fields keys with fixed choices (the website's Sports Cards form).
+const DYNAMIC_FIELD_CHOICES = {
+  card_type: SPORTS_CARD_TYPE_OPTIONS,
+  rookie: ['Yes', 'No'],
+  autograph: ['Yes', 'No'],
+  relic: ['Yes', 'No'],
+}
+// Sports Cards card-metadata keys shown even when the item has no value yet.
+const SPORTS_DYNAMIC_KEYS = ['collection', 'card_type', 'team', 'rookie', 'parallel', 'variation', 'serial_numbering', 'autograph', 'autograph_type', 'relic', 'finish', 'source']
+const TAXONOMY_PARENT = {
+  subcategory: 'category_id',
+  franchise: 'subcategory_id',
+  subset: 'franchise_id',
+  property: 'franchise_id',
+  item_type: 'subcategory_id',
+  collectible_set: 'franchise_id',
+}
+
+function dynamicFieldLabel(key) {
+  const text = String(key).replaceAll('_', ' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+function dynamicRowKind(value) {
+  if (value !== null && typeof value === 'object') return 'json'
+  if (typeof value === 'boolean') return 'boolean'
+  if (typeof value === 'number') return 'number'
+  return 'text'
+}
+
+function dynamicRowsFrom(dynamicFields = {}, isSports = false) {
+  const rows = Object.entries(dynamicFields || {}).map(([key, value]) => {
+    const kind = dynamicRowKind(value)
+    return { key, kind, value: kind === 'json' ? JSON.stringify(value, null, 2) : value == null ? '' : String(value), existed: true }
+  })
+  if (isSports) {
+    SPORTS_DYNAMIC_KEYS.filter((key) => !rows.some((row) => row.key === key)).forEach((key) => rows.push({ key, kind: 'text', value: '', existed: false }))
+  }
+  return rows.sort((a, b) => a.key.localeCompare(b.key))
+}
+
+// Rebuilds dynamic_fields from the editor rows. New keys left empty are not
+// added; existing keys keep their type (JSON must parse).
+function dynamicFieldsFromRows(rows) {
+  const result = {}
+  for (const row of rows) {
+    const key = row.key.trim()
+    if (!key) continue
+    if (row.kind === 'json') {
+      try {
+        result[key] = JSON.parse(row.value || 'null')
+      } catch {
+        throw new Error(`"${key}" is not valid JSON.`)
+      }
+    } else if (row.kind === 'boolean') {
+      result[key] = row.value === 'true'
+    } else if (row.kind === 'number') {
+      if (row.value.trim() === '') result[key] = null
+      else if (Number.isFinite(Number(row.value))) result[key] = Number(row.value)
+      else throw new Error(`"${key}" must be a number.`)
+    } else if (row.value.trim() !== '' || row.existed) {
+      result[key] = row.value
+    }
+  }
+  return result
+}
+
+// Table editor for every value of a catalogue item: dropdowns of existing
+// records for the linked fields (cascading like the website form) and typed
+// inputs for everything else, including the item's dynamic_fields.
+function CatalogueItemEditor({ record, onSaved, onCancel }) {
+  const item = record.raw || {}
+  const [propertyId, setPropertyId] = useState(null)
+  const [values, setValues] = useState(null)
+  const [options, setOptions] = useState({})
+  const [names, setNames] = useState({})
+  const [dynamicRows, setDynamicRows] = useState([])
+  const [newKey, setNewKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    loadItemPropertyId(item.item_id)
+      .catch(() => '')
+      .then(async (pid) => {
+        if (cancelled) return
+        const start = catalogueEditValues(item, pid || '')
+        setPropertyId(pid || '')
+        setValues(start)
+        setNames(await loadCatalogueValueNames(start).catch(() => ({})))
+      })
+    return () => { cancelled = true }
+  }, [item.item_id])
+
+  const categoryName = (options.category || []).find((option) => option.id === values?.category_id)?.name
+    || names[`category:${values?.category_id}`] || ''
+  const isSports = categoryName.toLowerCase() === 'sports cards'
+
+  useEffect(() => {
+    if (values) setDynamicRows(dynamicRowsFrom(item.dynamic_fields, isSports))
+  }, [item.item_id, isSports, values === null])
+
+  useEffect(() => {
+    if (!values) return undefined
+    let cancelled = false
+    loadCatalogueTaxonomyOptions({ categoryId: values.category_id, subcategoryId: values.subcategory_id, franchiseId: values.franchise_id, subsetId: values.subset_id })
+      .then((next) => { if (!cancelled) setOptions(next) })
+      .catch((err) => { if (!cancelled) setError(err.message || 'Could not load the catalogue choices.') })
+    return () => { cancelled = true }
+  }, [values?.category_id, values?.subcategory_id, values?.franchise_id, values?.subset_id])
+
+  if (!values) return <div className="admin-editor"><p className="scan-mode-note">Loading item…</p></div>
+
+  const original = catalogueEditValues(item, propertyId || '')
+  const originalDynamic = stableJson(item.dynamic_fields || {})
+  let dynamicPreview = null
+  let dynamicError = ''
+  try { dynamicPreview = dynamicFieldsFromRows(dynamicRows) } catch (err) { dynamicError = err.message }
+  const dynamicChanged = dynamicPreview !== null && stableJson(dynamicPreview) !== originalDynamic
+  const changedKeys = Object.keys(values).filter((key) => String(values[key] ?? '').trim() !== String(original[key] ?? '').trim())
+  const changeCount = changedKeys.length + (dynamicChanged ? 1 : 0)
+
+  function setValue(key, value) {
+    setValues((current) => {
+      const next = { ...current, [key]: value }
+      if (current[key] !== value) (CATALOGUE_EDIT_CHILDREN[key] || []).forEach((child) => { next[child] = '' })
+      return next
+    })
+  }
+
+  function setDynamic(index, patch) {
+    setDynamicRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  }
+
+  function addDynamicField() {
+    const key = newKey.trim().toLowerCase().replace(/\s+/g, '_')
+    if (!key || dynamicRows.some((row) => row.key === key)) return
+    setDynamicRows((rows) => [...rows, { key, kind: 'text', value: '', existed: false }])
+    setNewKey('')
+  }
+
+  async function save() {
+    setSaving(true)
+    setError('')
+    try {
+      const dynamicFields = dynamicFieldsFromRows(dynamicRows)
+      const result = await saveCatalogueItemEdits({ item, propertyId: propertyId || '', values, dynamicFields })
+      await onSaved(result)
+    } catch (err) {
+      setError(err.message || 'Could not save the catalogue item.')
+      setSaving(false)
+    }
+  }
+
+  function renderInput(field) {
+    const value = values[field.key] ?? ''
+    if (field.taxonomy) {
+      const list = options[field.taxonomy] || []
+      const parent = TAXONOMY_PARENT[field.taxonomy]
+      const ready = !parent || Boolean(values[parent])
+      const choices = value && !list.some((option) => option.id === value)
+        ? [{ id: value, name: names[`${field.taxonomy}:${value}`] || 'Current value' }, ...list]
+        : list
+      return (
+        <select value={value} onChange={(event) => setValue(field.key, event.target.value)} disabled={!ready && !value}>
+          <option value="">{ready ? 'None' : 'Select the level above first'}</option>
+          {choices.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+        </select>
+      )
+    }
+    if (field.type === 'boolean') {
+      return (
+        <select value={value} onChange={(event) => setValue(field.key, event.target.value)}>
+          <option value="">—</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      )
+    }
+    if (field.multiline) return <textarea rows={3} value={value} onChange={(event) => setValue(field.key, event.target.value)} />
+    return <input type={field.type === 'number' ? 'number' : 'text'} value={value} onChange={(event) => setValue(field.key, event.target.value)} />
+  }
+
+  function renderDynamicInput(row, index) {
+    const choices = DYNAMIC_FIELD_CHOICES[row.key]
+    if (row.kind === 'json') return <textarea className="catalogue-editor-json" rows={Math.min(8, row.value.split('\n').length + 1)} value={row.value} onChange={(event) => setDynamic(index, { value: event.target.value })} spellCheck="false" />
+    if (row.kind === 'boolean') {
+      return (
+        <select value={row.value} onChange={(event) => setDynamic(index, { value: event.target.value })}>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      )
+    }
+    if (choices && row.kind === 'text') {
+      const list = row.value && !choices.includes(row.value) ? [row.value, ...choices] : choices
+      return (
+        <select value={row.value} onChange={(event) => setDynamic(index, { value: event.target.value })}>
+          <option value="">—</option>
+          {list.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+        </select>
+      )
+    }
+    return <input type={row.kind === 'number' ? 'number' : 'text'} value={row.value} onChange={(event) => setDynamic(index, { value: event.target.value })} />
+  }
+
+  const originalRows = dynamicRowsFrom(item.dynamic_fields, isSports)
+  return (
+    <div className="catalogue-editor">
+      {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
+      <table className="scan-review-table catalogue-editor-table">
+        {CATALOGUE_EDIT_GROUPS.map((group) => (
+          <tbody key={group.id}>
+            <tr className="scan-review-group"><th colSpan={2}>{group.label}</th></tr>
+            {group.fields.map((field) => (
+              <tr key={field.key} className={changedKeys.includes(field.key) ? 'edited' : ''}>
+                <th scope="row">{field.label}</th>
+                <td>{renderInput(field)}</td>
+              </tr>
+            ))}
+          </tbody>
+        ))}
+        <tbody>
+          <tr className="scan-review-group"><th colSpan={2}>{isSports ? 'Card Metadata & Other Data' : 'Category Data'} <small>(dynamic_fields)</small></th></tr>
+          {dynamicRows.map((row, index) => {
+            const before = originalRows.find((entry) => entry.key === row.key)
+            const edited = !before || before.value !== row.value
+            return (
+              <tr key={row.key} className={edited && (row.existed || row.value) ? 'edited' : ''}>
+                <th scope="row">{dynamicFieldLabel(row.key)}<small className="catalogue-editor-key">{row.key}</small></th>
+                <td>
+                  <div className="catalogue-editor-dynamic">
+                    {renderDynamicInput(row, index)}
+                    <button type="button" className="catalogue-editor-remove" onClick={() => setDynamicRows((rows) => rows.filter((_, i) => i !== index))} aria-label={`Remove ${row.key}`}>×</button>
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
+          <tr>
+            <th scope="row">Add field</th>
+            <td>
+              <div className="catalogue-editor-dynamic">
+                <input value={newKey} onChange={(event) => setNewKey(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addDynamicField() } }} placeholder="field_name" />
+                <button type="button" onClick={addDynamicField} disabled={!newKey.trim()}>Add</button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      {dynamicError ? <p className="admin-error">{dynamicError}</p> : null}
+      <div className="catalogue-editor-footer">
+        <span>{changeCount ? `${changeCount} change${changeCount === 1 ? '' : 's'}` : 'No changes'}</span>
+        <button type="button" onClick={() => { setValues(original); setDynamicRows(originalRows) }} disabled={saving || !changeCount}>Reset</button>
+        <button type="button" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button className="admin-gold-button" type="button" onClick={save} disabled={saving || !changeCount || Boolean(dynamicError)}>{saving ? 'Saving…' : 'Save Changes'}</button>
+      </div>
+    </div>
+  )
+}
+
 function CatalogueItemRecord({ itemId, onClose }) {
   const [activeTab, setActiveTab] = useState('Overview')
   const [record, setRecord] = useState(null)
   const [error, setError] = useState('')
   const [editorValue, setEditorValue] = useState('')
-  const [isEditing, setIsEditing] = useState(false)
+  // '' (view) | 'table' (field editor) | 'json' (raw JSON, advanced)
+  const [editMode, setEditMode] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -797,7 +1069,8 @@ function CatalogueItemRecord({ itemId, onClose }) {
         if (!cancelled) {
           setRecord(data)
           setEditorValue(JSON.stringify(data.raw || {}, null, 2))
-          setIsEditing(false)
+          setEditMode('')
+          setNotice('')
           setError('')
         }
       })
@@ -824,7 +1097,7 @@ function CatalogueItemRecord({ itemId, onClose }) {
       const refreshed = await loadCatalogueItemRecord(itemId)
       setRecord(refreshed)
       setEditorValue(JSON.stringify(refreshed.raw || {}, null, 2))
-      setIsEditing(false)
+      setEditMode('')
       setError('')
     } catch (err) {
       setError(err.message || 'Could not save catalogue item.')
@@ -841,14 +1114,34 @@ function CatalogueItemRecord({ itemId, onClose }) {
           <h2>{raw.name || details.subject || itemId}</h2>
         </div>
         <div className="admin-button-row">
-          <button className="admin-secondary-button" type="button" onClick={() => setIsEditing((current) => !current)}>
-            {isEditing ? 'View Record' : 'Edit Values'}
-          </button>
+          {editMode ? (
+            <button className="admin-secondary-button" type="button" onClick={() => setEditMode('')}>View Record</button>
+          ) : (
+            <>
+              <button className="admin-gold-button" type="button" onClick={() => { setNotice(''); setEditMode('table') }} disabled={!record}>Edit Values</button>
+              <button className="admin-secondary-button" type="button" onClick={() => setEditMode('json')} disabled={!record}>Edit JSON</button>
+            </>
+          )}
           <button className="admin-secondary-button" type="button" onClick={onClose}>Close</button>
         </div>
       </div>
       {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
-      {isEditing ? (
+      {notice ? <p className="admin-success">{notice}</p> : null}
+      {editMode === 'table' && record ? (
+        <CatalogueItemEditor
+          key={record.raw?.item_id}
+          record={record}
+          onCancel={() => setEditMode('')}
+          onSaved={async (result) => {
+            const refreshed = await loadCatalogueItemRecord(itemId)
+            setRecord(refreshed)
+            setEditorValue(JSON.stringify(refreshed.raw || {}, null, 2))
+            setEditMode('')
+            setNotice(result.warnings?.length ? `Saved with warnings: ${result.warnings.join(' ')}` : `Saved ${result.changed.length} change${result.changed.length === 1 ? '' : 's'}.`)
+          }}
+        />
+      ) : null}
+      {editMode === 'json' ? (
         <div className="admin-editor">
           <div className="admin-editor-header">
             <strong>Edit catalogue item JSON</strong>
