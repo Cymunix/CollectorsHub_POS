@@ -151,16 +151,9 @@ export async function loadAdminOverview() {
   }
 }
 
-export async function loadCatalogueItems({ search = '', categoryId = '', missingImages = false, missingPricing = false, page = 1, limit = 25 } = {}) {
-  const from = Math.max(0, (page - 1) * limit)
-  const to = from + limit - 1
-  let query = supabase
-    .from('items')
-    .select(CATALOGUE_SELECT.join(','), { count: 'exact' })
-    .order('name', { ascending: true, nullsFirst: false })
-    .range(from, to)
-
-  const term = search.trim()
+// Filters shared by the catalogue list and "select all matching".
+function applyCatalogueFilters(query, { search = '', categoryId = '', franchiseId = '', releaseYear = '', missingImages = false, missingPricing = false } = {}) {
+  const term = String(search || '').trim()
   if (term) {
     const searchFilters = [
       orContains('name', term),
@@ -174,10 +167,98 @@ export async function loadCatalogueItems({ search = '', categoryId = '', missing
     if (UUID_RE.test(term)) searchFilters.push(`item_id.eq.${term}`)
     query = query.or(searchFilters.join(','))
   }
-
   if (categoryId) query = query.eq('category_id', categoryId)
+  if (franchiseId) query = query.eq('franchise_id', franchiseId)
+  if (String(releaseYear || '').trim()) query = query.eq('release_year', Number(releaseYear))
   if (missingImages) query = query.or('image_path.is.null,image_path.eq.')
   if (missingPricing) query = query.is('market_price', null)
+  return query
+}
+
+// Every item id matching the filters (for bulk actions), up to `max`.
+export async function loadCatalogueItemIds(filters = {}, max = 5000) {
+  const ids = []
+  for (let from = 0; from < max; from += 1000) {
+    const { data, error } = await applyCatalogueFilters(supabase.from('items').select('item_id'), filters)
+      .order('item_id')
+      .range(from, Math.min(from + 999, max - 1))
+    if (error) throw error
+    ids.push(...(data || []).map((row) => row.item_id))
+    if (!data || data.length < 1000) break
+  }
+  return ids
+}
+
+export async function loadFranchiseOptions() {
+  const { data, error } = await supabase.from('franchises').select('franchise_id, name').order('name')
+  if (error) throw error
+  const byName = new Map()
+  ;(data || []).forEach((row) => {
+    const name = String(row.name || '').trim()
+    if (name && !byName.has(name.toLowerCase())) byName.set(name.toLowerCase(), { id: row.franchise_id, name })
+  })
+  return [...byName.values()]
+}
+
+// Tables whose rows keep pointing at a catalogue item that is in use (store
+// stock, sales, orders, in-store sales history, customer collections).
+// Deleting such an item would unlink or block them, so bulk delete skips it.
+const ITEM_IN_USE_TABLES = [
+  ['store_inventory', 'store inventory'],
+  ['store_transaction_items', 'sales'],
+  ['store_order_items', 'pre-orders / layaways'],
+  ['item_market_sales', 'in-store sales history'],
+  ['owned_copies', 'customer collections'],
+]
+
+// Returns { deleted: [ids], skipped: [{ id, reason }], failed: [{ id, message }] }.
+// Items in use are skipped; deletes run in batches, and a batch that fails is
+// retried item by item so one bad row never blocks the rest.
+export async function deleteCatalogueItems(itemIds = [], onProgress = () => {}) {
+  const ids = [...new Set(itemIds)].filter(Boolean)
+  const inUse = new Map()
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const checks = await Promise.all(ITEM_IN_USE_TABLES.map(([table, label]) => (
+      supabase.from(table).select('catalog_item_id').in('catalog_item_id', chunk).then(({ data, error }) => ({ label, rows: error ? [] : data || [] }))
+    )))
+    checks.forEach(({ label, rows }) => rows.forEach((row) => { if (!inUse.has(row.catalog_item_id)) inUse.set(row.catalog_item_id, label) }))
+    onProgress({ phase: 'checking', done: Math.min(i + 200, ids.length), total: ids.length })
+  }
+  const skipped = [...inUse.entries()].map(([id, reason]) => ({ id, reason }))
+  const toDelete = ids.filter((id) => !inUse.has(id))
+  const deleted = []
+  const failed = []
+  for (let i = 0; i < toDelete.length; i += 50) {
+    const chunk = toDelete.slice(i, i + 50)
+    const { data, error } = await supabase.from('items').delete().in('item_id', chunk).select('item_id')
+    if (!error) {
+      const gone = new Set((data || []).map((row) => row.item_id))
+      deleted.push(...gone)
+      chunk.filter((id) => !gone.has(id)).forEach((id) => failed.push({ id, message: 'Not deleted (no permission or already removed).' }))
+    } else {
+      for (const id of chunk) {
+        const single = await supabase.from('items').delete().eq('item_id', id).select('item_id')
+        if (single.error) failed.push({ id, message: single.error.message })
+        else if (single.data?.length) deleted.push(id)
+        else failed.push({ id, message: 'Not deleted (no permission or already removed).' })
+      }
+    }
+    onProgress({ phase: 'deleting', done: Math.min(i + 50, toDelete.length), total: toDelete.length })
+  }
+  return { deleted, skipped, failed }
+}
+
+export async function loadCatalogueItems({ search = '', categoryId = '', franchiseId = '', releaseYear = '', missingImages = false, missingPricing = false, page = 1, limit = 25 } = {}) {
+  const from = Math.max(0, (page - 1) * limit)
+  const to = from + limit - 1
+  let query = supabase
+    .from('items')
+    .select(CATALOGUE_SELECT.join(','), { count: 'exact' })
+    .order('name', { ascending: true, nullsFirst: false })
+    .range(from, to)
+
+  query = applyCatalogueFilters(query, { search, categoryId, franchiseId, releaseYear, missingImages, missingPricing })
 
   const { data, error, count: total } = await query
   if (error) throw error

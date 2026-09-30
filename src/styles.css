@@ -7195,3 +7195,65 @@ button:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Catalogue bulk selection / delete */
+.admin-year-filter {
+  width: 96px;
+}
+
+.catalogue-bulk-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.catalogue-bulk-bar button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #1f2a3a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 10px;
+}
+
+.catalogue-bulk-bar button.danger,
+.modal-actions .bulk-delete-button {
+  background: #b42318;
+  border-color: #b42318;
+  color: #fff;
+}
+
+.modal-actions .bulk-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.admin-table .admin-check-cell {
+  text-align: center;
+  width: 36px;
+}
+
+.admin-table tr.checked td {
+  background: #fdf6e3;
+}
+
+.update-prompt section.bulk-delete-dialog {
+  border-top-color: #b42318;
+}
+
+.bulk-delete-confirm {
+  display: grid;
+  font-weight: 700;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.bulk-delete-confirm input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 15px;
+  padding: 8px 10px;
+}

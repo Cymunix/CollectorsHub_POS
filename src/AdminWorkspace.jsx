@@ -26,6 +26,9 @@ import {
   loadAdminOverview,
   loadCatalogueItemRecord,
   loadCatalogueItems,
+  loadCatalogueItemIds,
+  loadFranchiseOptions,
+  deleteCatalogueItems,
   loadExplorerRecords,
   loadImagesMediaData,
   loadPricingData,
@@ -682,28 +685,40 @@ function MarketDataAdmin({ storeContext = {} }) {
 function AdminCatalogue() {
   const [search, setSearch] = useState('')
   const [categoryId, setCategoryId] = useState('')
+  const [franchiseId, setFranchiseId] = useState('')
+  const [releaseYear, setReleaseYear] = useState('')
   const [missingImages, setMissingImages] = useState(false)
   const [missingPricing, setMissingPricing] = useState(false)
   const [categories, setCategories] = useState([])
+  const [franchises, setFranchises] = useState([])
   const [rows, setRows] = useState([])
   const [selectedId, setSelectedId] = useState('')
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [reloadToken, setReloadToken] = useState(0)
+  // Ticked rows for bulk actions (kept across pages).
+  const [checked, setChecked] = useState(() => new Set())
+  const [selectingAll, setSelectingAll] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [notice, setNotice] = useState('')
+  const filters = { search, categoryId, franchiseId, releaseYear, missingImages, missingPricing }
 
   useEffect(() => {
     loadAdminCategories().then(setCategories).catch(() => setCategories([]))
+    loadFranchiseOptions().then(setFranchises).catch(() => setFranchises([]))
   }, [])
 
   useEffect(() => {
     setPage(1)
-  }, [search, categoryId, missingImages, missingPricing])
+    setChecked(new Set())
+  }, [search, categoryId, franchiseId, releaseYear, missingImages, missingPricing])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setLoading(true)
-      loadCatalogueItems({ search, categoryId, missingImages, missingPricing, page, limit: PAGE_SIZE })
+      loadCatalogueItems({ ...filters, page, limit: PAGE_SIZE })
         .then((result) => {
           setRows(result.rows)
           setTotal(result.total)
@@ -713,9 +728,47 @@ function AdminCatalogue() {
         .finally(() => setLoading(false))
     }, 220)
     return () => window.clearTimeout(timer)
-  }, [search, categoryId, missingImages, missingPricing, page])
+  }, [search, categoryId, franchiseId, releaseYear, missingImages, missingPricing, page, reloadToken])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  function toggleRow(itemId) {
+    setChecked((current) => {
+      const next = new Set(current)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  function togglePage(select) {
+    setChecked((current) => {
+      const next = new Set(current)
+      rows.forEach((row) => { if (select) next.add(row.item_id); else next.delete(row.item_id) })
+      return next
+    })
+  }
+
+  async function selectAllMatching() {
+    setSelectingAll(true)
+    setError('')
+    try {
+      setChecked(new Set(await loadCatalogueItemIds(filters)))
+    } catch (err) {
+      setError(err.message || 'Could not select the matching items.')
+    } finally {
+      setSelectingAll(false)
+    }
+  }
+
+  const filterSummary = [
+    categories.find((category) => category.category_id === categoryId)?.name,
+    franchises.find((franchise) => franchise.id === franchiseId)?.name,
+    releaseYear ? `Year ${releaseYear}` : '',
+    search ? `"${search}"` : '',
+    missingImages ? 'missing images' : '',
+    missingPricing ? 'missing pricing' : '',
+  ].filter(Boolean).join(' · ')
 
   return (
     <div className="admin-stack">
@@ -736,26 +789,122 @@ function AdminCatalogue() {
             <option value="">All Categories</option>
             {categories.map((category) => <option key={category.category_id} value={category.category_id}>{category.name}</option>)}
           </select>
+          <select value={franchiseId} onChange={(event) => setFranchiseId(event.target.value)}>
+            <option value="">All Franchises</option>
+            {franchises.map((franchise) => <option key={franchise.id} value={franchise.id}>{franchise.name}</option>)}
+          </select>
+          <input className="admin-year-filter" type="number" min="1800" max="2100" value={releaseYear} onChange={(event) => setReleaseYear(event.target.value)} placeholder="Year" />
           <label className="admin-check"><input type="checkbox" checked={missingImages} onChange={(event) => setMissingImages(event.target.checked)} /> Missing Images</label>
           <label className="admin-check"><input type="checkbox" checked={missingPricing} onChange={(event) => setMissingPricing(event.target.checked)} /> Missing Pricing</label>
         </div>
-        <div className="admin-table-note">{loading ? 'Loading...' : `${formatNumber(total)} matching records`}</div>
+        <div className="admin-table-note catalogue-bulk-bar">
+          <span>{loading ? 'Loading...' : `${formatNumber(total)} matching records`}{checked.size ? ` · ${formatNumber(checked.size)} selected` : ''}</span>
+          {total > 0 && checked.size < total ? (
+            <button type="button" onClick={selectAllMatching} disabled={selectingAll || loading}>{selectingAll ? 'Selecting…' : `Select all ${formatNumber(total)} matching`}</button>
+          ) : null}
+          {checked.size ? <button type="button" onClick={() => setChecked(new Set())}>Clear selection</button> : null}
+          {checked.size ? <button type="button" className="danger" onClick={() => setDeleting(true)}>Delete Selected ({formatNumber(checked.size)})</button> : null}
+        </div>
         {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
-        <CatalogueTable rows={rows} onSelect={setSelectedId} selectedId={selectedId} />
+        {notice ? <AdminDismissibleAlert className="admin-success" onDismiss={() => setNotice('')}>{notice}</AdminDismissibleAlert> : null}
+        <CatalogueTable rows={rows} onSelect={setSelectedId} selectedId={selectedId} checked={checked} onToggle={toggleRow} onTogglePage={togglePage} />
         <PaginationControls page={page} totalPages={totalPages} total={total} onPage={setPage} />
       </section>
 
       {selectedId ? <CatalogueItemRecord itemId={selectedId} onClose={() => setSelectedId('')} /> : null}
+      {deleting ? (
+        <BulkDeleteDialog
+          itemIds={[...checked]}
+          filterSummary={filterSummary}
+          onClose={() => setDeleting(false)}
+          onDone={(result) => {
+            setDeleting(false)
+            setChecked(new Set())
+            if (result.deleted.includes(selectedId)) setSelectedId('')
+            setNotice(`Deleted ${formatNumber(result.deleted.length)} catalogue item${result.deleted.length === 1 ? '' : 's'}.`
+              + (result.skipped.length ? ` Skipped ${formatNumber(result.skipped.length)} still in use.` : '')
+              + (result.failed.length ? ` ${formatNumber(result.failed.length)} could not be deleted.` : ''))
+            setReloadToken((token) => token + 1)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
 
-function CatalogueTable({ rows, selectedId, onSelect }) {
+// Confirmation + progress for deleting catalogue items. Nothing is deleted
+// until the admin types DELETE; items still in use are skipped, not unlinked.
+function BulkDeleteDialog({ itemIds, filterSummary, onClose, onDone }) {
+  const [confirmText, setConfirmText] = useState('')
+  const [progress, setProgress] = useState(null)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState('')
+  const running = Boolean(progress) && !result
+
+  async function run() {
+    setError('')
+    setProgress({ phase: 'checking', done: 0, total: itemIds.length })
+    try {
+      setResult(await deleteCatalogueItems(itemIds, setProgress))
+    } catch (err) {
+      setError(err.message || 'Delete failed.')
+      setProgress(null)
+    }
+  }
+
+  const reasons = result ? result.skipped.reduce((acc, entry) => ({ ...acc, [entry.reason]: (acc[entry.reason] || 0) + 1 }), {}) : {}
+  return (
+    <div className="register-modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="bulk-delete-title">
+      <section className="bulk-delete-dialog">
+        <p className="update-prompt-kicker">Delete catalogue items</p>
+        <h2 id="bulk-delete-title">{result ? 'Delete finished' : `Delete ${formatNumber(itemIds.length)} catalogue item${itemIds.length === 1 ? '' : 's'}?`}</h2>
+        {!result ? (
+          <>
+            {filterSummary ? <p>Selected from: <strong>{filterSummary}</strong></p> : null}
+            <p>This permanently removes the items and their photo links, properties, wishlists and favourites. It cannot be undone.</p>
+            <p>Items still used by store inventory, sales, pre-orders, in-store sales history or customer collections are <strong>skipped</strong>, never unlinked.</p>
+            {progress ? (
+              <div className="local-ai-progress">
+                <div className="local-ai-progress-bar"><span style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} /></div>
+                <small>{progress.phase === 'checking' ? 'Checking which items are in use' : 'Deleting'}: {formatNumber(progress.done)} of {formatNumber(progress.total)}</small>
+              </div>
+            ) : (
+              <label className="bulk-delete-confirm"><span>Type <strong>DELETE</strong> to confirm</span>
+                <input autoFocus value={confirmText} onChange={(event) => setConfirmText(event.target.value)} />
+              </label>
+            )}
+          </>
+        ) : (
+          <div className="bulk-delete-result">
+            <p><strong>{formatNumber(result.deleted.length)}</strong> deleted.</p>
+            {result.skipped.length ? <p><strong>{formatNumber(result.skipped.length)}</strong> skipped because they are in use: {Object.entries(reasons).map(([reason, count]) => `${reason} (${count})`).join(', ')}.</p> : null}
+            {result.failed.length ? <p><strong>{formatNumber(result.failed.length)}</strong> could not be deleted: {result.failed[0].message}</p> : null}
+          </div>
+        )}
+        {error ? <p className="admin-error">{error}</p> : null}
+        <div className="modal-actions">
+          {result ? (
+            <button className="update-prompt-primary" type="button" onClick={() => onDone(result)}>Done</button>
+          ) : (
+            <>
+              <button type="button" onClick={onClose} disabled={running}>Cancel</button>
+              <button className="bulk-delete-button" type="button" onClick={run} disabled={running || !itemIds.length || confirmText.trim() !== 'DELETE'}>{running ? 'Deleting…' : `Delete ${formatNumber(itemIds.length)}`}</button>
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function CatalogueTable({ rows, selectedId, onSelect, checked = new Set(), onToggle = () => {}, onTogglePage = () => {} }) {
+  const pageChecked = rows.length > 0 && rows.every((row) => checked.has(row.item_id))
   return (
     <div className="admin-table-wrap">
       <table className="admin-table">
         <thead>
           <tr>
+            <th className="admin-check-cell"><input type="checkbox" aria-label="Select this page" checked={pageChecked} onChange={(event) => onTogglePage(event.target.checked)} /></th>
             <th>Image</th>
             <th>Item Name</th>
             <th>Category</th>
@@ -770,7 +919,10 @@ function CatalogueTable({ rows, selectedId, onSelect }) {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr className={selectedId === row.item_id ? 'selected' : ''} key={row.item_id} onClick={() => onSelect(row.item_id)}>
+            <tr className={[selectedId === row.item_id ? 'selected' : '', checked.has(row.item_id) ? 'checked' : ''].filter(Boolean).join(' ')} key={row.item_id} onClick={() => onSelect(row.item_id)}>
+              <td className="admin-check-cell" onClick={(event) => event.stopPropagation()}>
+                <input type="checkbox" aria-label={`Select ${row.displayName}`} checked={checked.has(row.item_id)} onChange={() => onToggle(row.item_id)} />
+              </td>
               <td>{row.imageUrl ? <img className="admin-thumb" src={row.imageUrl} alt="" /> : <span className="admin-thumb-placeholder" />}</td>
               <td><strong>{row.displayName}</strong><small>{row.subcategoryName || row.subject || '—'}</small></td>
               <td>{row.categoryName || '—'}</td>
