@@ -825,7 +825,8 @@ const SCAN_DPI = 600
 const scannerSession = new ScannerSession({ workDir: path.join(getDataDirSafe(), 'scanner'), cropSource: SCAN_CROP_SOURCE })
 const CARD_REGION_IN = { width: 3.7, height: 3.7 }
 const DEFAULT_BED_IN = { width: 8.5, height: 11.68 }
-// WIA_IPS_CUR_INTENT: image type (1 colour, 2 greyscale) | WIA_INTENT_MAXIMIZE_QUALITY.
+// WIA_IPS_CUR_INTENT: image type (colour) | WIA_INTENT_MAXIMIZE_QUALITY.
+const WIA_INTENT_COLOR = 1
 const WIA_INTENT_MAXIMIZE_QUALITY = 0x20000
 
 function getDataDirSafe() {
@@ -913,7 +914,8 @@ ipcMain.handle('scanner:scan-image', async (_event, options = {}) => {
     outputPath: `${base}.png`,
     displayPath: options.displayCopy ? `${base}.display.jpg` : '',
   }
-  const intent = (options.colourMode === 'Greyscale' ? 2 : 1) | WIA_INTENT_MAXIMIZE_QUALITY
+  // Cards are always scanned in 24-bit colour, photo quality.
+  const intent = WIA_INTENT_COLOR | WIA_INTENT_MAXIMIZE_QUALITY
   const card = mode === 'card' ? cardRegionIn(options.cardPosition, options.customPosition, scannerSession.bed) : null
   const started = Date.now()
 
@@ -988,7 +990,7 @@ async function legacyScan(options = {}) {
   const cropSourcePath = path.join(getDataDir(), 'scan-crop.cs')
   await writeFile(cropSourcePath, SCAN_CROP_SOURCE, 'utf8')
   const escapedCropSourcePath = cropSourcePath.replace(/'/g, "''")
-  const intent = options?.colourMode === 'Greyscale' ? 2 : 1
+  const intent = WIA_INTENT_COLOR
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",

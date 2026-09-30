@@ -38,6 +38,8 @@ import {
   loadUsersData,
   identifyScannedDraft,
   analyseRecognizedCard,
+  attachScanImagesToItem,
+  countItemImages,
   findSpecDuplicates,
   AI_FIELD_FOR_REVIEW_KEY,
   recognitionResult,
@@ -1921,7 +1923,6 @@ function ScanIntake({ onCreateDraft, ai }) {
   const [backImage, setBackImage] = useState(null)
   const [scannerMessage, setScannerMessage] = useState('')
   const [scannerError, setScannerError] = useState('')
-  const [colourMode, setColourMode] = useState('Colour')
   const [scanMode, setScanMode] = useState(() => readScannerPref('scanMode', 'card'))
   const [cardPosition, setCardPosition] = useState(() => readScannerPref('cardPosition', 'top-left'))
   const [customPosition, setCustomPosition] = useState(() => readScannerPref('customPosition', { x: 0, y: 0 }))
@@ -2073,7 +2074,7 @@ function ScanIntake({ onCreateDraft, ai }) {
     setScannerMessage(useMode === 'card' ? 'Scanning card…' : 'Scanning the full scanner bed…')
     const waitingTimer = 0
     try {
-      const image = await adminDesktopApi().scanImage({ colourMode, scanMode: useMode, cardPosition, customPosition, displayCopy })
+      const image = await adminDesktopApi().scanImage({ scanMode: useMode, cardPosition, customPosition, displayCopy })
       window.clearTimeout(waitingTimer)
       if (image?.needsSelection) {
         const names = (image.scanners || []).map((scanner) => scanner.name).filter(Boolean)
@@ -2173,7 +2174,6 @@ function ScanIntake({ onCreateDraft, ai }) {
         <div className="scan-controls">
           <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Trading Cards</option><option>Sports Cards</option><option>Coins</option><option>LEGO / Building Blocks</option><option>Comics</option><option>Video Games</option></select></label>
           <label>Intake Mode<select value={mode} onChange={(event) => setMode(event.target.value)}><option>Create Catalogue Items</option><option>Match Existing Catalogue</option><option>Image Capture Only</option></select></label>
-          <label>Colour Mode<select value={colourMode} onChange={(event) => setColourMode(event.target.value)}><option>Colour</option><option>Greyscale</option></select></label>
         </div>
         <div className="scan-mode-picker" role="radiogroup" aria-label="Scan Mode">
           <span className="scan-mode-label">Scan Mode</span>
@@ -2768,16 +2768,61 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
     ['Finish', result.finish, 'finish'],
   ]
 
-  function approve() {
-    if (exactMatch) {
-      onUpdateDraft(draft.id, {
-        status: 'Matched',
-        matchedItemId: exactMatch.item.item_id,
-        audit: [...(draft.audit || []), { action: 'match', source: 'local-ai', itemId: exactMatch.item.item_id, at: new Date().toISOString() }],
-      })
+  const [working, setWorking] = useState('')
+  const [cardError, setCardError] = useState('')
+  const linkedItemId = draft.matchedItemId || draft.createdItemId || ''
+  const hasScans = Boolean(draft.frontImage?.path || draft.backImage?.path)
+  const attachedCount = scanImagesAttached(draft)
+
+  // Scans go onto the catalogue item when it has no images yet; an item that
+  // already has images keeps them unless the reviewer explicitly adds scans.
+  async function attachScans(itemId, { force = false } = {}) {
+    const existing = await countItemImages(itemId)
+    if (existing > 0 && !force) return { attached: 0, existing, warnings: [] }
+    const images = await loadScanImageBlobs(draft)
+    if (!images.length) return { attached: 0, existing, warnings: ['The scan files for this card could not be found on this computer.'] }
+    return { ...(await attachScanImagesToItem(itemId, images)), existing }
+  }
+
+  async function approve() {
+    if (!exactMatch) {
+      onEdit()
       return
     }
-    onEdit()
+    setWorking('approve')
+    setCardError('')
+    try {
+      const itemId = exactMatch.item.item_id
+      const images = await attachScans(itemId)
+      await onUpdateDraft(draft.id, {
+        status: 'Matched',
+        matchedItemId: itemId,
+        imagesAttached: images.attached,
+        analysisError: images.warnings.join(' '),
+        audit: [...(draft.audit || []), { action: 'match', source: 'local-ai', itemId, images: images.attached, existingImages: images.existing, at: new Date().toISOString() }],
+      })
+    } catch (error) {
+      setCardError(error.message || 'Could not approve this card.')
+    } finally {
+      setWorking('')
+    }
+  }
+
+  async function addScansToItem() {
+    setWorking('images')
+    setCardError('')
+    try {
+      const images = await attachScans(linkedItemId, { force: true })
+      await onUpdateDraft(draft.id, {
+        imagesAttached: images.attached,
+        analysisError: images.warnings.join(' '),
+        audit: [...(draft.audit || []), { action: 'attach_scans', itemId: linkedItemId, images: images.attached, existingImages: images.existing, at: new Date().toISOString() }],
+      })
+    } catch (error) {
+      setCardError(error.message || 'Could not add the scans to the catalogue item.')
+    } finally {
+      setWorking('')
+    }
   }
 
   function decline() {
@@ -2824,8 +2869,12 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
           </div>
         ) : finished ? (
           <div className="ai-review-match exact">
-            <strong>{draft.status}</strong>
-            <span>{draft.matchedItemId ? 'Linked to an existing catalogue item.' : draft.createdItemId ? 'Added to the catalogue.' : ''}</span>
+            <div>
+              <strong>{draft.status}</strong>
+              <span>{draft.matchedItemId ? 'Linked to an existing catalogue item.' : draft.createdItemId ? 'Added to the catalogue.' : ''}</span>
+              {attachedCount > 0 ? <small>Scans saved to the catalogue item ({attachedCount} image{attachedCount === 1 ? '' : 's'}).</small>
+                : hasScans && linkedItemId ? <small>The scans have not been added to the catalogue item yet.</small> : null}
+            </div>
           </div>
         ) : (
           <div className={`ai-review-match ${matchStatus}`}>
@@ -2847,6 +2896,7 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
           </div>
         )}
         {draft.analysisError ? <p className="admin-error">{draft.analysisError}</p> : null}
+        {cardError ? <p className="admin-error">{cardError}</p> : null}
         <details className="review-raw-details">
           <summary>Raw AI result</summary>
           <JsonBlock value={{ result, taxonomy, match: { status: matchStatus, best: shownMatch?.item?.item_id || null }, model: recognition.model, durationMs: recognition.durationMs }} />
@@ -2860,17 +2910,36 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
             <button className="danger" type="button" onClick={onRemove}>Remove Scan</button>
           </>
         ) : finished ? (
-          <button className="danger" type="button" onClick={onRemove}>Remove</button>
+          <>
+            {hasScans && linkedItemId && attachedCount === 0 ? (
+              <button className="admin-gold-button" type="button" onClick={addScansToItem} disabled={Boolean(working)}>
+                {working === 'images' ? 'Uploading…' : 'Add Scans to Catalogue Item'}
+              </button>
+            ) : null}
+            <button className="danger" type="button" onClick={onRemove} disabled={Boolean(working)}>Remove</button>
+          </>
         ) : (
           <>
-            <button className="admin-gold-button" type="button" onClick={approve}>Approve</button>
-            <button type="button" onClick={onEdit}>Edit</button>
-            <button type="button" onClick={decline}>Decline</button>
+            <button className="admin-gold-button" type="button" onClick={approve} disabled={Boolean(working)}>{working === 'approve' ? 'Saving…' : 'Approve'}</button>
+            <button type="button" onClick={onEdit} disabled={Boolean(working)}>Edit</button>
+            <button type="button" onClick={decline} disabled={Boolean(working)}>Decline</button>
           </>
         )}
       </div>
     </div>
   )
+}
+
+// Images this draft put on its catalogue item: the recorded count, else the
+// latest audit entry that uploaded images (older drafts).
+function uploadedCount(images = [], warnings = []) {
+  return Math.max(0, images.length - (warnings || []).filter((warning) => String(warning).startsWith('Image upload failed')).length)
+}
+
+function scanImagesAttached(draft) {
+  if (Number.isFinite(draft?.imagesAttached)) return draft.imagesAttached
+  const withImages = [...(draft?.audit || [])].reverse().find((entry) => Number.isFinite(entry.images))
+  return withImages?.images || 0
 }
 
 // A name match alone scores 28, + year 36; number + year alone is 26.
@@ -2963,7 +3032,10 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const matchItem = matchCandidate?.item || null
   const [values, setValues] = useState(() => saved?.values || initialReviewValues(draft, category, matchItem))
   const [showAll, setShowAll] = useState(!matchItem)
-  const [attachImages, setAttachImages] = useState(saved?.attachImages ?? !matchItem)
+  const [attachImages, setAttachImages] = useState(saved?.attachImages ?? true)
+  // Scans are added to a matched item by default only when it has no images.
+  const [matchImageCount, setMatchImageCount] = useState(null)
+  const attachTouchedRef = useRef(saved?.attachImages != null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const spec = isSpecCategory(category)
@@ -3027,6 +3099,24 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     return () => { cancelled = true }
   }, [spec, category, values.subcategory_id, values.franchise_id, values.subset_id])
 
+  // How many catalogue images the matched item has; with none, the scans are
+  // added by default (unless the reviewer already chose).
+  useEffect(() => {
+    if (!matchItem) {
+      setMatchImageCount(null)
+      return undefined
+    }
+    let cancelled = false
+    countItemImages(matchItem.item_id)
+      .then((count) => {
+        if (cancelled) return
+        setMatchImageCount(count)
+        if (!attachTouchedRef.current) setAttachImages(count === 0)
+      })
+      .catch(() => { if (!cancelled) setMatchImageCount(null) })
+    return () => { cancelled = true }
+  }, [matchItem?.item_id])
+
   // The matched item's Property link and taxonomy names.
   useEffect(() => {
     if (!spec || !matchItem) return undefined
@@ -3077,7 +3167,8 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     setMatchId(nextId)
     setValues(initialReviewValues(draft, category, nextItem))
     setShowAll(!nextItem)
-    setAttachImages(!nextItem)
+    attachTouchedRef.current = false
+    setAttachImages(true)
   }
 
   function chooseCategory(nextCategory) {
@@ -3218,6 +3309,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
         category,
         status: 'Catalogue Item Created',
         createdItemId: item?.item_id || null,
+        imagesAttached: uploadedCount(images, item?.warnings),
         analysisError: item?.warnings?.length ? item.warnings.join(' ') : '',
         review: reviewSnapshot({ matchId: '' }),
         audit: [...(draft.audit || []), { action: 'create', itemId: item?.item_id, images: images.length, at: new Date().toISOString() }],
@@ -3234,6 +3326,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
         category,
         status: updated ? 'Matched and Updated' : 'Matched',
         matchedItemId: reviewItem.item_id,
+        imagesAttached: uploadedCount(images, result.warnings),
         analysisError: result.warnings?.length ? result.warnings.join(' ') : '',
         review: reviewSnapshot(),
         audit: [...(draft.audit || []), { action: updated ? 'update_from_scan' : 'match', itemId: reviewItem.item_id, fields: result.changed, images: images.length, at: new Date().toISOString() }],
@@ -3429,10 +3522,13 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
           {!allRows.length ? <EmptyAdminState text="The scan agrees with the catalogue item. Tick Show all fields to edit anything else." /> : null}
           {hasScanImages ? (
             <label className="scan-review-images-option">
-              <input type="checkbox" checked={attachImages} onChange={(event) => setAttachImages(event.target.checked)} />
+              <input type="checkbox" checked={attachImages} onChange={(event) => { attachTouchedRef.current = true; setAttachImages(event.target.checked) }} />
               <span>
                 <strong>Images</strong>
-                {matchItem ? 'Add the front and back scans to this catalogue item' : 'Use the front and back scans as the catalogue images'}
+                {!matchItem ? 'Use the front and back scans as the catalogue images'
+                  : matchImageCount === 0 ? 'This catalogue item has no images yet: add the front and back scans'
+                    : matchImageCount > 0 ? `Also add the front and back scans (the item already has ${matchImageCount} image${matchImageCount === 1 ? '' : 's'})`
+                      : 'Add the front and back scans to this catalogue item'}
               </span>
             </label>
           ) : null}

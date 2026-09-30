@@ -1663,6 +1663,21 @@ async function attachItemImages(itemId, images = []) {
   return errors
 }
 
+// Number of catalogue images an item already has (item_images rows).
+export async function countItemImages(itemId) {
+  if (!itemId) return 0
+  const { count, error } = await supabase.from('item_images').select('item_id', { count: 'exact', head: true }).eq('item_id', itemId)
+  if (error) throw error
+  return count || 0
+}
+
+// Adds scan images to an existing catalogue item (after any it already has).
+// Returns { attached, warnings }.
+export async function attachScanImagesToItem(itemId, images = []) {
+  const warnings = await attachItemImages(itemId, images)
+  return { attached: images.length - warnings.filter((warning) => warning.startsWith('Image upload failed')).length, warnings }
+}
+
 function itemNameFromValues(category, values) {
   return String((isSpecCategory(category) ? values.subject : values.name) || '').trim()
 }
