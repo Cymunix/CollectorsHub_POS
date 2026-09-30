@@ -42,6 +42,7 @@ import {
   identifyScannedDraft,
   analyseRecognizedCard,
   recognizedCardKey,
+  swapItemFrontBack,
   CATALOGUE_EDIT_CHILDREN,
   CATALOGUE_EDIT_GROUPS,
   catalogueEditValues,
@@ -235,6 +236,15 @@ function adminDesktopApi() {
     : fallback
 }
 
+// Stack scans decide front/back from how much text each side has. When that
+// was a close call (or fell back to feed order) the AI double-checks it.
+function needsSideCheck(draft) {
+  const feed = draft.feed
+  if (!feed || feed.singleSided || feed.adjusted || !draft.frontImage || !draft.backImage) return false
+  if (feed.frontBackBy !== 'text' || !feed.words) return true
+  return feed.words.back < feed.words.front * 2 + 5
+}
+
 function createLocalId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`
 }
@@ -411,7 +421,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
       await patchRecognition(draft.id, { status: 'analysing', error: '', code: '' })
       const jobId = createLocalId('ai_job')
       aiRunRef.current.jobId = jobId
-      const response = await api.recognizeCard({ jobId, front: draft.frontImage ? { path: draft.frontImage.path } : null, back: draft.backImage ? { path: draft.backImage.path } : null })
+      const response = await api.recognizeCard({ jobId, front: draft.frontImage ? { path: draft.frontImage.path } : null, back: draft.backImage ? { path: draft.backImage.path } : null, checkSides: needsSideCheck(draft) })
         .catch((error) => ({ ok: false, code: 'AI_ERROR', message: error.message }))
 
       if (!response.ok) {
@@ -430,6 +440,11 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
 
       // The catalogue lookup runs while the AI starts on the next card.
       matching.push((async () => {
+      if (response.sidesSwapped) {
+        await saveScanDrafts((drafts) => drafts.map((entry) => (
+          entry.id === draft.id ? { ...entry, frontImage: entry.backImage, backImage: entry.frontImage, feed: { ...(entry.feed || {}), swappedByAi: true } } : entry
+        )))
+      }
       try {
         const { taxonomy, scanAnalysis } = await analyseRecognizedCard(response.result, draft.category)
         await patchRecognition(draft.id, {
@@ -1410,7 +1425,28 @@ function CatalogueItemRecord({ itemId, onClose, initialEditMode = '' }) {
         {activeTab === 'Catalogue Data' ? <JsonBlock value={raw} /> : null}
         {activeTab === 'Category Data' ? <DynamicCategoryFields fields={categoryFields} /> : null}
         {activeTab === 'Relationships' ? <JsonBlock value={details} /> : null}
-        {activeTab === 'Images' ? <MediaRows rows={record?.images || []} /> : null}
+        {activeTab === 'Images' ? (
+          <>
+            {(record?.images || []).some((image) => image.position === 0) && (record?.images || []).some((image) => image.position === 1) ? (
+              <div className="item-images-actions">
+                <button type="button" disabled={isSaving} onClick={async () => {
+                  setIsSaving(true)
+                  setError('')
+                  try {
+                    await swapItemFrontBack(itemId)
+                    setRecord(await loadCatalogueItemRecord(itemId))
+                    setNotice('Front and back photos swapped.')
+                  } catch (swapError) {
+                    setError(swapError.message || 'Could not swap the photos.')
+                  } finally {
+                    setIsSaving(false)
+                  }
+                }}>Swap front/back photos</button>
+              </div>
+            ) : null}
+            <MediaRows rows={record?.images || []} />
+          </>
+        ) : null}
         {activeTab === 'Pricing' ? <JsonBlock value={{ market: record?.market, conditionPrices: record?.conditionPrices }} /> : null}
         {activeTab === 'Market Data' ? <CatalogueItemMarketData record={record} onReload={async () => setRecord(await loadCatalogueItemRecord(itemId))} /> : null}
         {activeTab === 'Sales' ? <JsonBlock value={record?.listings || []} /> : null}
@@ -3499,13 +3535,14 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
           {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="Front" /> : <span>Front</span>}
           {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back" /> : <span>Back</span>}
         </div>
-        {!finished && hasScans && typeof adminDesktopApi().rotateScanImage === 'function' ? (
+        {hasScans && typeof adminDesktopApi().rotateScanImage === 'function' ? (
           <div className="ai-review-orient">
             {draft.feed?.checkRotation ? <span className="ai-review-orient-flag">Check rotation</span> : null}
             <button type="button" onClick={() => rotateSide('frontImage')} disabled={Boolean(working) || !draft.frontImage} title="Rotate the front 90° clockwise">↻ Front</button>
             <button type="button" onClick={() => rotateSide('backImage')} disabled={Boolean(working) || !draft.backImage} title="Rotate the back 90° clockwise">↻ Back</button>
             <button type="button" onClick={swapSides} disabled={Boolean(working) || !draft.frontImage || !draft.backImage}>Swap front/back</button>
-            {draft.feed?.adjusted ? <button type="button" onClick={() => { onUpdateDraft(draft.id, { feed: { ...(draft.feed || {}), adjusted: false } }); onRetry(draft.id) }} disabled={Boolean(working) || aiBusy}>Re-analyse</button> : null}
+            {draft.feed?.adjusted && !finished ? <button type="button" onClick={() => { onUpdateDraft(draft.id, { feed: { ...(draft.feed || {}), adjusted: false } }); onRetry(draft.id) }} disabled={Boolean(working) || aiBusy}>Re-analyse</button> : null}
+            {draft.feed?.adjusted && finished && linkedItemId ? <button type="button" className="admin-gold-button" onClick={async () => { await addScansToItem(); await onUpdateDraft(draft.id, { feed: { ...(draft.feed || {}), adjusted: false } }) }} disabled={Boolean(working)}>{working === 'images' ? 'Uploading…' : 'Update catalogue photos'}</button> : null}
           </div>
         ) : null}
       </div>

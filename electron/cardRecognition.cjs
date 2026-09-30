@@ -19,6 +19,8 @@ const QWEN_MODEL = 'qwen3-vl:8b-instruct'
 // FastFoto scans: 1600 gives the same results as 2000 about 30% faster
 // (~7 s vs ~10 s per card); 1280 started misreading card numbers.
 const AI_IMAGE_LONG_EDGE = 1600
+// The front/back check only needs to see the layout.
+const SIDE_CHECK_EDGE = 640
 const STATUS_TIMEOUT_MS = 4000
 const RECOGNITION_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -210,7 +212,7 @@ function classifyOllamaError(status, text) {
 // Resizes a scan in memory to AI_IMAGE_LONG_EDGE and re-encodes it as JPEG.
 // The original high-resolution file is never modified; nothing is written to
 // disk, so there is no temporary file to clean up.
-async function prepareAiImage(filePath, side) {
+async function prepareAiImage(filePath, side, longEdge = AI_IMAGE_LONG_EDGE) {
   let bytes
   try {
     bytes = await readFile(filePath)
@@ -224,7 +226,7 @@ async function prepareAiImage(filePath, side) {
     return bytes.toString('base64')
   }
   const { width, height } = image.getSize()
-  const scale = Math.min(1, AI_IMAGE_LONG_EDGE / Math.max(width, height))
+  const scale = Math.min(1, longEdge / Math.max(width, height))
   const resized = scale < 1
     ? image.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'best' })
     : image
@@ -330,6 +332,38 @@ class OllamaCardRecognitionProvider {
     try {
       await ollamaFetch('/api/generate', { method: 'POST', timeoutMs: RECOGNITION_TIMEOUT_MS, body: { model: this.model, keep_alive: '10m' } })
     } catch {}
+  }
+
+  // Which of two images is the card's back (1 or 2). A focused question on
+  // small images: asked inside the full identification the model nearly
+  // always kept the given order, but on its own it was right 20/20 (~2 s).
+  async backSideIndex({ firstPath, secondPath }, signal) {
+    const [first, second] = await Promise.all([prepareAiImage(firstPath, 'first', SIDE_CHECK_EDGE), prepareAiImage(secondPath, 'second', SIDE_CHECK_EDGE)])
+    const response = await ollamaFetch('/api/chat', {
+      method: 'POST',
+      timeoutMs: RECOGNITION_TIMEOUT_MS,
+      signal,
+      body: {
+        model: this.model,
+        stream: false,
+        keep_alive: '10m',
+        options: { num_ctx: 4096, temperature: 0 },
+        format: { type: 'object', properties: { back_image: { type: 'integer', enum: [1, 2] } }, required: ['back_image'] },
+        messages: [{
+          role: 'user',
+          content: 'Image 1 and image 2 are the two sides of one trading card. The FRONT shows the main player photo or artwork. The BACK shows the biography paragraph, statistics table, card number and copyright lines. Which image is the BACK? Answer 1 or 2.',
+          images: [first, second],
+        }],
+      },
+    })
+    if (!response.ok) throw classifyOllamaError(response.status, await response.text().catch(() => ''))
+    const data = await response.json().catch(() => null)
+    try {
+      const answer = JSON.parse(data?.message?.content).back_image
+      return answer === 1 || answer === 2 ? answer : null
+    } catch {
+      return null
+    }
   }
 
   async recognizeCard({ frontPath, backPath }, signal) {

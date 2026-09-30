@@ -1223,7 +1223,13 @@ ipcMain.handle('scanner:feed-stack', async (event, options = {}) => {
         index,
         frontImage: feedImageResult(oriented.front, feederName),
         backImage: oriented.back ? feedImageResult(oriented.back, feederName) : null,
-        feed: { checkRotation: oriented.checkRotation, frontBackBy: oriented.frontBackBy, singleSided: !oriented.back },
+        feed: {
+          checkRotation: oriented.checkRotation,
+          frontBackBy: oriented.frontBackBy,
+          singleSided: !oriented.back,
+          // Readable words per side, so the AI can double-check close calls.
+          words: oriented.back ? { front: oriented.orientation[[first, second].indexOf(oriented.front)]?.words ?? 0, back: oriented.orientation[[first, second].indexOf(oriented.back)]?.words ?? 0 } : null,
+        },
       }
       await logScanner({
         event: 'feed-card',
@@ -1351,7 +1357,7 @@ ipcMain.handle('ai:cancel-install', () => {
 
 // Returns { ok, result, model, durationMs } or { ok: false, code, message } so
 // one failed card never throws across the batch loop in the renderer.
-ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back } = {}) => {
+ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false } = {}) => {
   const controller = new AbortController()
   if (jobId) recognitionJobs.set(jobId, controller)
   try {
@@ -1363,8 +1369,18 @@ ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back } = {}) 
     } catch (error) {
       return { ok: false, code: 'IMAGE_MISSING', message: error.message }
     }
+    // Stack scans whose front/back call was not clear-cut: confirm with the AI
+    // and swap before identifying if the back came first.
+    let sidesSwapped = false
+    if (checkSides && frontPath && backPath) {
+      const backIndex = await cardRecognition.backSideIndex({ firstPath: frontPath, secondPath: backPath }, controller.signal).catch(() => null)
+      if (backIndex === 1) {
+        sidesSwapped = true
+        ;[frontPath, backPath] = [backPath, frontPath]
+      }
+    }
     const output = await cardRecognition.recognizeCard({ frontPath, backPath }, controller.signal)
-    return { ok: true, ...output, provider: cardRecognition.id, providerLabel: cardRecognition.label }
+    return { ok: true, ...output, sidesSwapped, provider: cardRecognition.id, providerLabel: cardRecognition.label }
   } catch (error) {
     return { ok: false, code: error.code || 'AI_ERROR', message: error.message || 'Local AI analysis failed.' }
   } finally {

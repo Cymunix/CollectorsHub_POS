@@ -7482,3 +7482,19 @@ button:disabled {
   max-width: none;
   min-width: 0;
 }
+
+.item-images-actions {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.item-images-actions button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 10px;
+}

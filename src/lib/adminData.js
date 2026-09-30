@@ -1746,6 +1746,25 @@ async function attachItemImages(itemId, images = []) {
   return itemError ? [`Front image link not updated: ${itemError.message}`] : []
 }
 
+// Swaps an item's front (position 0) and back (position 1) photos, e.g. when
+// a scan was saved the wrong way round. The website shows position 0 as the
+// front, and items.image_path follows it.
+export async function swapItemFrontBack(itemId) {
+  const { data: rows, error } = await supabase.from('item_images').select('id, image_path, position').eq('item_id', itemId).in('position', [0, 1])
+  if (error) throw error
+  const front = (rows || []).find((row) => row.position === 0)
+  const back = (rows || []).find((row) => row.position === 1)
+  if (!front || !back) throw new Error('This item needs both a front and a back photo to swap them.')
+  // Via a temporary position, in case (item_id, position) must stay unique.
+  const steps = [[front.id, { position: 99 }], [back.id, { position: 0, is_primary: true }], [front.id, { position: 1, is_primary: false }]]
+  for (const [id, patch] of steps) {
+    const { error: stepError } = await supabase.from('item_images').update(patch).eq('id', id)
+    if (stepError) throw stepError
+  }
+  const { error: itemError } = await supabase.from('items').update({ image_path: back.image_path }).eq('item_id', itemId)
+  if (itemError) throw itemError
+}
+
 // Number of catalogue images an item already has (item_images rows).
 export async function countItemImages(itemId) {
   if (!itemId) return 0
