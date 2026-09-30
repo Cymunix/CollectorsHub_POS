@@ -2795,6 +2795,238 @@ button:disabled {
   color: #0b111b;
 }
 
+/* ---- Scanner: scan mode, calibration, notices, inspector ---- */
+.scan-mode-picker {
+  align-items: stretch;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto 1fr 1fr;
+  margin: 10px 9px 0;
+}
+
+.scan-mode-label {
+  align-self: center;
+  color: #526176;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.scan-mode-picker button {
+  background: #ffffff;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  color: #17253d;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.scan-mode-picker button.active {
+  background: #fff7e6;
+  border-color: #d6a632;
+  box-shadow: inset 0 0 0 1px #d6a632;
+}
+
+.scan-mode-picker small { color: #526176; }
+
+.scan-mode-note {
+  color: #526176;
+  font-size: 12px;
+  margin: 6px 9px 0;
+}
+
+.scanner-calibration {
+  margin: 8px 9px 0;
+}
+
+.scanner-calibration summary {
+  color: #526176;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.scanner-calibration-grid {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.scanner-calibration-grid label {
+  color: #526176;
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.scanner-calibration-grid input[type="number"],
+.scanner-calibration-grid select {
+  border: 1px solid #d5dfeb;
+  border-radius: 6px;
+  min-height: 32px;
+  padding: 0 8px;
+}
+
+.scanner-calibration-grid .admin-check { display: flex; }
+
+.scan-notice {
+  align-items: center;
+  background: #fff7e6;
+  border: 1px solid #f0d49a;
+  border-radius: 8px;
+  color: #6b4a00;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 10px;
+  margin: 10px 9px 0;
+  padding: 10px 12px;
+}
+
+.scan-notice span { flex: 1 1 260px; }
+
+.scan-notice button {
+  background: #d6a632;
+  border: 1px solid #d6a632;
+  border-radius: 8px;
+  color: #0b111b;
+  cursor: pointer;
+  font-weight: 900;
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.scan-notice button.scan-notice-dismiss {
+  background: #ffffff;
+  border-color: #d7dee8;
+}
+
+.scan-slot-wrap {
+  display: grid;
+  gap: 4px;
+}
+
+.scan-inspect-link {
+  background: none;
+  border: 0;
+  color: #8a5d00;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  justify-self: start;
+  padding: 0 4px;
+}
+
+.scanner-state-scanning > span,
+.scanner-state-processing > span { background: #d6a632 !important; }
+.scanner-state-unavailable > span { background: #c0392b !important; }
+.scanner-state-connecting > span { background: #9aa8bb !important; }
+
+.scan-inspector > section {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.scan-inspector-header {
+  align-items: center;
+  border-bottom: 1px solid #e3e8ef;
+  display: flex;
+  gap: 20px;
+  padding: 16px 60px 14px 20px;
+}
+
+.scan-inspector-header h2 { margin: 2px 0 0; }
+
+.scan-inspector-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.scan-inspector-tabs button {
+  background: #ffffff;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.scan-inspector-tabs button.active {
+  background: #fff7e6;
+  border-color: #d6a632;
+}
+
+.scan-inspector-zoom { margin: 10px 20px 0; }
+
+.scan-inspector-compare {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 20px 20px;
+}
+
+.scan-inspector-compare figure { margin: 0; min-width: 0; }
+
+.scan-inspector-compare figcaption {
+  display: grid;
+  margin-bottom: 6px;
+}
+
+.scan-inspector-compare figcaption small { color: #526176; font-size: 12px; }
+
+.scan-inspector-frame {
+  background: #f4f6f8;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  max-height: 64vh;
+  overflow: auto;
+}
+
+.scan-inspector-frame img {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+.scan-inspector-compare.actual .scan-inspector-frame img { max-width: none; }
+
+.scan-inspector-crop {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+}
+
+.scan-inspector-crop-stage {
+  cursor: crosshair;
+  justify-self: center;
+  margin: 10px 20px;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+}
+
+.scan-inspector-crop-stage img {
+  display: block;
+  max-height: 62vh;
+  max-width: 100%;
+}
+
+.scan-inspector-rect {
+  border: 2px solid #d6a632;
+  box-shadow: 0 0 0 9999px rgba(11, 17, 27, 0.35);
+  pointer-events: none;
+  position: absolute;
+}
+
 /* ---- Local AI: status, scan queue, review card ---- */
 .local-ai-panel {
   display: grid;

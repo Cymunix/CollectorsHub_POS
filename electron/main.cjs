@@ -1,7 +1,7 @@
-const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } = require('electron')
 const path = require('node:path')
-const { copyFile, mkdir, readFile, unlink, writeFile } = require('node:fs/promises')
-const { existsSync } = require('node:fs')
+const { appendFile, copyFile, mkdir, readFile, unlink, writeFile } = require('node:fs/promises')
+const { existsSync, readFileSync } = require('node:fs')
 const { pathToFileURL } = require('node:url')
 const { randomUUID } = require('node:crypto')
 const { execFile } = require('node:child_process')
@@ -9,6 +9,7 @@ const { promisify } = require('node:util')
 const { autoUpdater } = require('electron-updater')
 const { createWorker } = require('tesseract.js')
 const { OllamaCardRecognitionProvider } = require('./cardRecognition.cjs')
+const { ScannerSession } = require('./scannerSession.cjs')
 
 const execFileAsync = promisify(execFile)
 
@@ -801,231 +802,232 @@ ipcMain.handle('scanner:select-images', async () => {
 
 // Compiled into the scan PowerShell session with Add-Type. Per-pixel work in
 // PowerShell took seconds and counted against the acquisition timeout.
-const SCAN_CROP_SOURCE = `
-using System;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
-
-public static class CollectorsHubScanCrop
-{
-    // Saves the scan as a JPEG, cropped to the card when one is found. Any crop
-    // failure falls back to the full scan so a good acquisition is never lost.
-    public static bool SaveCropped(string source, string destination, long quality)
-    {
-        using (var bitmap = new Bitmap(source))
-        {
-            Rectangle? crop = null;
-            try { crop = FindCardBounds(bitmap); } catch { crop = null; }
-            if (crop.HasValue)
-            {
-                try
-                {
-                    using (var cropped = bitmap.Clone(crop.Value, PixelFormat.Format24bppRgb))
-                    {
-                        SaveJpeg(cropped, destination, quality);
-                        return true;
-                    }
-                }
-                catch { }
-            }
-            SaveJpeg(bitmap, destination, quality);
-            return false;
-        }
-    }
-
-    static void SaveJpeg(Image image, string path, long quality)
-    {
-        ImageCodecInfo codec = null;
-        foreach (var candidate in ImageCodecInfo.GetImageEncoders())
-        {
-            if (candidate.FormatID == ImageFormat.Jpeg.Guid) codec = candidate;
-        }
-        using (var parameters = new EncoderParameters(1))
-        {
-            parameters.Param[0] = new EncoderParameter(Encoder.Quality, quality);
-            image.Save(path, codec, parameters);
-        }
-    }
-
-    // Find the densest block of non-white content. No fixed edge margin: cards
-    // are often placed flush in a corner of the bed. The TS3725's black frame
-    // strip is thin, so it never outweighs the card and is kept out of the
-    // padding by PadOutward.
-    static Rectangle? FindCardBounds(Bitmap bitmap)
-    {
-        int width = bitmap.Width, height = bitmap.Height;
-        if (width < 100 || height < 100) return null;
-        int step = Math.Max(1, Math.Min(width, height) / 1000);
-        var cols = new int[width];
-        var rows = new int[height];
-        int sampledRows = 0, sampledCols = 0;
-        for (int x = 0; x < width; x += step) sampledCols++;
-
-        var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-        try
-        {
-            var line = new byte[width * 3];
-            for (int y = 0; y < height; y += step)
-            {
-                sampledRows++;
-                Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), line, 0, line.Length);
-                for (int x = 0; x < width; x += step)
-                {
-                    int b = line[x * 3], g = line[x * 3 + 1], r = line[x * 3 + 2];
-                    int spread = Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b));
-                    if (r + g + b < 705 || spread > 44) { cols[x]++; rows[y]++; }
-                }
-            }
-        }
-        finally { bitmap.UnlockBits(data); }
-
-        int colThreshold = Math.Max(3, (int)(sampledRows * 0.018));
-        int rowThreshold = Math.Max(3, (int)(sampledCols * 0.018));
-        int[] xRange = DensestRun(cols, width, step, colThreshold, Math.Max(step * 2, width / 50));
-        int[] yRange = DensestRun(rows, height, step, rowThreshold, Math.Max(step * 2, height / 50));
-        if (xRange == null || yRange == null) return null;
-
-        int contentWidth = xRange[1] - xRange[0], contentHeight = yRange[1] - yRange[0];
-        double contentArea = (double)contentWidth * contentHeight, imageArea = (double)width * height;
-        if (contentWidth <= 80 || contentHeight <= 80 || contentArea <= imageArea * 0.01 || contentArea >= imageArea * 0.92) return null;
-
-        // Padding recovers a white card border that reads as "background".
-        int pad = Math.Max(24, (int)(Math.Max(contentWidth, contentHeight) * 0.065));
-        int left = PadOutward(cols, xRange[0], -step, pad, colThreshold, width);
-        int right = PadOutward(cols, xRange[1], step, pad, colThreshold, width);
-        int top = PadOutward(rows, yRange[0], -step, pad, rowThreshold, height);
-        int bottom = PadOutward(rows, yRange[1], step, pad, rowThreshold, height);
-        return new Rectangle(left, top, right - left + 1, bottom - top + 1);
-    }
-
-    // Extends an edge outward by up to pad pixels, stopping before any separate dark
-    // feature (the bed frame, another card) so it is not pulled into the crop.
-    static int PadOutward(int[] counts, int edge, int direction, int pad, int threshold, int length)
-    {
-        int result = edge;
-        for (int i = edge + direction; Math.Abs(i - edge) <= pad; i += direction)
-        {
-            if (i < 0 || i >= length || counts[i] >= threshold) break;
-            result = i;
-        }
-        if (direction < 0) return Math.Max(0, result - Math.Abs(direction) + 1);
-        return Math.Min(length - 1, result + direction - 1);
-    }
-
-    // Heaviest run of active positions, bridging gaps up to maxGap, so a stray
-    // lid shadow or dust line cannot stretch the crop out to the scan edge.
-    static int[] DensestRun(int[] counts, int length, int step, int threshold, int maxGap)
-    {
-        int[] best = null;
-        long bestWeight = 0, weight = 0;
-        int runStart = -1, runEnd = -1;
-        for (int i = 0; i < length; i += step)
-        {
-            if (counts[i] < threshold) continue;
-            if (runStart >= 0 && i - runEnd > maxGap)
-            {
-                if (weight > bestWeight) { best = new[] { runStart, runEnd }; bestWeight = weight; }
-                runStart = -1;
-                weight = 0;
-            }
-            if (runStart < 0) runStart = i;
-            runEnd = i;
-            weight += counts[i];
-        }
-        if (runStart >= 0 && weight > bestWeight) best = new[] { runStart, runEnd };
-        return best;
-    }
-}
-`
+// Card crop + deskew helper, compiled into the scanner PowerShell session.
+const SCAN_CROP_SOURCE = readFileSync(path.join(__dirname, 'scanCrop.cs'), 'utf8')
 // Always scan at 600 DPI: at the driver default (150) card text is too small
 // for OCR to read reliably.
 const SCAN_DPI = 600
+
+// ---------------------------------------------------------------------------
+// Scanning. Normal scans go through a persistent ScannerSession (one WIA
+// connection per scanning page, direct Item.Transfer, no vendor UI). The old
+// one-shot WIA.CommonDialog path is kept only as the fallback when a direct
+// transfer fails.
+//
+// Scan modes:
+//   card: Standard Trading Card. Only a fixed card-sized region of the glass is
+//         scanned (measured on the Canon TS3700 at 600 DPI: ~20 s vs ~55 s for
+//         the full bed). 3.7 x 3.7 in covers a 2.5 x 3.5 in card in portrait or
+//         landscape plus ~0.1 in margin; the extra width costs <1 s because
+//         carriage travel is set by the height.
+//   full: Full Bed / Large Item. Whole bed, general object detection.
+
+const scannerSession = new ScannerSession({ workDir: path.join(getDataDirSafe(), 'scanner'), cropSource: SCAN_CROP_SOURCE })
+const CARD_REGION_IN = { width: 3.7, height: 3.7 }
+const DEFAULT_BED_IN = { width: 8.5, height: 11.68 }
+// WIA_IPS_CUR_INTENT: image type (1 colour, 2 greyscale) | WIA_INTENT_MAXIMIZE_QUALITY.
+const WIA_INTENT_MAXIMIZE_QUALITY = 0x20000
+
+function getDataDirSafe() {
+  // app.getPath is only valid after 'ready'; the session only uses workDir later.
+  try { return getDataDir() } catch { return path.join(process.env.APPDATA || '.', 'collectorshub-pos', 'local-data') }
+}
+
+scannerSession.on('status', (status) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:status', status)
+})
+scannerSession.on('opened', (info) => {
+  logScanner({
+    event: 'session-opened',
+    scannerName: info.scannerName,
+    bedIn: { width: info.bedWidthIn, height: info.bedHeightIn },
+    // Every item property the WIA driver exposes (colour mode, bit depth,
+    // brightness/contrast, any vendor enhancement controls).
+    driverProperties: info.properties,
+  })
+})
+
+// Development log: one JSON object per line in local-data/logs/scanner.log.
+async function logScanner(entry) {
+  const line = JSON.stringify({ at: new Date().toISOString(), ...entry })
+  console.log('[Scanner]', line)
+  try {
+    const dir = path.join(getDataDir(), 'logs')
+    await mkdir(dir, { recursive: true })
+    await appendFile(path.join(dir, 'scanner.log'), `${line}\n`, 'utf8')
+  } catch {}
+}
+
+// Card region on the glass (inches). Default: the scanner's origin corner
+// (top-left of the scanned image), where cards are placed by default.
+function cardRegionIn(position, custom, bed) {
+  const bedWidth = bed?.width || DEFAULT_BED_IN.width
+  const bedHeight = bed?.height || DEFAULT_BED_IN.height
+  const { width, height } = CARD_REGION_IN
+  let x = 0
+  let y = 0
+  if (position === 'top-right' || position === 'bottom-right') x = bedWidth - width
+  if (position === 'bottom-left' || position === 'bottom-right') y = bedHeight - height
+  if (position === 'custom') {
+    x = Number(custom?.x) || 0
+    y = Number(custom?.y) || 0
+  }
+  const clampedX = Math.min(Math.max(0, x), Math.max(0, bedWidth - width))
+  const clampedY = Math.min(Math.max(0, y), Math.max(0, bedHeight - height))
+  return { region: { x: clampedX, y: clampedY, w: width, h: height }, clamped: clampedX !== x || clampedY !== y }
+}
+
+function scanImageResult(files, extra = {}) {
+  return {
+    canceled: false,
+    path: files.outputPath,
+    url: getScanImageUrl(path.basename(files.outputPath), files.outputPath),
+    fileName: path.basename(files.outputPath),
+    rawPath: files.rawPath && existsSync(files.rawPath) ? files.rawPath : '',
+    rawUrl: files.rawPath && existsSync(files.rawPath) ? getScanImageUrl(path.basename(files.rawPath), files.rawPath) : '',
+    displayPath: files.displayPath && existsSync(files.displayPath) ? files.displayPath : '',
+    displayUrl: files.displayPath && existsSync(files.displayPath) ? getScanImageUrl(path.basename(files.displayPath), files.displayPath) : '',
+    ...extra,
+  }
+}
+
+ipcMain.handle('scanner:open-session', async () => {
+  if (process.platform !== 'win32') return { state: 'unavailable', message: 'Direct scanner control is available on Windows only.' }
+  return scannerSession.open()
+})
+ipcMain.handle('scanner:close-session', () => scannerSession.close())
+ipcMain.handle('scanner:get-status', () => scannerSession.getStatus())
 
 ipcMain.handle('scanner:scan-image', async (_event, options = {}) => {
   if (process.platform !== 'win32') {
     throw new Error('Direct scanner control is currently available on Windows through the Canon WIA driver.')
   }
-
   await mkdir(getScanDir(), { recursive: true })
-  const fileName = `${Date.now()}-${randomUUID()}.jpg`
-  const destinationPath = path.join(getScanDir(), fileName)
-  const transferPath = `${destinationPath}.wia.bmp`
-  const escapedPath = destinationPath.replace(/'/g, "''")
-  const escapedTransferPath = transferPath.replace(/'/g, "''")
-  // The crop helper is too large to inline in -EncodedCommand (32K limit).
+  const mode = options.scanMode === 'full' ? 'full' : 'card'
+  const base = path.join(getScanDir(), `${Date.now()}-${randomUUID()}`)
+  const files = {
+    // raw_scan (lossless), cropped_master (lossless), optional display copy.
+    // The AI-optimised copy is made in memory by the recognition provider.
+    transferPath: `${base}.wia`,
+    rawPath: `${base}.raw.png`,
+    outputPath: `${base}.png`,
+    displayPath: options.displayCopy ? `${base}.display.jpg` : '',
+  }
+  const intent = (options.colourMode === 'Greyscale' ? 2 : 1) | WIA_INTENT_MAXIMIZE_QUALITY
+  const card = mode === 'card' ? cardRegionIn(options.cardPosition, options.customPosition, scannerSession.bed) : null
+  const started = Date.now()
+
+  let reply = null
+  let directError = null
+  try {
+    reply = await scannerSession.scan({ mode, dpi: SCAN_DPI, intent, region: card?.region || null, ...files, quality: 92 })
+  } catch (error) {
+    directError = error
+  }
+
+  if (reply?.ok) {
+    await logScanner({
+      event: 'scan',
+      mode,
+      dpi: reply.dpi,
+      requestedRegionIn: card?.region || null,
+      regionClampedToBed: Boolean(card?.clamped || reply.regionClamped),
+      requestedPx: reply.requestedPx,
+      appliedDriverSettings: reply.appliedPx,
+      returnedPx: { width: reply.returnedWidth, height: reply.returnedHeight },
+      hardwareRoi: reply.hardwareRoi,
+      softwareRoi: reply.softwareRoi,
+      transferFormat: reply.transferFormat,
+      outputFormat: 'png',
+      cardStatus: reply.status,
+      orientation: reply.orientation,
+      detectedContent: reply.contentWidth ? { x: reply.contentX, y: reply.contentY, width: reply.contentWidth, height: reply.contentHeight } : null,
+      crop: { x: reply.cropX, y: reply.cropY, width: reply.cropWidth, height: reply.cropHeight },
+      cropAspect: reply.aspect,
+      cropConfidence: reply.confidence,
+      skewDegrees: reply.skewDegrees,
+      display: reply.displayBlackPoint != null ? { blackPoint: reply.displayBlackPoint, whitePoint: reply.displayWhitePoint } : null,
+      timingsMs: {
+        total: Date.now() - started,
+        scannerTransfer: reply.transferMs,
+        saveTransfer: reply.saveTransferMs,
+        rawSave: reply.rawSaveMs,
+        crop: reply.cropMs,
+        processing: reply.processMs,
+      },
+    })
+    if (mode === 'card' && reply.hardwareRoi === false) {
+      await logScanner({ event: 'hardware-roi-unavailable', note: 'Driver returned more than the requested region; the card region was cut in software.' })
+    }
+    return scanImageResult(files, {
+      scannerName: reply.scannerName || scannerSession.scannerName || '',
+      cropped: Boolean(reply.cropped),
+      scanMode: mode,
+      cardStatus: reply.status || '',
+      confidence: reply.confidence ?? null,
+      orientation: reply.orientation || '',
+    })
+  }
+
+  if (reply?.needsSelection || reply?.code === 'NEEDS_SELECTION') return { needsSelection: true, scanners: reply.scanners || [], message: reply.message }
+  if (reply && ['NO_DEVICE', 'COVER_OPEN'].includes(reply.code)) throw new Error(reply.message)
+
+  // Direct transfer failed: fall back to the vendor transfer dialog once.
+  await logScanner({ event: 'direct-scan-failed', mode, code: reply?.code || directError?.code, message: reply?.message || directError?.message, hresult: reply?.hresult })
+  const fallback = await legacyScan({ ...options, files })
+  await logScanner({ event: 'fallback-scan', mode, ok: !fallback.canceled, totalMs: Date.now() - started })
+  return fallback
+})
+
+// Legacy one-shot scan through WIA.CommonDialog.ShowTransfer (shows the
+// Windows/Canon transfer window). Only used when the direct session fails.
+async function legacyScan(options = {}) {
+  const { files } = options
+  const escapedPath = files.outputPath.replace(/'/g, "''")
+  const escapedTransferPath = `${files.transferPath}.bmp`.replace(/'/g, "''")
   const cropSourcePath = path.join(getDataDir(), 'scan-crop.cs')
   await writeFile(cropSourcePath, SCAN_CROP_SOURCE, 'utf8')
   const escapedCropSourcePath = cropSourcePath.replace(/'/g, "''")
-  const dpi = SCAN_DPI
-  // WIA_IPS_CUR_INTENT: 1 = colour, 2 = greyscale.
   const intent = options?.colourMode === 'Greyscale' ? 2 : 1
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    // Suppress the "Preparing modules for first use" progress record, which
-    // PowerShell otherwise serialises as CLIXML noise onto the error stream.
     "$ProgressPreference = 'SilentlyContinue'",
-    // Match the known-good WIA flow: enumerate devices, select a real WIA
-    // scanner (Type 1), connect, then transfer from Items.Item(1). The Canon
-    // TS3725/TS3700 exposes a second ESCL entry that looks attractive by name
-    // but is not the working WIA scanner for this acquisition path.
     "$manager = New-Object -ComObject WIA.DeviceManager",
-    "if ($manager.DeviceInfos.Count -eq 0) { throw 'No imaging device detected. Make sure the scanner is powered on, connected, and its Windows (WIA) driver is installed.' }",
     "$scannerInfos = @($manager.DeviceInfos | Where-Object { $_.Type -eq 1 })",
-    "$scannerRows = @($scannerInfos | ForEach-Object { @{ name = [string]$_.Properties['Name'].Value; deviceId = [string]$_.DeviceID; type = [int]$_.Type } })",
-    "if ($scannerInfos.Count -eq 0) { Write-Output (@{ needsSelection = $true; scanners = $scannerRows; message = 'No WIA scanner devices were found. Confirm the scanner is visible in Windows WIA.' } | ConvertTo-Json -Compress); exit 0 }",
+    "if ($scannerInfos.Count -eq 0) { throw 'No imaging device detected. Make sure the scanner is powered on, connected, and its Windows (WIA) driver is installed.' }",
     "$scanner = $scannerInfos | Where-Object { ([string]$_.Properties['Name'].Value) -match 'TS3700|TS3725' } | Select-Object -First 1",
-    "if (-not $scanner -and $scannerInfos.Count -eq 1) { $scanner = $scannerInfos | Select-Object -First 1 }",
-    "if (-not $scanner) { Write-Output (@{ needsSelection = $true; scanners = $scannerRows; message = 'Multiple WIA scanners are available. Select a default scanner in CollectorsHub scanner settings.' } | ConvertTo-Json -Compress); exit 0 }",
+    "if (-not $scanner) { $scanner = $scannerInfos | Select-Object -First 1 }",
     "$scannerName = [string]$scanner.Properties['Name'].Value",
     "$device = $scanner.Connect()",
     "$item = $device.Items.Item(1)",
-    // Apply intent first (it resets other properties), then DPI, then widen the
-    // extents to the full bed at that DPI. Drivers that reject a property keep
-    // their defaults rather than failing the scan.
-    "function Set-WiaProperty($id, $value) { try { $item.Properties.Item([string]$id).Value = $value } catch {} }",
+    "function Set-WiaValue($id, $value) { try { $item.Properties.Item([string]$id).Value = $value } catch {} }",
     "function Set-WiaMax($id) { try { $property = $item.Properties.Item([string]$id); $property.Value = $property.SubTypeMax } catch {} }",
-    `Set-WiaProperty 6146 ${intent}`,
-    `Set-WiaProperty 6147 ${dpi}`,
-    `Set-WiaProperty 6148 ${dpi}`,
-    "Set-WiaProperty 6149 0",
-    "Set-WiaProperty 6150 0",
+    `Set-WiaValue 6146 ${intent}`,
+    `Set-WiaValue 6147 ${SCAN_DPI}`,
+    `Set-WiaValue 6148 ${SCAN_DPI}`,
+    "Set-WiaValue 6149 0",
+    "Set-WiaValue 6150 0",
     "Set-WiaMax 6151",
     "Set-WiaMax 6152",
     "$dialog = New-Object -ComObject WIA.CommonDialog",
-    "$jpeg = '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}'",
-    "$image = $dialog.ShowTransfer($item, $jpeg, $false)",
+    // BMP (the driver's native format): no lossy WIA JPEG conversion.
+    "$image = $dialog.ShowTransfer($item, '{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}', $false)",
     "if ($null -eq $image) { Write-Output (@{ canceled = $true; scannerName = $scannerName } | ConvertTo-Json -Compress); exit 0 }",
     `$image.SaveFile('${escapedTransferPath}')`,
     "Add-Type -AssemblyName System.Drawing",
     `Add-Type -ReferencedAssemblies System.Drawing -Path '${escapedCropSourcePath}'`,
     `$cropApplied = [CollectorsHubScanCrop]::SaveCropped('${escapedTransferPath}', '${escapedPath}', 92)`,
     `Remove-Item -LiteralPath '${escapedTransferPath}' -Force -ErrorAction SilentlyContinue`,
-    `Write-Output (@{ canceled = $false; path = '${escapedPath}'; scannerName = $scannerName; cropped = $cropApplied } | ConvertTo-Json -Compress)`,
+    "Write-Output (@{ canceled = $false; scannerName = $scannerName; cropped = $cropApplied } | ConvertTo-Json -Compress)",
   ].join('; ')
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
-
   try {
-    const { stdout } = await execFileAsync('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-EncodedCommand',
-      encoded,
-    ], { windowsHide: true, maxBuffer: 1024 * 1024, timeout: 300000, killSignal: 'SIGKILL' })
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true, maxBuffer: 1024 * 1024, timeout: 300000, killSignal: 'SIGKILL' })
     const result = JSON.parse(stdout.trim().split(/\r?\n/).filter(Boolean).pop() || '{}')
-    if (result.needsSelection) return result
     if (result.canceled) return { canceled: true }
-    return {
-      canceled: false,
-      path: destinationPath,
-      url: getScanImageUrl(fileName, destinationPath),
-      fileName,
-      scannerName: result.scannerName || '',
-      cropped: Boolean(result.cropped),
-    }
+    return scanImageResult({ ...files, rawPath: '', displayPath: '' }, { scannerName: result.scannerName || '', cropped: Boolean(result.cropped), scanMode: 'full', cardStatus: '', fallback: true })
   } catch (error) {
-    await unlink(transferPath).catch(() => {})
+    await unlink(`${files.transferPath}.bmp`).catch(() => {})
     const timedOut = error.killed || error.signal
     const detail = timedOut
       ? 'Scanner acquisition timed out. Cancel the scanner dialog or try the scan again.'
@@ -1035,7 +1037,35 @@ ipcMain.handle('scanner:scan-image', async (_event, options = {}) => {
     // The WIA transfer window belongs to another process; take keyboard focus back.
     refocusMainWindow()
   }
+}
+
+// Manual crop correction from the preserved raw scan (Full Bed mode, or any
+// scan whose automatic crop needs fixing). Writes a new lossless master.
+ipcMain.handle('scanner:recrop', async (_event, { image, rect } = {}) => {
+  const rawPath = resolveScanImagePath({ path: image?.rawPath })
+  const raw = nativeImage.createFromPath(rawPath)
+  if (raw.isEmpty()) throw new Error('The original scan could not be opened for cropping.')
+  const size = raw.getSize()
+  const x = Math.max(0, Math.min(size.width - 1, Math.round(Number(rect?.x) || 0)))
+  const y = Math.max(0, Math.min(size.height - 1, Math.round(Number(rect?.y) || 0)))
+  const width = Math.max(1, Math.min(size.width - x, Math.round(Number(rect?.width) || 0)))
+  const height = Math.max(1, Math.min(size.height - y, Math.round(Number(rect?.height) || 0)))
+  const outputPath = path.join(getScanDir(), `${Date.now()}-${randomUUID()}.png`)
+  await writeFile(outputPath, raw.crop({ x, y, width, height }).toPNG())
+  await logScanner({ event: 'manual-crop', rawPx: size, crop: { x, y, width, height }, aspect: Math.round((width / height) * 10000) / 10000 })
+  return {
+    ...image,
+    path: outputPath,
+    url: getScanImageUrl(path.basename(outputPath), outputPath),
+    fileName: path.basename(outputPath),
+    displayPath: '',
+    displayUrl: '',
+    cropped: true,
+    manualCrop: { x, y, width, height },
+  }
 })
+
+app.on('before-quit', () => scannerSession.close())
 
 let ocrWorkerPromise = null
 
@@ -1115,6 +1145,12 @@ ipcMain.handle('ai:cancel-recognition', (_event, jobId) => {
 ipcMain.handle('scanner:read-image', async (_event, image) => {
   const imagePath = resolveScanImagePath(image)
   const ext = path.extname(imagePath).slice(1).toLowerCase() || 'jpg'
+  if (ext === 'png') {
+    // Lossless scan masters stay local; the catalogue gets one high-quality
+    // JPEG made directly from the lossless master (a single lossy encode).
+    const master = nativeImage.createFromPath(imagePath)
+    if (!master.isEmpty()) return { data: master.toJPEG(95), ext: 'jpg', mime: 'image/jpeg' }
+  }
   const mime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff' }[ext] || 'application/octet-stream'
   return { data: await readFile(imagePath), ext, mime }
 })

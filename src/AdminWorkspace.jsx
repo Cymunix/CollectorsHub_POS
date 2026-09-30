@@ -1922,7 +1922,36 @@ function ScanIntake({ onCreateDraft, ai }) {
   const [scannerMessage, setScannerMessage] = useState('')
   const [scannerError, setScannerError] = useState('')
   const [colourMode, setColourMode] = useState('Colour')
+  const [scanMode, setScanMode] = useState(() => readScannerPref('scanMode', 'card'))
+  const [cardPosition, setCardPosition] = useState(() => readScannerPref('cardPosition', 'top-left'))
+  const [customPosition, setCustomPosition] = useState(() => readScannerPref('customPosition', { x: 0, y: 0 }))
+  const [displayCopy, setDisplayCopy] = useState(() => readScannerPref('displayCopy', false))
+  const [scannerStatus, setScannerStatus] = useState({ state: 'connecting' })
+  const [scanNotice, setScanNotice] = useState(null)
+  const [inspecting, setInspecting] = useState('')
   const [busy, setBusy] = useState('')
+
+  useEffect(() => { writeScannerPref('scanMode', scanMode) }, [scanMode])
+  useEffect(() => { writeScannerPref('cardPosition', cardPosition) }, [cardPosition])
+  useEffect(() => { writeScannerPref('customPosition', customPosition) }, [customPosition])
+  useEffect(() => { writeScannerPref('displayCopy', displayCopy) }, [displayCopy])
+
+  // The scanner initialises once when the scanning page opens and the same
+  // session is reused for every front/back/next-card scan; leaving the page
+  // releases the scanner for other programs.
+  useEffect(() => {
+    const api = adminDesktopApi()
+    if (typeof api.openScannerSession !== 'function') {
+      setScannerStatus({ state: 'unsupported' })
+      return undefined
+    }
+    const unsubscribe = api.onScannerStatus?.((status) => setScannerStatus(status))
+    api.openScannerSession().then((status) => { if (status?.state) setScannerStatus(status) }).catch(() => setScannerStatus({ state: 'unavailable' }))
+    return () => {
+      unsubscribe?.()
+      api.closeScannerSession?.()
+    }
+  }, [])
   const [metadata, setMetadata] = useState({
     cardName: '',
     set: '',
@@ -2035,16 +2064,16 @@ function ScanIntake({ onCreateDraft, ai }) {
     }
   }
 
-  async function scanFromDevice(side) {
+  async function scanFromDevice(side, modeOverride = '') {
     if (busy) return
+    const useMode = modeOverride || scanMode
     setBusy('scan')
     setScannerError('')
-    setScannerMessage('Detecting scanner...')
-    const waitingTimer = window.setTimeout(() => {
-      setScannerMessage('Waiting for the scanner transfer window...')
-    }, 1500)
+    setScanNotice(null)
+    setScannerMessage(useMode === 'card' ? 'Scanning card…' : 'Scanning the full scanner bed…')
+    const waitingTimer = 0
     try {
-      const image = await adminDesktopApi().scanImage({ colourMode })
+      const image = await adminDesktopApi().scanImage({ colourMode, scanMode: useMode, cardPosition, customPosition, displayCopy })
       window.clearTimeout(waitingTimer)
       if (image?.needsSelection) {
         const names = (image.scanners || []).map((scanner) => scanner.name).filter(Boolean)
@@ -2057,7 +2086,9 @@ function ScanIntake({ onCreateDraft, ai }) {
       }
       if (side === 'front') setFrontImage(image)
       if (side === 'back') setBackImage(image)
-      setScannerMessage(`${side === 'front' ? 'Front' : 'Back'} scan captured${image.cropped ? ' and auto-cropped' : ''}.`)
+      setScannerMessage(`${side === 'front' ? 'Front' : 'Back'} scan captured${image.cropped ? ' and auto-cropped' : ''}${image.fallback ? ' (using the Windows scan window)' : ''}.`)
+      // The image is always kept; these only offer a better next step.
+      if (['oversize', 'no_card', 'low_confidence'].includes(image.cardStatus)) setScanNotice({ side, status: image.cardStatus })
     } catch (error) {
       window.clearTimeout(waitingTimer)
       setScannerMessage('')
@@ -2134,20 +2165,81 @@ function ScanIntake({ onCreateDraft, ai }) {
             <p className="admin-kicker">Scanner</p>
             <h2>Canon flatbed scanner</h2>
           </div>
-          <span className="admin-status-pill"><span /> {busy === 'scan' ? 'Scanning...' : busy === 'draft' ? 'Analysing...' : (frontImage?.scannerName || backImage?.scannerName || 'Ready')}</span>
+          <span className={`admin-status-pill scanner-state-${scannerStatus.state}`}><span /> {busy === 'draft' ? 'Analysing...' : SCANNER_STATE_TEXT[scannerStatus.state] || 'Ready'}</span>
         </div>
         {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
         {scannerMessage ? <p className="admin-success">{scannerMessage}</p> : null}
         {scannerError ? <AdminDismissibleAlert onDismiss={() => setScannerError('')}>{scannerError}</AdminDismissibleAlert> : null}
         <div className="scan-controls">
           <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Trading Cards</option><option>Sports Cards</option><option>Coins</option><option>LEGO / Building Blocks</option><option>Comics</option><option>Video Games</option></select></label>
-          <label>Scan Mode<select value={mode} onChange={(event) => setMode(event.target.value)}><option>Create Catalogue Items</option><option>Match Existing Catalogue</option><option>Image Capture Only</option></select></label>
+          <label>Intake Mode<select value={mode} onChange={(event) => setMode(event.target.value)}><option>Create Catalogue Items</option><option>Match Existing Catalogue</option><option>Image Capture Only</option></select></label>
           <label>Colour Mode<select value={colourMode} onChange={(event) => setColourMode(event.target.value)}><option>Colour</option><option>Greyscale</option></select></label>
         </div>
-        <div className="scan-image-grid">
-          <ScanImageSlot label="Front Image" image={frontImage} onPick={() => pickImage('front')} />
-          <ScanImageSlot label="Back Image" image={backImage} onPick={() => pickImage('back')} />
+        <div className="scan-mode-picker" role="radiogroup" aria-label="Scan Mode">
+          <span className="scan-mode-label">Scan Mode</span>
+          {SCAN_MODES.map((option) => (
+            <button key={option.id} type="button" role="radio" aria-checked={scanMode === option.id} className={scanMode === option.id ? 'active' : ''} onClick={() => setScanMode(option.id)} disabled={Boolean(busy)}>
+              <strong>{option.title}</strong>
+              <small>{option.hint}</small>
+            </button>
+          ))}
         </div>
+        {scanMode === 'card' ? (
+          <p className="scan-mode-note">Place the card in the {CARD_POSITIONS.find((entry) => entry.id === cardPosition)?.hint || 'calibrated position'} of the scanner glass, portrait or landscape.</p>
+        ) : null}
+        <details className="scanner-calibration">
+          <summary>Scanner calibration</summary>
+          <div className="scanner-calibration-grid">
+            <label>Card position
+              <select value={cardPosition} onChange={(event) => setCardPosition(event.target.value)}>
+                {CARD_POSITIONS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+              </select>
+            </label>
+            {cardPosition === 'custom' ? (
+              <>
+                <label>From left edge (in)<input type="number" min="0" step="0.05" value={customPosition.x} onChange={(event) => setCustomPosition((current) => ({ ...current, x: Number(event.target.value) || 0 }))} /></label>
+                <label>From top edge (in)<input type="number" min="0" step="0.05" value={customPosition.y} onChange={(event) => setCustomPosition((current) => ({ ...current, y: Number(event.target.value) || 0 }))} /></label>
+              </>
+            ) : null}
+            <label className="admin-check"><input type="checkbox" checked={displayCopy} onChange={(event) => setDisplayCopy(event.target.checked)} /> Also create an enhanced display copy (the master stays unaltered)</label>
+          </div>
+        </details>
+        {scanNotice ? (
+          <div className={`scan-notice ${scanNotice.status}`}>
+            <span>
+              {scanNotice.status === 'oversize' ? 'This item looks larger than a standard 2.5 × 3.5 in card, so it was not cropped. The scan was kept.'
+                : scanNotice.status === 'no_card' ? 'No card was found in the card area. Check the card is in the calibrated corner. The scan was kept.'
+                  : 'The card edges were unclear, so the whole card area was kept instead of cropping into the card.'}
+            </span>
+            {scanNotice.status !== 'low_confidence' ? (
+              <button type="button" disabled={Boolean(busy)} onClick={() => { setScanMode('full'); scanFromDevice(scanNotice.side, 'full') }}>Try Full Bed / Large Item</button>
+            ) : null}
+            <button type="button" className="scan-notice-dismiss" onClick={() => setScanNotice(null)}>Dismiss</button>
+          </div>
+        ) : null}
+        <div className="scan-image-grid">
+          <div className="scan-slot-wrap">
+            <ScanImageSlot label="Front Image" image={frontImage} onPick={() => pickImage('front')} />
+            {frontImage ? <button type="button" className="scan-inspect-link" onClick={() => setInspecting('front')}>Inspect / adjust crop</button> : null}
+          </div>
+          <div className="scan-slot-wrap">
+            <ScanImageSlot label="Back Image" image={backImage} onPick={() => pickImage('back')} />
+            {backImage ? <button type="button" className="scan-inspect-link" onClick={() => setInspecting('back')}>Inspect / adjust crop</button> : null}
+          </div>
+        </div>
+        {inspecting ? (
+          <ScanInspector
+            image={inspecting === 'front' ? frontImage : backImage}
+            label={inspecting === 'front' ? 'Front' : 'Back'}
+            onClose={() => setInspecting('')}
+            onApply={(next) => {
+              if (inspecting === 'front') setFrontImage(next)
+              else setBackImage(next)
+              setInspecting('')
+              setScannerMessage(`${inspecting === 'front' ? 'Front' : 'Back'} crop adjusted.`)
+            }}
+          />
+        ) : null}
         {category === 'Trading Cards' ? <>
         <div className="scan-field-group"><strong>Trading card identity</strong><div className="scan-metadata-grid">
           {textField('cardName', 'Card name', 'Charizard ex')}{textField('cardNumber', 'Card number', '199/165')}{textField('set', 'Set', 'Scarlet & Violet—151')}{textField('seriesBlock', 'Series / block', 'Scarlet & Violet')}{textField('franchiseGame', 'Franchise / game', 'Pokémon')}{textField('manufacturerPublisher', 'Manufacturer / publisher', 'The Pokémon Company')}{textField('year', 'Release year', '2023')}{textField('releaseDate', 'Release date', '22 September 2023')}{textField('rarity', 'Rarity', 'Special Illustration Rare')}{textField('variantParallel', 'Variant / parallel', 'Reverse Holo')}{textField('finish', 'Finish', 'Holofoil')}{textField('language', 'Language', 'English')}{textField('edition', 'Edition', '1st Edition / Unlimited')}{textField('cardType', 'Card type', 'Pokémon / Trainer / Energy')}{textField('characterSubject', 'Character / subject', 'Charizard')}{textField('cardAttributes', 'Card attributes', 'Fire, Stage 2, ex')}{textField('artist', 'Artist', 'miki kudo')}
@@ -2312,10 +2404,153 @@ function LocalAiPanel({ ai }) {
 function ScanImageSlot({ label, image, onPick }) {
   return (
     <button className="scan-image-slot" type="button" onClick={onPick}>
-      {image?.url ? <img src={image.url} alt="" /> : <span><Image size={24} />{label}</span>}
+      {image?.url ? <img src={image.displayUrl || image.url} alt="" /> : <span><Image size={24} />{label}</span>}
       <strong>{image?.fileName || 'Choose image'}</strong>
-      {image?.cropped ? <small>Auto-cropped</small> : null}
+      {image?.cropped ? <small>{image.manualCrop ? 'Manually cropped' : 'Auto-cropped'}</small> : null}
     </button>
+  )
+}
+
+const SCAN_MODES = [
+  { id: 'card', title: 'Standard Trading Card', hint: 'Fast scan for 2.5 × 3.5 in cards' },
+  { id: 'full', title: 'Full Bed / Large Item', hint: 'Scan the entire scanner bed' },
+]
+
+const CARD_POSITIONS = [
+  { id: 'top-left', label: 'Top-left corner (default)', hint: 'top-left corner' },
+  { id: 'top-right', label: 'Top-right corner', hint: 'top-right corner' },
+  { id: 'bottom-left', label: 'Bottom-left corner', hint: 'bottom-left corner' },
+  { id: 'bottom-right', label: 'Bottom-right corner', hint: 'bottom-right corner' },
+  { id: 'custom', label: 'Custom position', hint: 'calibrated position' },
+]
+
+const SCANNER_STATE_TEXT = {
+  connecting: 'Connecting…',
+  ready: 'Ready',
+  scanning: 'Scanning',
+  processing: 'Processing',
+  unavailable: 'Scanner unavailable',
+  closed: 'Ready',
+  unsupported: 'Desktop app only',
+}
+
+// Per-computer scanner preferences (scan mode, card position): remembered in
+// this browser profile only; the app works the same without them.
+function readScannerPref(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(`collectorshub-scanner-${key}`)
+    return raw == null ? fallback : JSON.parse(raw)
+  } catch {
+    return fallback
+  }
+}
+
+function writeScannerPref(key, value) {
+  try {
+    window.localStorage.setItem(`collectorshub-scanner-${key}`, JSON.stringify(value))
+  } catch {}
+}
+
+// Temporary test tool: raw scanner output vs the processed images side by
+// side (to see whether dark-area problems come from the scanner/driver, the
+// processing, or compression), plus manual crop correction from the raw scan.
+function ScanInspector({ image, label, onClose, onApply }) {
+  const [tab, setTab] = useState(image?.rawUrl ? 'compare' : 'compare')
+  const [actualSize, setActualSize] = useState(false)
+  const [rect, setRect] = useState(null)
+  const [dragStart, setDragStart] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const rawRef = useRef(null)
+  const canCrop = Boolean(image?.rawPath) && typeof adminDesktopApi().recropScan === 'function'
+  const panels = [
+    image?.rawUrl ? { key: 'raw', title: 'Raw scanner output', note: 'Lossless PNG, exactly as the scanner returned it', url: image.rawUrl } : null,
+    image?.url ? { key: 'master', title: 'Cropped master', note: `${image.fileName?.endsWith('.png') ? 'Lossless PNG' : 'Imported file'}, colours unaltered`, url: image.url } : null,
+    image?.displayUrl ? { key: 'display', title: 'Enhanced display copy', note: 'Mild levels only, JPEG', url: image.displayUrl } : null,
+  ].filter(Boolean)
+
+  useEffect(() => {
+    function onKey(event) { if (event.key === 'Escape' && !saving) onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [saving, onClose])
+
+  function pointFromEvent(event) {
+    const box = rawRef.current.getBoundingClientRect()
+    return {
+      x: Math.min(Math.max(0, event.clientX - box.left), box.width),
+      y: Math.min(Math.max(0, event.clientY - box.top), box.height),
+    }
+  }
+
+  async function applyCrop() {
+    const img = rawRef.current
+    if (!rect || !img || rect.w < 10 || rect.h < 10) return
+    const scale = img.naturalWidth / img.getBoundingClientRect().width
+    setSaving(true)
+    setError('')
+    try {
+      const next = await adminDesktopApi().recropScan(image, { x: rect.x * scale, y: rect.y * scale, width: rect.w * scale, height: rect.h * scale })
+      onApply(next)
+    } catch (err) {
+      setError(err.message || 'Could not apply the crop.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="scan-review-modal scan-inspector" role="dialog" aria-modal="true" aria-label={`${label} scan inspector`}>
+      <section>
+        <header className="scan-inspector-header">
+          <div>
+            <p className="admin-kicker">{label} scan</p>
+            <h2>Inspect scan</h2>
+          </div>
+          <div className="scan-inspector-tabs">
+            <button type="button" className={tab === 'compare' ? 'active' : ''} onClick={() => setTab('compare')}>Raw vs processed</button>
+            {canCrop ? <button type="button" className={tab === 'crop' ? 'active' : ''} onClick={() => setTab('crop')}>Adjust crop</button> : null}
+          </div>
+          <button className="modal-close" type="button" onClick={onClose} aria-label="Close"><X size={18} /></button>
+        </header>
+        {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
+        {tab === 'compare' ? (
+          <>
+            <label className="admin-check scan-inspector-zoom"><input type="checkbox" checked={actualSize} onChange={(event) => setActualSize(event.target.checked)} /> Actual size (100%) to inspect dark areas</label>
+            {!image?.rawUrl ? <p className="scan-mode-note">No raw scan is stored for this image (imported file or older scan).</p> : null}
+            <div className={`scan-inspector-compare${actualSize ? ' actual' : ''}`} style={{ gridTemplateColumns: `repeat(${panels.length}, minmax(0, 1fr))` }}>
+              {panels.map((panel) => (
+                <figure key={panel.key}>
+                  <figcaption><strong>{panel.title}</strong><small>{panel.note}</small></figcaption>
+                  <div className="scan-inspector-frame"><img src={panel.url} alt={panel.title} /></div>
+                </figure>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="scan-inspector-crop">
+            <p className="scan-mode-note">Drag on the original scan to draw the crop. The original scan is never changed.</p>
+            <div
+              className="scan-inspector-crop-stage"
+              onMouseDown={(event) => { const point = pointFromEvent(event); setDragStart(point); setRect({ x: point.x, y: point.y, w: 0, h: 0 }) }}
+              onMouseMove={(event) => {
+                if (!dragStart) return
+                const point = pointFromEvent(event)
+                setRect({ x: Math.min(point.x, dragStart.x), y: Math.min(point.y, dragStart.y), w: Math.abs(point.x - dragStart.x), h: Math.abs(point.y - dragStart.y) })
+              }}
+              onMouseUp={() => setDragStart(null)}
+              onMouseLeave={() => setDragStart(null)}
+            >
+              <img ref={rawRef} src={image.rawUrl} alt="Original scan" draggable={false} />
+              {rect ? <span className="scan-inspector-rect" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} /> : null}
+            </div>
+            <footer className="scan-review-footer">
+              <button type="button" onClick={() => setRect(null)} disabled={saving}>Clear</button>
+              <button className="admin-gold-button" type="button" onClick={applyCrop} disabled={saving || !rect || rect.w < 10 || rect.h < 10}>{saving ? 'Saving…' : 'Use This Crop'}</button>
+            </footer>
+          </div>
+        )}
+      </section>
+    </div>
   )
 }
 

@@ -21,6 +21,15 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   listEbayItem: (item) => ipcRenderer.invoke('ebay:list-item', item),
   selectScanImages: () => ipcRenderer.invoke('scanner:select-images'),
   scanImage: (options) => ipcRenderer.invoke('scanner:scan-image', options),
+  openScannerSession: () => ipcRenderer.invoke('scanner:open-session'),
+  closeScannerSession: () => ipcRenderer.invoke('scanner:close-session'),
+  getScannerStatus: () => ipcRenderer.invoke('scanner:get-status'),
+  onScannerStatus: (callback) => {
+    const listener = (_event, status) => callback(status)
+    ipcRenderer.on('scanner:status', listener)
+    return () => ipcRenderer.removeListener('scanner:status', listener)
+  },
+  recropScan: (image, rect) => ipcRenderer.invoke('scanner:recrop', { image, rect }),
   analyzeCardScan: (image, options) => ipcRenderer.invoke('scanner:analyze-card', image, options),
   readScanImage: (image) => ipcRenderer.invoke('scanner:read-image', image),
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
