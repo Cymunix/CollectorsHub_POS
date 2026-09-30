@@ -158,6 +158,7 @@ class ScannerSession extends EventEmitter {
 
   // Initialises the scanner once for the scanning page.
   async open() {
+    this.closeWhenIdle = false
     this.touch()
     if (this.state === 'ready' || this.state === 'scanning' || this.state === 'processing') return this.getStatus()
     this.setState('connecting')
@@ -238,8 +239,13 @@ class ScannerSession extends EventEmitter {
       return reply
     } finally {
       this.feeding = false
-      if (this.process) this.setState('ready')
-      this.touch()
+      if (this.closeWhenIdle) {
+        this.closeWhenIdle = false
+        this.close()
+      } else {
+        if (this.process) this.setState('ready')
+        this.touch()
+      }
     }
   }
 
@@ -258,6 +264,11 @@ class ScannerSession extends EventEmitter {
 
   // Releases the scanner for other programs (leaving the page / idle / quit).
   close() {
+    // Leaving the scanning page mid-stack: finish the stack first.
+    if (this.feeding) {
+      this.closeWhenIdle = true
+      return
+    }
     clearTimeout(this.idleTimer)
     const child = this.process
     this.setState('closed')

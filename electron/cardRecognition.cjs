@@ -15,8 +15,10 @@ const { readFile } = require('node:fs/promises')
 const OLLAMA_URL = 'http://127.0.0.1:11434'
 const QWEN_MODEL = 'qwen3-vl:8b-instruct'
 // Long edge sent to the model: enough to read card numbers, copyright lines
-// and serial stamps without sending the full 600 DPI scan.
-const AI_IMAGE_LONG_EDGE = 2000
+// and serial stamps without sending the full 600 DPI scan. Measured on
+// FastFoto scans: 1600 gives the same results as 2000 about 30% faster
+// (~7 s vs ~10 s per card); 1280 started misreading card numbers.
+const AI_IMAGE_LONG_EDGE = 1600
 const STATUS_TIMEOUT_MS = 4000
 const RECOGNITION_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -320,6 +322,14 @@ class OllamaCardRecognitionProvider {
       throw new CardRecognitionError('MODEL_DOWNLOAD_FAILED', 'The model download was interrupted. Check the internet connection and retry.', error)
     }
     if (!succeeded) throw new CardRecognitionError('MODEL_DOWNLOAD_FAILED', 'The model download did not finish. Retry to resume it.')
+  }
+
+  // Loads the model into memory ahead of a batch (a cold start adds ~20 s to
+  // the first card). Best effort: failures surface on the real request.
+  async warmUp() {
+    try {
+      await ollamaFetch('/api/generate', { method: 'POST', timeoutMs: RECOGNITION_TIMEOUT_MS, body: { model: this.model, keep_alive: '10m' } })
+    } catch {}
   }
 
   async recognizeCard({ frontPath, backPath }, signal) {

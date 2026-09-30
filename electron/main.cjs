@@ -1372,6 +1372,8 @@ ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back } = {}) 
   }
 })
 
+ipcMain.handle('ai:warm-up', () => { cardRecognition.warmUp() })
+
 ipcMain.handle('ai:cancel-recognition', (_event, jobId) => {
   recognitionJobs.get(jobId)?.abort(new Error('cancelled'))
 })

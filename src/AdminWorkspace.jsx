@@ -396,6 +396,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     if (!ids.length) return
     analysingRef.current = true
     aiRunRef.current = { cancelled: false, jobId: '' }
+    const matching = []
     for (let index = 0; index < ids.length || pendingAnalysisRef.current.length; index += 1) {
       while (pendingAnalysisRef.current.length) {
         const next = pendingAnalysisRef.current.shift()
@@ -426,6 +427,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         continue
       }
 
+      // The catalogue lookup runs while the AI starts on the next card.
+      matching.push((async () => {
       try {
         const { taxonomy, scanAnalysis } = await analyseRecognizedCard(response.result, draft.category)
         await patchRecognition(draft.id, {
@@ -450,10 +453,66 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
           analysedAt: new Date().toISOString(),
         }, { scanAnalysis: null, status: 'AI Review', analysisError: `Catalogue matching failed: ${error.message || 'unknown error'}` })
       }
+      })())
     }
+    await Promise.all(matching)
     analysingRef.current = false
-    pendingAnalysisRef.current = []
+    // Cards that arrived while the last lookups finished start a new run.
+    const leftover = pendingAnalysisRef.current.splice(0)
     setAiAnalysis(null)
+    if (leftover.length && !aiRunRef.current.cancelled) analyseCards(leftover)
+  }
+
+  // ---- Epson FastFoto stack scanning. Lives at this level (not in the scan
+  // page) so a stack keeps feeding and queuing if the admin opens Review.
+  const [feedState, setFeedState] = useState(null)
+  const feedOptionsRef = useRef({})
+  const aiStatusRef = useRef(aiStatus)
+  aiStatusRef.current = aiStatus
+
+  useEffect(() => {
+    const api = adminDesktopApi()
+    const offCard = api.onFeedCard?.(async (card) => {
+      const options = feedOptionsRef.current
+      const id = await addCardToQueue({
+        type: 'Scanned catalogue draft',
+        scanner: card.frontImage?.scannerName || 'Epson FastFoto',
+        category: options.category || 'Sports Cards',
+        mode: options.mode || 'Create Catalogue Items',
+        frontImage: card.frontImage,
+        backImage: card.backImage,
+        metadata: {},
+        feed: card.feed,
+      })
+      setFeedState((current) => (current ? { ...current, queued: (current.queued || 0) + 1 } : current))
+      if (options.autoAnalyse && aiStatusRef.current.state === 'ready') analyseSoon(id)
+    })
+    const offProgress = api.onFeedProgress?.((progress) => {
+      setFeedState((current) => (current ? { ...current, pages: progress.pages, warning: progress.error || current.warning } : current))
+    })
+    return () => { offCard?.(); offProgress?.() }
+  }, [])
+
+  async function startFeed(options) {
+    if (feedState?.running) return null
+    const api = adminDesktopApi()
+    feedOptionsRef.current = options
+    setFeedState({ running: true, pages: 0, queued: 0, stopping: false, startedAt: Date.now() })
+    // Load the model while the first card feeds.
+    if (options.autoAnalyse && aiStatusRef.current.state === 'ready') api.warmUpAi?.()
+    let result
+    try {
+      result = await api.feedStack({ loadFaceDown: options.loadFaceDown })
+    } catch (error) {
+      result = { ok: false, code: 'FEED_FAILED', message: error.message || 'The FastFoto scan failed.' }
+    }
+    setFeedState((current) => ({ ...current, running: false, stopping: false, result }))
+    return result
+  }
+
+  async function stopFeed() {
+    setFeedState((current) => (current ? { ...current, stopping: true } : current))
+    await adminDesktopApi().cancelFeed?.()
   }
 
   function cancelAnalysis() {
@@ -527,6 +586,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
               onCancelInstall: cancelAiInstall,
               onAddToQueue: addCardToQueue,
               onAnalyseSoon: analyseSoon,
+              feeder: { state: feedState, start: startFeed, stop: stopFeed },
               onRemove: deleteScanDraft,
               onAnalyse: analyseCards,
               onCancel: cancelAnalysis,
@@ -2401,68 +2461,27 @@ function ScanIntake({ onCreateDraft, ai }) {
   const [busy, setBusy] = useState('')
   const autoQueuedPairRef = useRef('')
   const metadata = useMemo(() => ({}), [])
-  // Epson FastFoto stack scanning.
-  const [feed, setFeed] = useState(null)
+  // Epson FastFoto stack scanning (runs at the workspace level, see startFeed).
+  const feed = ai.feeder?.state || null
+  const feeding = Boolean(feed?.running)
   const [feedAutoAnalyse, setFeedAutoAnalyse] = useState(() => readScannerPref('feedAutoAnalyse', true))
   const [feedFaceDown, setFeedFaceDown] = useState(() => readScannerPref('feedFaceDown', true))
-  const feedContextRef = useRef({})
-  feedContextRef.current = { ai, category, mode, autoAnalyse: feedAutoAnalyse }
   useEffect(() => { writeScannerPref('feedAutoAnalyse', feedAutoAnalyse) }, [feedAutoAnalyse])
   useEffect(() => { writeScannerPref('feedFaceDown', feedFaceDown) }, [feedFaceDown])
 
-  // Each card is queued the moment it is ready, and analysed straight away
-  // when automatic analysis is on, while the rest of the stack still feeds.
-  useEffect(() => {
-    const api = adminDesktopApi()
-    const offCard = api.onFeedCard?.(async (card) => {
-      const context = feedContextRef.current
-      const id = await context.ai.onAddToQueue({
-        type: 'Scanned catalogue draft',
-        scanner: card.frontImage?.scannerName || 'Epson FastFoto',
-        category: context.category,
-        mode: context.mode,
-        frontImage: card.frontImage,
-        backImage: card.backImage,
-        metadata: {},
-        feed: card.feed,
-      })
-      setFeed((current) => (current ? { ...current, queued: (current.queued || 0) + 1 } : current))
-      if (context.autoAnalyse && context.ai.status.state === 'ready') context.ai.onAnalyseSoon(id)
-    })
-    const offProgress = api.onFeedProgress?.((progress) => {
-      setFeed((current) => (current ? { ...current, pages: progress.pages, warning: progress.error || current.warning } : current))
-    })
-    return () => { offCard?.(); offProgress?.() }
-  }, [])
-
   async function scanStack() {
-    if (busy) return
-    const api = adminDesktopApi()
-    setBusy('feed')
+    if (busy || feeding) return
     setScannerError('')
     setScannerMessage('')
-    setFeed({ running: true, pages: 0, queued: 0, stopping: false })
-    try {
-      const result = await api.feedStack({ loadFaceDown: feedFaceDown })
-      const seconds = Math.round((result.totalMs || 0) / 1000)
-      setFeed((current) => ({ ...current, running: false, result }))
-      if (result.ok && result.cards) {
-        const perCard = result.cards ? Math.round(seconds / result.cards) : 0
-        setScannerMessage(`${result.cards} card${result.cards === 1 ? '' : 's'} scanned in ${seconds}s (about ${perCard}s each)${result.cancelled ? ', stopped early' : ''}.${feedContextRef.current.autoAnalyse && ai.status.state === 'ready' ? ' The local AI is analysing them now.' : ' They are in the AI queue.'}`)
-      }
-      if (result.code) setScannerError(result.message || 'The FastFoto scan failed.')
-    } catch (error) {
-      setFeed((current) => ({ ...current, running: false }))
-      setScannerError(error.message || 'The FastFoto scan failed.')
-    } finally {
-      setBusy('')
-    }
+    await ai.feeder.start({ category, mode, autoAnalyse: feedAutoAnalyse, loadFaceDown: feedFaceDown })
   }
 
-  async function stopStack() {
-    setFeed((current) => (current ? { ...current, stopping: true } : current))
-    await adminDesktopApi().cancelFeed?.()
-  }
+  const feedResult = feed && !feed.running ? feed.result : null
+  const feedSummary = (() => {
+    if (!feedResult?.cards) return ''
+    const seconds = Math.round((feedResult.totalMs || 0) / 1000)
+    return `${feedResult.cards} card${feedResult.cards === 1 ? '' : 's'} scanned in ${seconds}s (about ${Math.round(seconds / feedResult.cards)}s each)${feedResult.cancelled ? ', stopped early' : ''}.`
+  })()
 
   async function checkFeeder() {
     const status = await adminDesktopApi().refreshFeeder?.().catch(() => null)
@@ -2627,19 +2646,19 @@ function ScanIntake({ onCreateDraft, ai }) {
                 <strong>Epson FastFoto · stack scanning</strong>
                 <small>{scannerStatus.feederName ? `${scannerStatus.feederName} connected. Both sides of every card in one pass.` : 'FastFoto not detected. Turn it on and connect it, then check again.'}</small>
               </div>
-              {scannerStatus.feederName ? null : <button type="button" onClick={checkFeeder} disabled={Boolean(busy)}>Check again</button>}
+              {scannerStatus.feederName ? null : <button type="button" onClick={checkFeeder} disabled={Boolean(busy) || feeding}>Check again</button>}
             </div>
             {scannerStatus.feederName ? (
               <>
                 <p className="scan-mode-note">Load the cards {feedFaceDown ? 'face down' : 'face up'}, top edge first, straight against the centre guide. Thick relic cards, sleeved cards and slabs go on the Canon.</p>
                 <div className="feeder-options">
-                  <label className="admin-check"><input type="checkbox" checked={feedAutoAnalyse} onChange={(event) => setFeedAutoAnalyse(event.target.checked)} disabled={Boolean(busy)} /> Analyse with local AI as each card is scanned</label>
-                  <label className="admin-check"><input type="checkbox" checked={feedFaceDown} onChange={(event) => setFeedFaceDown(event.target.checked)} disabled={Boolean(busy)} /> Cards loaded face down</label>
+                  <label className="admin-check"><input type="checkbox" checked={feedAutoAnalyse} onChange={(event) => setFeedAutoAnalyse(event.target.checked)} disabled={Boolean(busy) || feeding} /> Analyse with local AI as each card is scanned</label>
+                  <label className="admin-check"><input type="checkbox" checked={feedFaceDown} onChange={(event) => setFeedFaceDown(event.target.checked)} disabled={Boolean(busy) || feeding} /> Cards loaded face down</label>
                 </div>
                 {feedAutoAnalyse && ai.status.state !== 'ready' ? <p className="scan-mode-note">The local AI isn't ready, so scanned cards will wait in the queue.</p> : null}
                 <div className="feeder-actions">
-                  <button className="admin-gold-button" type="button" onClick={scanStack} disabled={Boolean(busy)}>{busy === 'feed' ? 'Scanning stack…' : 'Scan Stack'}</button>
-                  {busy === 'feed' ? <button type="button" onClick={stopStack} disabled={feed?.stopping}>{feed?.stopping ? 'Stopping after this card…' : 'Stop'}</button> : null}
+                  <button className="admin-gold-button" type="button" onClick={scanStack} disabled={Boolean(busy) || feeding}>{feeding ? 'Scanning stack…' : 'Scan Stack'}</button>
+                  {feeding ? <button type="button" onClick={ai.feeder.stop} disabled={feed?.stopping}>{feed?.stopping ? 'Stopping after this card…' : 'Stop'}</button> : null}
                   {feed ? (
                     <span className="feeder-progress">
                       {feed.running ? `${Math.floor((feed.pages || 0) / 2)} card${Math.floor((feed.pages || 0) / 2) === 1 ? '' : 's'} scanned` : ''}
@@ -2648,6 +2667,8 @@ function ScanIntake({ onCreateDraft, ai }) {
                   ) : null}
                 </div>
                 {feed?.warning ? <p className="admin-error">{feed.warning}</p> : null}
+                {feedSummary ? <p className="admin-success">{feedSummary}{feedResult.code ? '' : feed?.queued ? ' Every card is in the AI queue.' : ''}</p> : null}
+                {feedResult?.code ? <p className="admin-error">{feedResult.message || 'The FastFoto scan failed.'}</p> : null}
               </>
             ) : null}
           </div>
@@ -2656,7 +2677,7 @@ function ScanIntake({ onCreateDraft, ai }) {
         <div className="scan-mode-picker" role="radiogroup" aria-label="Scan Mode">
           <span className="scan-mode-label">Scan Mode</span>
           {SCAN_MODES.map((option) => (
-            <button key={option.id} type="button" role="radio" aria-checked={scanMode === option.id} className={scanMode === option.id ? 'active' : ''} onClick={() => setScanMode(option.id)} disabled={Boolean(busy)}>
+            <button key={option.id} type="button" role="radio" aria-checked={scanMode === option.id} className={scanMode === option.id ? 'active' : ''} onClick={() => setScanMode(option.id)} disabled={Boolean(busy) || feeding}>
               <strong>{option.title}</strong>
               <small>{option.hint}</small>
             </button>
@@ -2690,7 +2711,7 @@ function ScanIntake({ onCreateDraft, ai }) {
                   : 'The card edges were unclear, so the whole card area was kept instead of cropping into the card.'}
             </span>
             {scanNotice.status !== 'low_confidence' ? (
-              <button type="button" disabled={Boolean(busy)} onClick={() => { setScanMode('full'); scanFromDevice(scanNotice.side, 'full') }}>Try Full Bed / Large Item</button>
+              <button type="button" disabled={Boolean(busy) || feeding} onClick={() => { setScanMode('full'); scanFromDevice(scanNotice.side, 'full') }}>Try Full Bed / Large Item</button>
             ) : null}
             <button type="button" className="scan-notice-dismiss" onClick={() => setScanNotice(null)}>Dismiss</button>
           </div>
@@ -2719,11 +2740,11 @@ function ScanIntake({ onCreateDraft, ai }) {
           />
         ) : null}
         <div className="admin-quick-actions">
-          <button className="admin-gold-button" type="button" disabled={Boolean(busy)} onClick={() => scanFromDevice('front')}>Scan Front with Canon</button>
-          <button className="admin-gold-button" type="button" disabled={Boolean(busy)} onClick={() => scanFromDevice('back')}>Scan Back with Canon</button>
-          <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('front')}>Import Front File</button>
-          <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('back')}>Import Back File</button>
-          <button type="button" disabled={Boolean(busy)} onClick={createDraft} title="Legacy text recognition (OCR), analysed immediately">{busy === 'draft' ? 'Analysing...' : 'Analyse Now with OCR'}</button>
+          <button className="admin-gold-button" type="button" disabled={Boolean(busy) || feeding} onClick={() => scanFromDevice('front')}>Scan Front with Canon</button>
+          <button className="admin-gold-button" type="button" disabled={Boolean(busy) || feeding} onClick={() => scanFromDevice('back')}>Scan Back with Canon</button>
+          <button type="button" disabled={Boolean(busy) || feeding} onClick={() => pickImage('front')}>Import Front File</button>
+          <button type="button" disabled={Boolean(busy) || feeding} onClick={() => pickImage('back')}>Import Back File</button>
+          <button type="button" disabled={Boolean(busy) || feeding} onClick={createDraft} title="Legacy text recognition (OCR), analysed immediately">{busy === 'draft' ? 'Analysing...' : 'Analyse Now with OCR'}</button>
         </div>
       </section>
       <LocalAiPanel ai={ai} />
