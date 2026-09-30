@@ -2731,7 +2731,7 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
 }
 
 const AI_MATCH_TEXT = {
-  exact: ['Exact match found', 'Approve links this scan to the existing catalogue item. No duplicate is created.'],
+  exact: ['Exact match found', 'Approve links this scan to the existing catalogue item (no duplicate is created) and makes the scans its catalogue photos.'],
   likely: ['Likely match', 'Approve opens the catalogue form so you can confirm the match.'],
   multiple: ['Several possible matches', 'Approve opens the catalogue form so you can choose the right one.'],
   none: ['No catalogue match', 'Approve opens the catalogue form pre-filled with this card, ready to add.'],
@@ -2774,11 +2774,9 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
   const hasScans = Boolean(draft.frontImage?.path || draft.backImage?.path)
   const attachedCount = scanImagesAttached(draft)
 
-  // Scans go onto the catalogue item when it has no images yet; an item that
-  // already has images keeps them unless the reviewer explicitly adds scans.
-  async function attachScans(itemId, { force = false } = {}) {
-    const existing = await countItemImages(itemId)
-    if (existing > 0 && !force) return { attached: 0, existing, warnings: [] }
+  // Admin scans replace the catalogue item's photos (front, then back).
+  async function attachScans(itemId) {
+    const existing = await countItemImages(itemId).catch(() => null)
     const images = await loadScanImageBlobs(draft)
     if (!images.length) return { attached: 0, existing, warnings: ['The scan files for this card could not be found on this computer.'] }
     return { ...(await attachScanImagesToItem(itemId, images)), existing }
@@ -2812,7 +2810,7 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
     setWorking('images')
     setCardError('')
     try {
-      const images = await attachScans(linkedItemId, { force: true })
+      const images = await attachScans(linkedItemId)
       await onUpdateDraft(draft.id, {
         imagesAttached: images.attached,
         analysisError: images.warnings.join(' '),
@@ -2913,7 +2911,7 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
           <>
             {hasScans && linkedItemId && attachedCount === 0 ? (
               <button className="admin-gold-button" type="button" onClick={addScansToItem} disabled={Boolean(working)}>
-                {working === 'images' ? 'Uploading…' : 'Add Scans to Catalogue Item'}
+                {working === 'images' ? 'Uploading…' : 'Save Scans to Catalogue Item'}
               </button>
             ) : null}
             <button className="danger" type="button" onClick={onRemove} disabled={Boolean(working)}>Remove</button>
@@ -2933,7 +2931,8 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
 // Images this draft put on its catalogue item: the recorded count, else the
 // latest audit entry that uploaded images (older drafts).
 function uploadedCount(images = [], warnings = []) {
-  return Math.max(0, images.length - (warnings || []).filter((warning) => String(warning).startsWith('Image upload failed')).length)
+  // Uploads are all-or-nothing: a failed upload keeps the existing photos.
+  return (warnings || []).some((warning) => String(warning).startsWith('Image upload failed')) ? 0 : images.length
 }
 
 function scanImagesAttached(draft) {
@@ -3033,9 +3032,8 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const [values, setValues] = useState(() => saved?.values || initialReviewValues(draft, category, matchItem))
   const [showAll, setShowAll] = useState(!matchItem)
   const [attachImages, setAttachImages] = useState(saved?.attachImages ?? true)
-  // Scans are added to a matched item by default only when it has no images.
+  // Admin scans replace the catalogue photos by default.
   const [matchImageCount, setMatchImageCount] = useState(null)
-  const attachTouchedRef = useRef(saved?.attachImages != null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const spec = isSpecCategory(category)
@@ -3099,8 +3097,8 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     return () => { cancelled = true }
   }, [spec, category, values.subcategory_id, values.franchise_id, values.subset_id])
 
-  // How many catalogue images the matched item has; with none, the scans are
-  // added by default (unless the reviewer already chose).
+  // How many catalogue photos the matched item has (shown on the Images option;
+  // admin scans replace them).
   useEffect(() => {
     if (!matchItem) {
       setMatchImageCount(null)
@@ -3111,7 +3109,6 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
       .then((count) => {
         if (cancelled) return
         setMatchImageCount(count)
-        if (!attachTouchedRef.current) setAttachImages(count === 0)
       })
       .catch(() => { if (!cancelled) setMatchImageCount(null) })
     return () => { cancelled = true }
@@ -3167,7 +3164,6 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     setMatchId(nextId)
     setValues(initialReviewValues(draft, category, nextItem))
     setShowAll(!nextItem)
-    attachTouchedRef.current = false
     setAttachImages(true)
   }
 
@@ -3522,13 +3518,12 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
           {!allRows.length ? <EmptyAdminState text="The scan agrees with the catalogue item. Tick Show all fields to edit anything else." /> : null}
           {hasScanImages ? (
             <label className="scan-review-images-option">
-              <input type="checkbox" checked={attachImages} onChange={(event) => { attachTouchedRef.current = true; setAttachImages(event.target.checked) }} />
+              <input type="checkbox" checked={attachImages} onChange={(event) => setAttachImages(event.target.checked)} />
               <span>
                 <strong>Images</strong>
                 {!matchItem ? 'Use the front and back scans as the catalogue images'
-                  : matchImageCount === 0 ? 'This catalogue item has no images yet: add the front and back scans'
-                    : matchImageCount > 0 ? `Also add the front and back scans (the item already has ${matchImageCount} image${matchImageCount === 1 ? '' : 's'})`
-                      : 'Add the front and back scans to this catalogue item'}
+                  : matchImageCount > 0 ? `Replace the item's ${matchImageCount} current photo${matchImageCount === 1 ? '' : 's'} with the front and back scans`
+                    : "Use the front and back scans as this item's catalogue photos"}
               </span>
             </label>
           ) : null}

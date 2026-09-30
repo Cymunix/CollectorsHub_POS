@@ -1640,27 +1640,28 @@ export async function categoryIdForName(categoryName) {
   return categoryId
 }
 
-// Uploads scan images the same way the website's Add Item form does:
-// item-images/items/<item_id>/<timestamp>_<position>.<ext> + an item_images row.
+// Admin scans REPLACE an item's catalogue photos: front at position 0 (what
+// the website shows via item_details.front_image_path) and back at position 1,
+// stored like the website's Add Item form (item-images/items/<id>/<ts>_<pos>.<ext>).
+// Uploads happen first, so a failed upload leaves the current photos intact.
+// Old files stay in storage; only the item_images rows and items.image_path
+// are switched to the scans. Returns warning strings (empty on success).
 async function attachItemImages(itemId, images = []) {
   if (!images.length) return []
-  const { data: existing } = await supabase.from('item_images').select('position').eq('item_id', itemId)
-  const taken = new Set((existing || []).map((row) => row.position))
-  const errors = []
+  const uploaded = []
   for (const image of images) {
-    let position = image.position
-    while (taken.has(position)) position += 1
-    taken.add(position)
-    const path = `items/${itemId}/${Date.now()}_${position}.${image.ext || 'jpg'}`
+    const path = `items/${itemId}/${Date.now()}_${image.position}.${image.ext || 'jpg'}`
     const { error: uploadError } = await supabase.storage.from(IMAGE_BUCKET).upload(path, image.blob, { contentType: image.blob.type || 'image/jpeg' })
-    if (uploadError) {
-      errors.push(`Image upload failed: ${uploadError.message}`)
-      continue
-    }
-    const { error: rowError } = await supabase.from('item_images').insert({ item_id: itemId, image_path: path, position })
-    if (rowError) errors.push(`Image record save failed: ${rowError.message}`)
+    if (uploadError) return [`Image upload failed: ${uploadError.message}. The existing catalogue photos were kept.`]
+    uploaded.push({ item_id: itemId, image_path: path, position: image.position })
   }
-  return errors
+  const { error: deleteError } = await supabase.from('item_images').delete().eq('item_id', itemId)
+  if (deleteError) return [`Image upload failed: could not replace the existing photos (${deleteError.message}). The existing catalogue photos were kept.`]
+  const { error: rowError } = await supabase.from('item_images').insert(uploaded)
+  if (rowError) return [`Image record save failed: ${rowError.message}`]
+  const front = uploaded.find((row) => row.position === 0) || uploaded[0]
+  const { error: itemError } = await supabase.from('items').update({ image_path: front.image_path }).eq('item_id', itemId)
+  return itemError ? [`Front image link not updated: ${itemError.message}`] : []
 }
 
 // Number of catalogue images an item already has (item_images rows).
@@ -1671,11 +1672,11 @@ export async function countItemImages(itemId) {
   return count || 0
 }
 
-// Adds scan images to an existing catalogue item (after any it already has).
+// Replaces an existing catalogue item's photos with the scans.
 // Returns { attached, warnings }.
 export async function attachScanImagesToItem(itemId, images = []) {
   const warnings = await attachItemImages(itemId, images)
-  return { attached: images.length - warnings.filter((warning) => warning.startsWith('Image upload failed')).length, warnings }
+  return { attached: warnings.some((warning) => warning.startsWith('Image upload failed')) ? 0 : images.length, warnings }
 }
 
 function itemNameFromValues(category, values) {
