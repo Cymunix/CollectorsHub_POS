@@ -2456,10 +2456,15 @@ function draftIdentityKey(draft) {
   return [name, number, year].join('|')
 }
 
+const COMPLETED_SCAN_REVIEW_STATUSES = new Set(['Catalogue Item Created', 'Matched and Updated', 'Matched'])
+
 function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
   // Cards still waiting for (or being retried by) local AI live in the Scan
   // Intake queue; every analysed card comes here for review.
-  const rows = (drafts || []).filter((draft) => !['queued', 'analysing', 'failed'].includes(draft.recognition?.status))
+  const rows = (drafts || []).filter((draft) => (
+    !['queued', 'analysing', 'failed'].includes(draft.recognition?.status)
+    && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)
+  ))
   const draftsByIdentity = useMemo(() => {
     const groups = new Map()
     rows.filter((draft) => draft.status !== 'Rejected').forEach((draft) => {
@@ -2524,7 +2529,7 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
           const confidence = Number(draft.scanAnalysis?.confidence || 0)
           const bestMatch = inDraftCategory(draft, draft.scanAnalysis?.bestMatch) ? draft.scanAnalysis.bestMatch : null
           const candidateCount = (draft.scanAnalysis?.candidates || []).filter((candidate) => inDraftCategory(draft, candidate)).length
-          const finished = ['Catalogue Item Created', 'Matched and Updated', 'Matched'].includes(draft.status)
+          const finished = COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)
           const siblings = (draftsByIdentity.get(draftIdentityKey(draft)) || []).filter((other) => other.id !== draft.id)
           const catalogedSibling = siblings.find((other) => other.createdItemId || other.matchedItemId)
           if (['done', 'declined'].includes(draft.recognition?.status)) {
