@@ -7394,3 +7394,91 @@ button:disabled {
   padding: 6px 12px;
   white-space: nowrap;
 }
+
+/* Review: copies of the same card */
+.review-bulk-bar {
+  align-items: center;
+  background: #fffaf0;
+  border: 1px solid #ecd9a8;
+  border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+}
+
+.review-bulk-bar button:not(.admin-gold-button),
+.existing-card-actions button:not(.admin-gold-button) {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #1f2a3a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.review-bulk-bar button:disabled,
+.existing-card-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.review-bulk-copies,
+.review-bulk-status {
+  color: #5c3b00;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.existing-card-prompt {
+  align-items: flex-start;
+  background: #fff4e5;
+  border: 1px solid #f0b35a;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+}
+
+.existing-card-prompt img {
+  border-radius: 6px;
+  height: 84px;
+  object-fit: contain;
+  width: 60px;
+}
+
+.existing-card-prompt strong,
+.existing-card-prompt span {
+  display: block;
+}
+
+.existing-card-prompt span {
+  color: #3a4657;
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.existing-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.existing-item-modal .existing-item-modal-body {
+  background: #fff;
+  border-radius: 12px;
+  max-height: calc(100vh - 48px);
+  max-width: min(1100px, calc(100vw - 32px));
+  overflow: auto;
+  width: 100%;
+}
+
+.existing-item-modal .existing-item-modal-body section {
+  max-width: none;
+  min-width: 0;
+}

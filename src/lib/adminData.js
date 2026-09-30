@@ -2373,6 +2373,31 @@ const MATCH_STATUS_ROUTE = {
 // Full pipeline for one recognised card: taxonomy resolver -> catalogue matcher.
 // The result is stored on the draft as scanAnalysis (same shape the review
 // screen already uses) plus the resolved taxonomy.
+// Identity of one catalogue card, for spotting copies of the same card among
+// scans: player(s), number, year, set, and everything that makes a different
+// catalogue item (parallel, serial run, autograph, relic). Resolved taxonomy
+// ids are used when available because the AI's set wording can vary between
+// scans of the same card. Empty when there isn't enough to be sure.
+export function recognizedCardKey(card = {}, ids = {}) {
+  const players = playerSetKey(card.subject || (Array.isArray(card.subjects) ? card.subjects.join(' / ') : ''))
+  const number = cardNumberText(card.id_number)
+  const year = String(card.release_year ?? '').trim()
+  if (!players || !number || !year) return ''
+  const parallel = matchText(card.parallel).replace(/^(base|none|n\/a)$/, '')
+  return [
+    players,
+    number,
+    year,
+    ids.subset_id || matchText(card.subfranchise),
+    ids.property_id || matchText(card.property),
+    parallel,
+    matchText(card.variation).replace(/^(base|none|n\/a)$/, ''),
+    serialDenominator(card.serial_numbering) || '',
+    yesNo(card.autograph),
+    yesNo(card.memorabilia_relic ?? card.relic),
+  ].join('|')
+}
+
 export async function analyseRecognizedCard(result, fallbackCategory) {
   const taxonomy = await resolveRecognizedTaxonomy(result, fallbackCategory)
   const match = await matchRecognizedCard({ categoryId: taxonomy.categoryId, ids: taxonomy.ids, card: result })

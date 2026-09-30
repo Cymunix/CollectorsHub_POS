@@ -41,6 +41,7 @@ import {
   loadUsersData,
   identifyScannedDraft,
   analyseRecognizedCard,
+  recognizedCardKey,
   CATALOGUE_EDIT_CHILDREN,
   CATALOGUE_EDIT_GROUPS,
   catalogueEditValues,
@@ -1287,13 +1288,13 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
   )
 }
 
-function CatalogueItemRecord({ itemId, onClose }) {
+function CatalogueItemRecord({ itemId, onClose, initialEditMode = '' }) {
   const [activeTab, setActiveTab] = useState('Overview')
   const [record, setRecord] = useState(null)
   const [error, setError] = useState('')
   const [editorValue, setEditorValue] = useState('')
   // '' (view) | 'table' (field editor) | 'json' (raw JSON, advanced)
-  const [editMode, setEditMode] = useState('')
+  const [editMode, setEditMode] = useState(initialEditMode)
   const [isSaving, setIsSaving] = useState(false)
   const [notice, setNotice] = useState('')
 
@@ -3036,6 +3037,30 @@ function ScanInspector({ image, label, onClose, onApply }) {
 
 // Name + (number or year) identifies "the same item" across drafts in the queue.
 function draftIdentityKey(draft) {
+  const result = draft.recognition?.result
+  if (result) {
+    // AI-analysed card: the reviewer's edits (if any) win over the AI reading.
+    const values = draft.review?.values || {}
+    const edited = Object.keys(values).length > 0
+    const card = edited
+      ? {
+          ...result,
+          subject: values.subject || result.subject,
+          id_number: values.card_number || result.id_number,
+          release_year: values.release_year || result.release_year,
+          parallel: values.parallel ?? result.parallel,
+          variation: values.variation ?? result.variation,
+          serial_numbering: values.serial_numbering ?? result.serial_numbering,
+          autograph: values.autograph ?? result.autograph,
+          memorabilia_relic: values.relic ?? result.memorabilia_relic,
+        }
+      : result
+    const ids = edited && (values.subset_id || values.property_id)
+      ? { subset_id: values.subset_id || '', property_id: values.property_id || '' }
+      : draft.recognition?.taxonomy?.ids || {}
+    const key = recognizedCardKey(card, ids)
+    return key ? String(draft.category || '').toLowerCase() + '|' + key : ''
+  }
   const values = draft.review?.values || {}
   const meta = draft.metadata || {}
   const name = String(values.name || values.subject || meta.cardName || meta.player || meta.name || '').trim().toLowerCase()
@@ -3054,14 +3079,17 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
     !['queued', 'analysing', 'failed'].includes(draft.recognition?.status)
     && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)
   ))
+  // Copies of the same card across the whole queue, including scans already
+  // added or linked (those tell the rest which catalogue item they are).
   const draftsByIdentity = useMemo(() => {
     const groups = new Map()
-    rows.filter((draft) => draft.status !== 'Rejected').forEach((draft) => {
+    ;(drafts || []).filter((draft) => draft.status !== 'Rejected' && !['queued', 'analysing', 'failed'].includes(draft.recognition?.status)).forEach((draft) => {
       const key = draftIdentityKey(draft)
       if (key) groups.set(key, [...(groups.get(key) || []), draft])
     })
     return groups
-  }, [rows])
+  }, [drafts])
+  const [bulkWork, setBulkWork] = useState(null)
   const [busyId, setBusyId] = useState('')
   const [reviewDraftId, setReviewDraftId] = useState('')
   // category_id -> name, so matches stored from before the category filter
@@ -3079,6 +3107,94 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
     return categoryNames[candidate.item.category_id] === catalogueCategoryName(draft.category).toLowerCase()
   }
   const reviewDraft = rows.find((draft) => draft.id === reviewDraftId) || null
+
+  const [openItemId, setOpenItemId] = useState('')
+
+  function catalogedSiblingOf(draft) {
+    const key = draftIdentityKey(draft)
+    if (!key) return null
+    return (draftsByIdentity.get(key) || [])
+      .find((other) => other.id !== draft.id && COMPLETED_SCAN_REVIEW_STATUSES.has(other.status) && (other.createdItemId || other.matchedItemId)) || null
+  }
+
+  // A match pointing at the item a copy of this card was already added as.
+  function siblingMatch(sibling) {
+    return {
+      item: {
+        item_id: sibling.createdItemId || sibling.matchedItemId,
+        name: sibling.recognition?.result
+          ? [
+              [sibling.recognition.result.subject, sibling.recognition.result.id_number ? '#' + String(sibling.recognition.result.id_number).replace(/^(no\.?|#)\s*/i, '') : ''].filter(Boolean).join(' '),
+              [sibling.recognition.result.release_year, sibling.recognition.result.property || sibling.recognition.result.subfranchise].filter(Boolean).join(' '),
+              sibling.recognition.result.parallel,
+            ].filter(Boolean).join(' · ')
+          : scanDraftTitle(sibling),
+        imageUrl: sibling.frontImage?.url || '',
+      },
+      score: 100,
+      exact: true,
+      fromSibling: true,
+      reasons: ['Same card as another scan you added'],
+    }
+  }
+
+  // Fresh check at Approve/Edit time: a copy added from this queue, or the
+  // live catalogue (it may have gained the card since this scan was analysed).
+  async function findExistingFor(draft) {
+    const sibling = catalogedSiblingOf(draft)
+    if (sibling) return siblingMatch(sibling)
+    if (!draft.recognition?.result) return null
+    const { taxonomy, scanAnalysis } = await analyseRecognizedCard(draft.recognition.result, draft.category)
+    if (scanAnalysis.matchStatus !== draft.scanAnalysis?.matchStatus || scanAnalysis.bestMatch?.item?.item_id !== draft.scanAnalysis?.bestMatch?.item?.item_id) {
+      await onUpdateDraft(draft.id, { scanAnalysis, status: scanAnalysis.status, recognition: { ...draft.recognition, taxonomy } })
+    }
+    return scanAnalysis.matchStatus === 'exact' && inDraftCategory(draft, scanAnalysis.bestMatch) ? scanAnalysis.bestMatch : null
+  }
+
+  const aiRows = rows.filter((draft) => draft.recognition?.status === 'done' && draft.status !== 'Rejected')
+  const linkableCopies = aiRows.filter((draft) => catalogedSiblingOf(draft))
+  const recheckable = aiRows.filter((draft) => draft.scanAnalysis?.matchStatus !== 'exact' && !catalogedSiblingOf(draft))
+  const bulkRunning = Boolean(bulkWork && !bulkWork.finished)
+
+  // Links every waiting copy of an already-added card to that item. The
+  // item's photos stay as they are (they came from the first copy).
+  async function linkAllCopies() {
+    const targets = linkableCopies.map((draft) => ({ draft, sibling: catalogedSiblingOf(draft) }))
+    setBulkWork({ label: 'Linking copies', done: 0, total: targets.length })
+    for (const [index, { draft, sibling }] of targets.entries()) {
+      const itemId = sibling.createdItemId || sibling.matchedItemId
+      await onUpdateDraft(draft.id, {
+        status: 'Matched',
+        matchedItemId: itemId,
+        audit: [...(draft.audit || []), { action: 'match', source: 'queue-copy', itemId, copyOf: sibling.id, at: new Date().toISOString() }],
+      })
+      setBulkWork({ label: 'Linking copies', done: index + 1, total: targets.length })
+    }
+    setBulkWork({ label: 'Linked ' + targets.length + (targets.length === 1 ? ' copy' : ' copies') + ' to their catalogue items.', finished: true })
+  }
+
+  // Cards analysed before their catalogue item existed: look them up again.
+  async function recheckMatches() {
+    const targets = [...recheckable]
+    const total = targets.length
+    let done = 0
+    let found = 0
+    setBulkWork({ label: 'Re-checking the catalogue', done: 0, total })
+    const worker = async () => {
+      while (targets.length) {
+        const draft = targets.shift()
+        try {
+          const { taxonomy, scanAnalysis } = await analyseRecognizedCard(draft.recognition.result, draft.category)
+          if (scanAnalysis.matchStatus === 'exact') found += 1
+          await onUpdateDraft(draft.id, { scanAnalysis, status: scanAnalysis.status, recognition: { ...draft.recognition, taxonomy } })
+        } catch {}
+        done += 1
+        setBulkWork({ label: 'Re-checking the catalogue', done, total })
+      }
+    }
+    await Promise.all([worker(), worker(), worker(), worker()])
+    setBulkWork({ label: 'Re-checked ' + done + (done === 1 ? ' card: ' : ' cards: ') + found + ' now match an existing catalogue item.', finished: true })
+  }
 
   async function analyze(draft) {
     setBusyId(draft.id)
@@ -3109,6 +3225,16 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
           <button type="button" onClick={onCreateMore}>Open Scan Queue</button>
         </div>
       ) : null}
+      {aiRows.length ? (
+        <div className="review-bulk-bar">
+          {linkableCopies.length ? (
+            <span className="review-bulk-copies"><strong>{linkableCopies.length}</strong> {linkableCopies.length === 1 ? 'scan is a copy' : 'scans are copies'} of cards you already added.</span>
+          ) : null}
+          {linkableCopies.length ? <button className="admin-gold-button" type="button" onClick={linkAllCopies} disabled={bulkRunning}>Link all copies</button> : null}
+          <button type="button" onClick={recheckMatches} disabled={!recheckable.length || bulkRunning} title="Look up cards again that were analysed before their catalogue item existed">Re-check catalogue matches{recheckable.length ? ' (' + recheckable.length + ')' : ''}</button>
+          {bulkWork ? <span className="review-bulk-status">{bulkWork.finished ? bulkWork.label : bulkWork.label + '… ' + bulkWork.done + ' of ' + bulkWork.total}</span> : null}
+        </div>
+      ) : null}
       {!rows.length ? <EmptyAdminState text="No scanned drafts yet. Import front/back scanner images from Scan Intake to create review drafts." /> : null}
       <div className="review-draft-list">
         {rows.map((draft) => {
@@ -3120,17 +3246,21 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
           const candidateCount = (draft.scanAnalysis?.candidates || []).filter((candidate) => inDraftCategory(draft, candidate)).length
           const finished = COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)
           const siblings = (draftsByIdentity.get(draftIdentityKey(draft)) || []).filter((other) => other.id !== draft.id)
-          const catalogedSibling = siblings.find((other) => other.createdItemId || other.matchedItemId)
+          const catalogedSibling = catalogedSiblingOf(draft)
+          const pendingCopies = siblings.filter((other) => !COMPLETED_SCAN_REVIEW_STATUSES.has(other.status))
           if (['done', 'declined'].includes(draft.recognition?.status)) {
+            const ownExact = draft.scanAnalysis?.matchStatus === 'exact' && inDraftCategory(draft, draft.scanAnalysis?.bestMatch) ? draft.scanAnalysis.bestMatch : null
             return (
               <AiReviewCard
                 key={draft.id}
                 draft={draft}
                 finished={finished}
-                exactMatch={draft.scanAnalysis?.matchStatus === 'exact' && inDraftCategory(draft, draft.scanAnalysis?.bestMatch) ? draft.scanAnalysis.bestMatch : null}
+                exactMatch={ownExact || (catalogedSibling ? siblingMatch(catalogedSibling) : null)}
+                findExisting={() => findExistingFor(draft)}
+                onOpenItem={(itemId) => setOpenItemId(itemId)}
                 siblingNote={!finished && catalogedSibling
-                  ? 'Already added to the catalogue from another scan in this queue.'
-                  : !finished && siblings.length ? `${siblings.length + 1} scans of this card are in the queue.` : ''}
+                  ? 'Copy of a card you already added from this queue. Approve links it to that item (no duplicate is created).'
+                  : !finished && pendingCopies.length ? `${pendingCopies.length + 1} copies of this card are in the queue. Approve one and the rest will link to it.` : ''}
                 aiBusy={aiBusy}
                 onEdit={() => setReviewDraftId(draft.id)}
                 onUpdateDraft={onUpdateDraft}
@@ -3211,6 +3341,13 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
         })}
       </div>
       {reviewDraft ? <ScanReviewEditor key={reviewDraft.id} draft={reviewDraft} onUpdateDraft={onUpdateDraft} onClose={() => setReviewDraftId('')} /> : null}
+      {openItemId ? (
+        <div className="register-modal existing-item-modal" role="dialog" aria-modal="true">
+          <div className="existing-item-modal-body">
+            <CatalogueItemRecord itemId={openItemId} initialEditMode="table" onClose={() => setOpenItemId('')} />
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -3224,7 +3361,7 @@ const AI_MATCH_TEXT = {
 
 // Summary of one AI-analysed card. Only fields the model flagged as uncertain
 // are highlighted, so the reviewer checks those instead of every field.
-function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit, onUpdateDraft, onRetry, onRemove }) {
+function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit, onUpdateDraft, onRetry, onRemove, findExisting, onOpenItem }) {
   const recognition = draft.recognition || {}
   const result = recognition.result || {}
   const taxonomy = recognition.taxonomy || { names: {}, unresolved: {} }
@@ -3267,16 +3404,37 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
     return { ...(await attachScanImagesToItem(itemId, images)), existing }
   }
 
-  async function approve() {
-    if (!exactMatch) {
+  // "This card already exists" prompt: { match, action: 'approve' | 'edit' }.
+  const [existing, setExisting] = useState(null)
+
+  // Approve and Edit look the card up again first: a copy may have been added
+  // from this queue, or the catalogue may have gained it since the analysis.
+  async function checkThen(action) {
+    // Approving a card that already shows an exact match just links it.
+    if (!findExisting || (action === 'approve' && exactMatch)) { if (action === 'edit') onEdit(); else approve(); return }
+    setWorking(action === 'edit' ? 'checking-edit' : 'checking')
+    setCardError('')
+    let match = null
+    try { match = await findExisting() } catch { match = null }
+    setWorking('')
+    if (match) { setExisting({ match, action }); return }
+    if (action === 'edit') onEdit()
+    else approve()
+  }
+
+  async function approve(matchOverride = null) {
+    const match = matchOverride || exactMatch
+    if (!match) {
       onEdit()
       return
     }
     setWorking('approve')
     setCardError('')
     try {
-      const itemId = exactMatch.item.item_id
-      const images = await attachScans(itemId)
+      const itemId = match.item.item_id
+      // A copy of a card added from this queue keeps the photos of the first
+      // copy; any other exact match gets these scans as its photos.
+      const images = match.fromSibling ? { attached: 0, existing: null, warnings: [] } : await attachScans(itemId)
       await onUpdateDraft(draft.id, {
         status: 'Matched',
         matchedItemId: itemId,
@@ -3433,12 +3591,27 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
           </>
         ) : (
           <>
-            <button className="admin-gold-button" type="button" onClick={approve} disabled={Boolean(working)}>{working === 'approve' ? 'Saving…' : 'Approve'}</button>
-            <button type="button" onClick={onEdit} disabled={Boolean(working)}>Edit</button>
+            <button className="admin-gold-button" type="button" onClick={() => checkThen('approve')} disabled={Boolean(working)}>{working === 'approve' ? 'Saving…' : working === 'checking' ? 'Checking…' : 'Approve'}</button>
+            <button type="button" onClick={() => checkThen('edit')} disabled={Boolean(working)}>{working === 'checking-edit' ? 'Checking…' : 'Edit'}</button>
             <button type="button" onClick={decline} disabled={Boolean(working)}>Decline</button>
           </>
         )}
       </div>
+      {existing && !finished ? (
+        <div className="existing-card-prompt" role="alert">
+          {existing.match.item?.imageUrl ? <img src={existing.match.item.imageUrl} alt="" /> : null}
+          <div>
+            <strong>This card already exists{existing.match.fromSibling ? ' (you added a copy from this queue)' : ' in the catalogue'}</strong>
+            <span>{existing.match.item?.name || existing.match.item?.subject || existing.match.item?.item_id}</span>
+            <div className="existing-card-actions">
+              <button className="admin-gold-button" type="button" disabled={Boolean(working)} onClick={async () => { const match = existing.match; setExisting(null); await approve(match) }}>Link this scan to it</button>
+              <button type="button" disabled={Boolean(working)} onClick={() => onOpenItem?.(existing.match.item.item_id)}>Edit that item's values</button>
+              <button type="button" disabled={Boolean(working)} onClick={() => { setExisting(null); onEdit() }}>{existing.action === 'edit' ? 'Edit this scan anyway' : 'Create a new item anyway'}</button>
+              <button type="button" disabled={Boolean(working)} onClick={() => setExisting(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
