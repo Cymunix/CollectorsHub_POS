@@ -1931,6 +1931,8 @@ function ScanIntake({ onCreateDraft, ai }) {
   const [scanNotice, setScanNotice] = useState(null)
   const [inspecting, setInspecting] = useState('')
   const [busy, setBusy] = useState('')
+  const autoQueuedPairRef = useRef('')
+  const metadata = useMemo(() => ({}), [])
 
   useEffect(() => { writeScannerPref('scanMode', scanMode) }, [scanMode])
   useEffect(() => { writeScannerPref('cardPosition', cardPosition) }, [cardPosition])
@@ -1953,98 +1955,6 @@ function ScanIntake({ onCreateDraft, ai }) {
       api.closeScannerSession?.()
     }
   }, [])
-  const [metadata, setMetadata] = useState({
-    cardName: '',
-    set: '',
-    seriesBlock: '',
-    franchiseGame: '',
-    manufacturerPublisher: '',
-    releaseDate: '',
-    rarity: '',
-    variantParallel: '',
-    finish: '',
-    edition: '',
-    cardType: '',
-    characterSubject: '',
-    cardAttributes: '',
-    artist: '',
-    promo: 'No',
-    promoNumber: '',
-    errorVariation: '',
-    tcgplayerId: '',
-    ebayExternalIds: '',
-    player: '',
-    cardNumber: '',
-    year: '',
-    brand: '',
-    productSet: '',
-    subsetInsertSet: '',
-    sport: '',
-    league: '',
-    team: '',
-    position: '',
-    rookieCard: 'No',
-    baseInsert: 'Base',
-    parallel: '',
-    parallelColour: '',
-    variation: '',
-    serialNumbered: 'No',
-    serialNumber: '',
-    printRun: '',
-    autograph: 'No',
-    autographType: '',
-    memorabiliaRelic: 'No',
-    memorabiliaType: '',
-    memorabiliaSource: '',
-    patchType: '',
-    rookiePatchAuto: 'No',
-    shortPrint: 'No',
-    superShortPrint: 'No',
-    caseHit: 'No',
-    errorCorrection: '',
-    multiPlayerCard: 'No',
-    otherPlayers: '',
-    draftTeam: '',
-    collegeJuniorTeam: '',
-    country: '',
-    gradingCompany: '',
-    grade: '',
-    subgrades: '',
-    certificationNumber: '',
-    rawCondition: '',
-    marketValue: '',
-    lastSale: '',
-    priceUpdated: '',
-    externalIds: '',
-    description: '',
-    
-    // Legacy aliases remain available for older drafts and matching code.
-    name: '',
-    subject: '',
-    subcategory: '',
-    franchise: '',
-    subfranchise: '',
-    property: '',
-    itemType: '',
-    collection: '',
-    idNumber: '',
-    publisherManufacturer: '',
-    retailPrice: '',
-    releaseYear: '',
-    availability: 'Available',
-    barcodes: '',
-    includes: '',
-    includedIn: '',
-    setNumber: '',
-    catalogueNumber: '',
-    barcode: '',
-    setName: '',
-    manufacturer: '',
-    variant: '',
-    language: '',
-    country: '',
-    notes: '',
-  })
   const [error, setError] = useState('')
 
   async function pickImage(side) {
@@ -2150,13 +2060,13 @@ function ScanIntake({ onCreateDraft, ai }) {
     setScannerMessage(`Card added to the queue (${ai.queue.length + 1} waiting). Scan the next card, or press Analyse when ready.`)
   }
 
-  function textField(key, label, placeholder = '') {
-    return <label key={key}>{label}<input value={metadata[key] || ''} onChange={(event) => setMetadata((current) => ({ ...current, [key]: event.target.value }))} placeholder={placeholder} /></label>
-  }
-
-  function choiceField(key, label, options) {
-    return <label key={key}>{label}<select value={metadata[key] || options[0]} onChange={(event) => setMetadata((current) => ({ ...current, [key]: event.target.value }))}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>
-  }
+  useEffect(() => {
+    if (busy || !frontImage || !backImage) return
+    const pairKey = [frontImage.path || frontImage.url || '', backImage.path || backImage.url || ''].join('|')
+    if (!pairKey || autoQueuedPairRef.current === pairKey) return
+    autoQueuedPairRef.current = pairKey
+    addToQueue()
+  }, [busy, frontImage, backImage])
 
   return (
     <div className="admin-grid-two scan-intake-grid">
@@ -2240,30 +2150,11 @@ function ScanIntake({ onCreateDraft, ai }) {
             }}
           />
         ) : null}
-        {category === 'Trading Cards' ? <>
-        <div className="scan-field-group"><strong>Trading card identity</strong><div className="scan-metadata-grid">
-          {textField('cardName', 'Card name', 'Charizard ex')}{textField('cardNumber', 'Card number', '199/165')}{textField('set', 'Set', 'Scarlet & Violet—151')}{textField('seriesBlock', 'Series / block', 'Scarlet & Violet')}{textField('franchiseGame', 'Franchise / game', 'Pokémon')}{textField('manufacturerPublisher', 'Manufacturer / publisher', 'The Pokémon Company')}{textField('year', 'Release year', '2023')}{textField('releaseDate', 'Release date', '22 September 2023')}{textField('rarity', 'Rarity', 'Special Illustration Rare')}{textField('variantParallel', 'Variant / parallel', 'Reverse Holo')}{textField('finish', 'Finish', 'Holofoil')}{textField('language', 'Language', 'English')}{textField('edition', 'Edition', '1st Edition / Unlimited')}{textField('cardType', 'Card type', 'Pokémon / Trainer / Energy')}{textField('characterSubject', 'Character / subject', 'Charizard')}{textField('cardAttributes', 'Card attributes', 'Fire, Stage 2, ex')}{textField('artist', 'Artist', 'miki kudo')}
-        </div></div>
-        <div className="scan-field-group"><strong>Trading card attributes</strong><div className="scan-metadata-grid">
-          {textField('serialNumber', 'Serial number', '12/25')}{textField('printRun', 'Print run', '25')}{choiceField('promo', 'Promo', ['No', 'Yes'])}{textField('promoNumber', 'Promo number', 'SWSH260')}{choiceField('autograph', 'Autograph', ['No', 'Yes'])}{choiceField('memorabiliaRelic', 'Memorabilia / relic', ['No', 'Yes'])}{choiceField('rookieCard', 'Rookie card', ['No', 'Yes'])}{choiceField('shortPrint', 'Short print / SSP', ['No', 'Yes'])}{textField('errorVariation', 'Error / variation', 'Error, corrected version, image variation')}
-        </div></div>
-        </> : category === 'Sports Cards' ? <>
-        <div className="scan-field-group"><strong>Sports card identity</strong><div className="scan-metadata-grid">
-          {textField('cardName', 'Card name', 'Drake Maye')}{textField('player', 'Player(s) ; separated', 'Drake Maye; Jayden Daniels')}{textField('cardNumber', 'Card number', '101')}{textField('year', 'Year', '2024')}{textField('brand', 'Brand', 'Panini')}{textField('productSet', 'Product / set', 'Contenders Football')}{textField('subsetInsertSet', 'Subset / insert set', 'Rookie Ticket')}{textField('sport', 'Sport', 'Football')}{textField('league', 'League', 'NFL')}{textField('team', 'Team', 'New England Patriots')}{textField('position', 'Position', 'QB')}
-        </div></div>
-        <div className="scan-field-group"><strong>Card attributes</strong><div className="scan-metadata-grid">
-          {choiceField('rookieCard', 'Rookie card', ['No', 'Yes'])}{choiceField('baseInsert', 'Base / insert', ['Base', 'Insert'])}{textField('parallel', 'Parallel', 'Cracked Ice')}{textField('parallelColour', 'Parallel colour', 'Blue')}{textField('variation', 'Variation', 'Photo Variation')}{choiceField('serialNumbered', 'Serial numbered', ['No', 'Yes'])}{textField('serialNumber', 'Serial number', '12/25')}{textField('printRun', 'Print run', '25')}{choiceField('shortPrint', 'Short print', ['No', 'Yes'])}{choiceField('superShortPrint', 'Super short print', ['No', 'Yes'])}{choiceField('caseHit', 'Case hit', ['No', 'Yes'])}{textField('errorCorrection', 'Error / correction', 'Error or Corrected')}
-        </div></div>
-        <div className="scan-field-group"><strong>Autograph and memorabilia</strong><div className="scan-metadata-grid">
-          {choiceField('autograph', 'Autograph', ['No', 'Yes'])}{textField('autographType', 'Autograph type', 'On-card / Sticker')}{choiceField('memorabiliaRelic', 'Memorabilia / relic', ['No', 'Yes'])}{textField('memorabiliaType', 'Memorabilia type', 'Jersey / Patch / Football')}{textField('memorabiliaSource', 'Memorabilia source', 'Game-Worn')}{textField('patchType', 'Patch type', '1 Colour / Logo Patch')}{choiceField('rookiePatchAuto', 'Rookie patch auto', ['No', 'Yes'])}
-        </div></div>
-        </> : <div className="scan-category-note">Category-specific scanner fields are not configured yet.</div>}
         <div className="admin-quick-actions">
           <button className="admin-gold-button" type="button" disabled={Boolean(busy)} onClick={() => scanFromDevice('front')}>Scan Front with Canon</button>
           <button className="admin-gold-button" type="button" disabled={Boolean(busy)} onClick={() => scanFromDevice('back')}>Scan Back with Canon</button>
           <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('front')}>Import Front File</button>
           <button type="button" disabled={Boolean(busy)} onClick={() => pickImage('back')}>Import Back File</button>
-          <button className="admin-gold-button" type="button" disabled={Boolean(busy) || !frontImage || !backImage} onClick={addToQueue} title={!frontImage || !backImage ? 'Scan the front and back first' : undefined}>Add Card to Queue</button>
           <button type="button" disabled={Boolean(busy)} onClick={createDraft} title="Legacy text recognition (OCR), analysed immediately">{busy === 'draft' ? 'Analysing...' : 'Analyse Now with OCR'}</button>
         </div>
       </section>

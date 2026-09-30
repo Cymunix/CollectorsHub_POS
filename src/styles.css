@@ -1680,7 +1680,7 @@ button:disabled {
 .scan-intake-grid {
   align-items: start;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) 360px;
 }
 
 .scan-intake-grid > .admin-panel:first-child,
@@ -2481,9 +2481,9 @@ button:disabled {
 
 .scan-image-grid {
   display: grid;
-  gap: 8px;
+  gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 8px 0;
+  margin: 12px 0 10px;
 }
 
 .scan-image-slot {
@@ -2493,9 +2493,9 @@ button:disabled {
   color: #526176;
   display: grid;
   gap: 8px;
-  min-height: 126px;
+  min-height: 260px;
   overflow: hidden;
-  padding: 8px;
+  padding: 10px;
   place-items: center;
   text-align: center;
 }
@@ -2506,7 +2506,7 @@ button:disabled {
 
 .scan-image-slot img {
   border-radius: 6px;
-  height: 90px;
+  height: 220px;
   object-fit: contain;
   width: 100%;
 }
@@ -2799,9 +2799,9 @@ button:disabled {
 .scan-mode-picker {
   align-items: stretch;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   grid-template-columns: auto 1fr 1fr;
-  margin: 10px 9px 0;
+  margin: 8px 0 0;
 }
 
 .scan-mode-label {
@@ -2821,7 +2821,7 @@ button:disabled {
   cursor: pointer;
   display: grid;
   gap: 2px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   text-align: left;
 }
 
@@ -2836,11 +2836,11 @@ button:disabled {
 .scan-mode-note {
   color: #526176;
   font-size: 12px;
-  margin: 6px 9px 0;
+  margin: 6px 0 0;
 }
 
 .scanner-calibration {
-  margin: 8px 9px 0;
+  margin: 8px 0 0;
 }
 
 .scanner-calibration summary {
@@ -2887,7 +2887,7 @@ button:disabled {
   font-size: 13px;
   font-weight: 700;
   gap: 10px;
-  margin: 10px 9px 0;
+  margin: 10px 0 0;
   padding: 10px 12px;
 }
 
