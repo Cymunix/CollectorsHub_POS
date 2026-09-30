@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
+import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
 import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync'
@@ -128,6 +129,9 @@ function desktopApi() {
     },
     async scanImage() {
       throw new Error('Direct scanner control is only available in the installed Windows desktop app.')
+    },
+    async recognizeCard() {
+      throw new Error('Local AI card recognition is only available in the installed Windows desktop app.')
     },
     async listEbayItem() {
       throw new Error('eBay listing is only available in the installed desktop app after eBay seller API setup.')
@@ -1563,22 +1567,84 @@ function RegisterView({
     }
   }
 
+  async function recognizeScanEvent(event, fallbackCategory = 'Sports Cards') {
+    const imagePath = event?.image?.path || ''
+    if (!imagePath) throw new Error('No scan image was saved for recognition.')
+    const response = await desktopApi().recognizeCard({
+      jobId: createId('register_ai_job'),
+      front: { path: imagePath },
+      back: null,
+    })
+    if (!response?.ok) throw new Error(response?.message || 'Local AI could not identify this card.')
+    const analysis = await analyseRecognizedCard(response.result, response.result?.category || fallbackCategory)
+    return {
+      ...analysis,
+      result: response.result,
+      providerLabel: response.providerLabel || response.provider || 'Local AI',
+      model: response.model || '',
+    }
+  }
+
   async function scanIntakeFromDevice() {
-    if (!activeScanSession) await startScanIntakeSession()
     const event = await captureScanImageEvent('scan_intake')
     if (!event) return
-    await addScanSessionItem({
-      event,
-      eventId: event.scanId,
-      sourceDevice: event.sourceDevice,
-      scanImageUrl: event.image?.url || '',
-      scanImagePath: event.image?.path || '',
-      confidenceState: 'low',
-      reviewState: 'needs_review',
-      reviewReason: 'Identification service pending',
-      notes: 'Scanner image saved locally. Identify this item manually or when catalogue recognition is connected.',
-    })
-    setScanStatus('Ready')
+    try {
+      setScanStatus('Identifying')
+      const recognition = await recognizeScanEvent(event, 'Sports Cards')
+      const best = recognition.scanAnalysis?.bestMatch || null
+      const catalogueItem = best ? await enrichRecognizedCatalogueItem(best, recognition.result) : null
+      const confidenceScore = Number(recognition.scanAnalysis?.confidence || best?.score || 0)
+      if (catalogueItem && ['exact', 'likely'].includes(recognition.scanAnalysis?.matchStatus)) {
+        await addScanSessionItem({
+          event,
+          eventId: event.scanId,
+          sourceDevice: event.sourceDevice,
+          scanImageUrl: event.image?.url || '',
+          scanImagePath: event.image?.path || '',
+          catalogueItem,
+          confidenceState: recognition.scanAnalysis.matchStatus === 'exact' ? 'high' : 'medium',
+          reviewState: recognition.scanAnalysis.matchStatus === 'exact' ? 'accepted' : 'needs_review',
+          reviewReason: recognition.scanAnalysis.matchStatus === 'exact' ? '' : 'AI likely match',
+          confidenceScore,
+          notes: `${recognition.providerLabel} identified ${recognition.result?.subject || catalogueItem.name}. ${(best?.reasons || []).join(' ')}`.trim(),
+        })
+      } else {
+        const possible = (recognition.scanAnalysis?.candidates || []).slice(0, 3).map((candidate) => candidate.item?.name || candidate.item?.subject).filter(Boolean)
+        await addScanSessionItem({
+          event,
+          eventId: event.scanId,
+          sourceDevice: event.sourceDevice,
+          scanImageUrl: event.image?.url || '',
+          scanImagePath: event.image?.path || '',
+          name: recognition.result?.subject || recognition.result?.description || 'AI identified card',
+          sku: recognition.result?.id_number || '',
+          category: recognition.taxonomy?.category || recognition.result?.category || 'Sports Cards',
+          confidenceState: possible.length ? 'medium' : 'low',
+          reviewState: 'needs_review',
+          reviewReason: possible.length ? 'Multiple possible matches' : 'No catalogue match found',
+          confidenceScore,
+          notes: possible.length
+            ? `AI possible matches: ${possible.join(', ')}`
+            : `${recognition.providerLabel} identified the scan, but no catalogue match was found.`,
+        })
+      }
+    } catch (error) {
+      console.error('[Desktop Scan Intake] AI recognition failed:', error)
+      await addScanSessionItem({
+        event,
+        eventId: event.scanId,
+        sourceDevice: event.sourceDevice,
+        scanImageUrl: event.image?.url || '',
+        scanImagePath: event.image?.path || '',
+        confidenceState: 'low',
+        reviewState: 'needs_review',
+        reviewReason: 'AI identification failed',
+        notes: error?.message || 'Local AI could not identify this scan.',
+      })
+      setNotice(error?.message || 'AI identification failed. Item saved for review.')
+    } finally {
+      setScanStatus('Ready')
+    }
   }
 
   async function addScanIntakeManualMatch() {
@@ -1675,9 +1741,32 @@ function RegisterView({
     if (!value) {
       const event = await captureScanImageEvent('sale')
       if (event) {
-        setSaleScannerStats((current) => ({ ...current, scanned: current.scanned + 1, pending: current.pending + 1 }))
-        setScanStatus('Ready')
-        setNotice('Sale scan captured, but catalogue identification is not connected yet. Search SKU/barcode to add stocked inventory.')
+        setSaleScannerStats((current) => ({ ...current, scanned: current.scanned + 1 }))
+        try {
+          setScanStatus('Identifying')
+          const recognition = await recognizeScanEvent(event, 'Sports Cards')
+          const best = recognition.scanAnalysis?.bestMatch || null
+          const catalogueItem = best ? await enrichRecognizedCatalogueItem(best, recognition.result) : null
+          const inventoryMatch = catalogueItem
+            ? inventory.find((item) => inventoryMatchesCatalogueCandidate(item, catalogueItem) && remainingInventoryForCart(item, lines) > 0)
+            : null
+          if (inventoryMatch) {
+            addInventoryItem(inventoryMatch)
+            setSaleScannerStats((current) => ({ ...current, added: current.added + 1 }))
+            setNotice(`${inventoryMatch.name || inventoryMatch.title || 'Item'} identified and added to the sale.`)
+          } else {
+            setSaleScannerStats((current) => ({ ...current, pending: current.pending + 1 }))
+            setNotice(catalogueItem
+              ? `${catalogueItem.name || 'Card'} identified, but no available store inventory was found at this location.`
+              : 'AI identified the scan, but no catalogue/store inventory match was found.')
+          }
+        } catch (error) {
+          console.error('[Desktop Sale Scanner] AI recognition failed:', error)
+          setSaleScannerStats((current) => ({ ...current, pending: current.pending + 1 }))
+          setNotice(error?.message || 'AI identification failed. Search SKU/barcode to add stocked inventory.')
+        } finally {
+          setScanStatus('Ready')
+        }
       }
       return
     }
@@ -3432,6 +3521,60 @@ function normaliseScanEvent(image, workflow) {
     metadata: {},
     status: 'saved_locally',
   }
+}
+
+function recognisedCardSearchTerms(result = {}) {
+  return [
+    result.id_number,
+    [result.subject, result.id_number].filter(Boolean).join(' '),
+    [result.subject, result.property].filter(Boolean).join(' '),
+    result.subject,
+    result.property,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter((value, index, list) => value.length > 1 && list.indexOf(value) === index)
+}
+
+async function enrichRecognizedCatalogueItem(candidate, result = {}) {
+  const itemId = candidate?.item?.item_id || ''
+  for (const term of recognisedCardSearchTerms(result)) {
+    const results = await searchDesktopTradeCatalogue(term)
+    const match = results.find((item) => item.catalogItemId === itemId || item.catalogueItemId === itemId)
+    if (match) return match
+  }
+
+  const item = candidate?.item
+  if (!item) return null
+  return {
+    id: `catalog_${item.item_id}`,
+    catalogItemId: item.item_id,
+    catalogueItemId: item.item_id,
+    sku: item.card_number || item.catalog_code || item.upc || '',
+    number: item.card_number || item.catalog_code || item.upc || '',
+    name: item.name || item.subject || result.subject || 'Recognized card',
+    title: item.name || item.subject || result.subject || 'Recognized card',
+    category: result.category || '',
+    image: item.imageUrl || '',
+    imageUrl: item.imageUrl || '',
+    marketValue: Number(item.market_price ?? item.retail_price ?? 0),
+    price: Number(item.market_price ?? item.retail_price ?? 0),
+    marketValueSource: item.market_price || item.retail_price ? 'Catalogue pricing' : '',
+    releaseYear: item.release_year || '',
+    dynamicFields: item.dynamic_fields || {},
+    isCatalogueCandidate: true,
+  }
+}
+
+function inventoryMatchesCatalogueCandidate(inventoryItem, candidateItem) {
+  const candidateId = candidateItem?.catalogItemId || candidateItem?.catalogueItemId || candidateItem?.item_id || ''
+  if (!candidateId) return false
+  return [
+    inventoryItem?.catalogItemId,
+    inventoryItem?.catalogueItemId,
+    inventoryItem?.catalog_item_id,
+    inventoryItem?.item_id,
+    inventoryItem?.catalogue_item_id,
+  ].some((value) => String(value || '') === String(candidateId))
 }
 
 function duplicateCountForScanItem(items, candidate) {
