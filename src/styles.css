@@ -7498,3 +7498,39 @@ button:disabled {
   font-weight: 800;
   padding: 6px 10px;
 }
+
+/* Cloud review queue status */
+.cloud-review-bar {
+  align-items: center;
+  background: #eef6ff;
+  border: 1px solid #c7ddf5;
+  border-radius: 10px;
+  color: #1f3a5c;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+}
+
+.cloud-review-bar.off {
+  background: #f4f6f8;
+  border-color: #e3e8ef;
+  color: #526176;
+}
+
+.cloud-review-bar em {
+  color: #b42318;
+  font-style: normal;
+}
+
+.cloud-review-bar button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+}

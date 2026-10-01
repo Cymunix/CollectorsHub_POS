@@ -74,6 +74,17 @@ import {
   updateCatalogueItemRecord,
   updateExplorerRecord,
 } from './lib/adminData'
+import {
+  cloudReviewAvailable,
+  cloudReviewDraftIds,
+  deleteCloudReviewDraft,
+  downloadCloudImage,
+  mergeCloudRow,
+  pullReviewDrafts,
+  pushReviewDraft,
+  removeCloudImages,
+  signRemoteImages,
+} from './lib/scanReviewCloud'
 
 const adminNav = [
   { key: 'overview', label: 'Overview', icon: Gauge },
@@ -290,9 +301,12 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     return () => { cancelled = true }
   }, [session?.storeCode, session?.storeId, syncStatus?.context?.storeId])
 
-  function saveScanDrafts(updateDrafts) {
-    const nextDrafts = updateDrafts(scanDraftsRef.current)
+  // fromCloud: applying changes pulled from the cloud queue (not re-uploaded).
+  function saveScanDrafts(updateDrafts, { fromCloud = false } = {}) {
+    const previous = scanDraftsRef.current
+    const nextDrafts = updateDrafts(previous)
     scanDraftsRef.current = nextDrafts
+    if (!fromCloud) noteCloudChanges(previous, nextDrafts)
     setScanDrafts(nextDrafts)
     const persist = scanDraftSaveQueue.current.then(async () => {
       const store = await adminDesktopApi().loadStore()
@@ -333,8 +347,193 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
   }
 
   async function deleteScanDraft(draftId) {
-    await saveScanDrafts((drafts) => drafts.filter((draft) => draft.id !== draftId))
+    const draft = scanDraftsRef.current.find((entry) => entry.id === draftId)
+    await saveScanDrafts((drafts) => drafts.filter((entry) => entry.id !== draftId), { fromCloud: true })
+    if (draft?.cloud) deleteCloudReviewDraft(draft).catch(() => {})
   }
+
+  // ---- Cloud review queue: analysed cards are uploaded so they can be
+  // reviewed from any machine signed in as a platform admin; changes made on
+  // one machine reach the others within ~30 s.
+  const [cloudState, setCloudState] = useState({ available: null, syncing: false, error: '', lastSync: '' })
+  const cloudDirtyRef = useRef(new Set())
+  const cloudPushTimerRef = useRef(0)
+  const cloudPushingRef = useRef(false)
+  const cloudPullingRef = useRef(false)
+  const cloudSinceRef = useRef('')
+
+  // Machines start uploading cards scanned from the moment the queue is
+  // available here; earlier cards can be uploaded with Upload queue.
+  function cloudStartedAt() {
+    try {
+      let value = window.localStorage.getItem('collectorshub-cloud-review-since')
+      if (!value) {
+        value = new Date().toISOString()
+        window.localStorage.setItem('collectorshub-cloud-review-since', value)
+      }
+      return value
+    } catch {
+      return ''
+    }
+  }
+
+  function cloudEligible(draft) {
+    if (!draft || ['queued', 'analysing', 'failed'].includes(draft.recognition?.status)) return false
+    if (draft.cloud || draft.cloudUpload) return true
+    const since = cloudStartedAt()
+    return Boolean(since) && String(draft.createdAt || '') >= since && Boolean(draft.recognition || draft.scanAnalysis)
+  }
+
+  function noteCloudChanges(previous, next) {
+    const before = new Map(previous.map((draft) => [draft.id, draft]))
+    let any = false
+    for (const draft of next) {
+      if (before.get(draft.id) !== draft && cloudEligible(draft)) {
+        cloudDirtyRef.current.add(draft.id)
+        any = true
+      }
+    }
+    if (any) scheduleCloudPush()
+  }
+
+  function scheduleCloudPush(delay = 1200) {
+    window.clearTimeout(cloudPushTimerRef.current)
+    cloudPushTimerRef.current = window.setTimeout(pushCloudDrafts, delay)
+  }
+
+  async function pushCloudDrafts() {
+    if (cloudPushingRef.current) { scheduleCloudPush(2000); return }
+    if (!(await cloudReviewAvailable())) return
+    cloudPushingRef.current = true
+    setCloudState((current) => ({ ...current, available: true, syncing: true }))
+    const api = adminDesktopApi()
+    const readImage = (image) => {
+      if (typeof api.readScanImage !== 'function') throw new Error('Scan files can only be uploaded from the desktop app.')
+      return api.readScanImage(image)
+    }
+    let error = ''
+    try {
+      while (cloudDirtyRef.current.size) {
+        const [id] = cloudDirtyRef.current
+        cloudDirtyRef.current.delete(id)
+        const draft = scanDraftsRef.current.find((entry) => entry.id === id)
+        if (!draft || !cloudEligible(draft)) continue
+        try {
+          const result = await pushReviewDraft(draft, { readImage })
+          if (result.conflict) {
+            // Changed on another machine first: take that copy.
+            await pullCloudDrafts({ full: false, onlyIds: new Set([id]) })
+            continue
+          }
+          await saveScanDrafts((drafts) => drafts.map((entry) => (
+            entry.id === id
+              ? {
+                  ...entry,
+                  frontImage: entry.frontImage && result.images.frontImage && entry.frontImage.path === result.images.frontImage.path ? { ...entry.frontImage, cloudPath: result.images.frontImage.cloudPath, cloudSource: result.images.frontImage.cloudSource } : entry.frontImage,
+                  backImage: entry.backImage && result.images.backImage && entry.backImage.path === result.images.backImage.path ? { ...entry.backImage, cloudPath: result.images.backImage.cloudPath, cloudSource: result.images.backImage.cloudSource } : entry.backImage,
+                  cloud: { version: result.version, updatedAt: result.updatedAt },
+                }
+              : entry
+          )), { fromCloud: true })
+          // Reviewed: free the uploaded scans (once).
+          if (COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status) && !draft.cloudImagesRemoved) {
+            try {
+              await removeCloudImages(draft)
+              await saveScanDrafts((drafts) => drafts.map((entry) => (entry.id === id ? { ...entry, cloudImagesRemoved: true } : entry)), { fromCloud: true })
+            } catch {}
+          }
+        } catch (pushError) {
+          error = pushError.message || 'Could not upload a card to the cloud review queue.'
+          // Try again later.
+          cloudDirtyRef.current.add(id)
+          break
+        }
+      }
+    } finally {
+      cloudPushingRef.current = false
+      setCloudState((current) => ({ ...current, syncing: false, error, lastSync: error ? current.lastSync : new Date().toISOString() }))
+      if (error) scheduleCloudPush(30000)
+      else if (cloudDirtyRef.current.size) scheduleCloudPush(500)
+    }
+  }
+
+  // Brings in cards and changes from other machines. A full pull also drops
+  // local copies of cards deleted elsewhere.
+  async function pullCloudDrafts({ full = false, onlyIds = null } = {}) {
+    if (cloudPullingRef.current && !onlyIds) return
+    const ok = await cloudReviewAvailable({ refresh: cloudState.available === false })
+    setCloudState((current) => (current.available === ok ? current : { ...current, available: ok }))
+    if (!ok) return
+    cloudPullingRef.current = true
+    try {
+      const since = full || onlyIds ? '' : cloudSinceRef.current
+      let rows = await pullReviewDrafts(since)
+      if (onlyIds) rows = rows.filter((row) => onlyIds.has(row.id))
+      const liveIds = full ? await cloudReviewDraftIds() : null
+      let merged = null
+      await saveScanDrafts((drafts) => {
+        const byId = new Map(drafts.map((draft) => [draft.id, draft]))
+        let next = [...drafts]
+        for (const row of rows) {
+          const local = byId.get(row.id)
+          if (local?.cloud && local.cloud.version >= row.version) continue
+          // A local change not uploaded yet wins until it is uploaded.
+          if (local && cloudDirtyRef.current.has(row.id) && local.cloud) continue
+          const draft = mergeCloudRow(local, row)
+          next = local ? next.map((entry) => (entry.id === row.id ? draft : entry)) : [draft, ...next]
+        }
+        if (liveIds) next = next.filter((draft) => !draft.cloud || liveIds.has(draft.id) || cloudDirtyRef.current.has(draft.id))
+        merged = next
+        return next
+      }, { fromCloud: true })
+      // Viewable links for cards whose images only exist in the cloud.
+      const signed = await signRemoteImages(merged || scanDraftsRef.current)
+      if (signed.some((draft, index) => draft !== (merged || scanDraftsRef.current)[index])) {
+        const byId = new Map(signed.map((draft) => [draft.id, draft]))
+        await saveScanDrafts((drafts) => drafts.map((draft) => byId.get(draft.id) || draft), { fromCloud: true })
+      }
+      const newest = rows.reduce((latest, row) => (row.updated_at > latest ? row.updated_at : latest), cloudSinceRef.current)
+      if (!onlyIds) cloudSinceRef.current = newest
+      setCloudState((current) => ({ ...current, available: true, error: '', lastSync: new Date().toISOString() }))
+    } catch (pullError) {
+      setCloudState((current) => ({ ...current, error: pullError.message || 'Could not load the cloud review queue.' }))
+    } finally {
+      if (!onlyIds) cloudPullingRef.current = false
+    }
+  }
+
+  // Uploads cards from before this machine started using the cloud queue.
+  async function uploadExistingQueue() {
+    const ids = scanDraftsRef.current
+      .filter((draft) => !draft.cloud && !['queued', 'analysing', 'failed'].includes(draft.recognition?.status) && draft.status !== 'Rejected' && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status) && (draft.recognition || draft.scanAnalysis))
+      .map((draft) => draft.id)
+    if (!ids.length) return
+    await saveScanDrafts((drafts) => drafts.map((draft) => (ids.includes(draft.id) ? { ...draft, cloudUpload: true } : draft)))
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    let timer = 0
+    const tick = async (full) => {
+      if (cancelled) return
+      await pullCloudDrafts({ full })
+      if (!cancelled) timer = window.setTimeout(() => tick(false), 30000)
+    }
+    // After the local queue has loaded.
+    const start = window.setTimeout(() => tick(true), 1500)
+    const onFocus = () => { pullCloudDrafts({ full: true }) }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      window.clearTimeout(start)
+      window.clearTimeout(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeView === 'review') pullCloudDrafts({ full: true })
+  }, [activeView])
 
   // ---- Local AI card recognition (scan batch -> analyse -> review) ----
   const [aiStatus, setAiStatus] = useState({ state: 'checking', label: 'Qwen3-VL 8B', message: 'Checking…' })
@@ -624,7 +823,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
             }}
           />
         ) : null}
-        {activeView === 'review' ? <PendingReview drafts={scanDrafts} onUpdateDraft={updateScanDraft} onDeleteDraft={deleteScanDraft} onCreateMore={() => setActiveView('scan')} onRetryAi={retryAi} aiBusy={Boolean(aiAnalysis)} queuedCount={aiQueue.length} /> : null}
+        {activeView === 'review' ? <PendingReview cloud={{ ...cloudState, pendingUpload: scanDrafts.filter((draft) => !draft.cloud && !draft.cloudUpload && !['queued', 'analysing', 'failed'].includes(draft.recognition?.status) && draft.status !== 'Rejected' && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status) && (draft.recognition || draft.scanAnalysis)).length, onUploadExisting: uploadExistingQueue, onRefresh: () => pullCloudDrafts({ full: true }) }} drafts={scanDrafts} onUpdateDraft={updateScanDraft} onDeleteDraft={deleteScanDraft} onCreateMore={() => setActiveView('scan')} onRetryAi={retryAi} aiBusy={Boolean(aiAnalysis)} queuedCount={aiQueue.length} /> : null}
         {activeView === 'explorer' ? <DataExplorer /> : null}
         {activeView === 'taxonomy' ? <TaxonomyAdmin /> : null}
         {activeView === 'media' ? <AdminSectionBrowser title="Images & Media" kicker="Catalogue media administration" loader={loadImagesMediaData} /> : null}
@@ -3121,7 +3320,7 @@ function draftIdentityKey(draft) {
 
 const COMPLETED_SCAN_REVIEW_STATUSES = new Set(['Catalogue Item Created', 'Matched and Updated', 'Matched'])
 
-function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
+function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
   // Cards still waiting for (or being retried by) local AI live in the Scan
   // Intake queue; every analysed card comes here for review.
   const rows = (drafts || []).filter((draft) => (
@@ -3329,6 +3528,23 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
           <button type="button" onClick={onCreateMore}>Open Scan Queue</button>
         </div>
       ) : null}
+      {cloud ? (
+        <div className={`cloud-review-bar${cloud.available === false ? ' off' : ''}`}>
+          {cloud.available === false ? (
+            <span>Cloud review queue is not set up yet (run supabase/scan_review_queue.sql in Supabase). Reviews stay on this computer.</span>
+          ) : (
+            <>
+              <span>
+                <strong>Cloud review queue</strong>
+                {cloud.syncing ? ' · uploading…' : cloud.lastSync ? ` · synced ${new Date(cloud.lastSync).toLocaleTimeString()}` : ' · connecting…'}
+                {cloud.error ? <em> · {cloud.error}</em> : null}
+              </span>
+              <button type="button" onClick={cloud.onRefresh}>Refresh</button>
+              {cloud.pendingUpload ? <button type="button" onClick={cloud.onUploadExisting} title="Upload cards scanned before the cloud queue was turned on, so they can be reviewed on other computers">Upload {cloud.pendingUpload} earlier card{cloud.pendingUpload === 1 ? '' : 's'}</button> : null}
+            </>
+          )}
+        </div>
+      ) : null}
       {aiRows.length || orientationTargets.length ? (
         <div className="review-bulk-bar">
           {orientationTargets.length ? <button type="button" onClick={fixOrientation} disabled={bulkRunning || aiBusy} title="Stack scans from before the AI orientation check: turn them the right way up and the right way round (uses the local AI, ~4 s per card)">Fix orientation ({orientationTargets.length})</button> : null}
@@ -3498,7 +3714,10 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
   const [working, setWorking] = useState('')
   const [cardError, setCardError] = useState('')
   const linkedItemId = draft.matchedItemId || draft.createdItemId || ''
-  const hasScans = Boolean(draft.frontImage?.path || draft.backImage?.path)
+  const hasScans = Boolean(draft.frontImage?.path || draft.backImage?.path || draft.frontImage?.cloudPath || draft.backImage?.cloudPath)
+  // Rotating and re-running the AI need the original scan files, which only
+  // the scanning computer has.
+  const hasLocalScans = Boolean(draft.frontImage?.path || draft.backImage?.path)
   const attachedCount = scanImagesAttached(draft)
 
   // Admin scans replace the catalogue item's photos (front, then back).
@@ -3607,10 +3826,10 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
         {hasScans && typeof adminDesktopApi().rotateScanImage === 'function' ? (
           <div className="ai-review-orient">
             {draft.feed?.checkRotation ? <span className="ai-review-orient-flag">Check rotation</span> : null}
-            <button type="button" onClick={() => rotateSide('frontImage')} disabled={Boolean(working) || !draft.frontImage} title="Rotate the front 90° clockwise">↻ Front</button>
-            <button type="button" onClick={() => rotateSide('backImage')} disabled={Boolean(working) || !draft.backImage} title="Rotate the back 90° clockwise">↻ Back</button>
+            {hasLocalScans ? <button type="button" onClick={() => rotateSide('frontImage')} disabled={Boolean(working) || !draft.frontImage?.path} title="Rotate the front 90° clockwise">↻ Front</button> : null}
+            {hasLocalScans ? <button type="button" onClick={() => rotateSide('backImage')} disabled={Boolean(working) || !draft.backImage?.path} title="Rotate the back 90° clockwise">↻ Back</button> : null}
             <button type="button" onClick={swapSides} disabled={Boolean(working) || !draft.frontImage || !draft.backImage}>Swap front/back</button>
-            {draft.feed?.adjusted && !finished ? <button type="button" onClick={() => { onUpdateDraft(draft.id, { feed: { ...(draft.feed || {}), adjusted: false } }); onRetry(draft.id) }} disabled={Boolean(working) || aiBusy}>Re-analyse</button> : null}
+            {draft.feed?.adjusted && !finished && hasLocalScans ? <button type="button" onClick={() => { onUpdateDraft(draft.id, { feed: { ...(draft.feed || {}), adjusted: false } }); onRetry(draft.id) }} disabled={Boolean(working) || aiBusy}>Re-analyse</button> : null}
             {draft.feed?.adjusted && finished && linkedItemId ? <button type="button" className="admin-gold-button" onClick={async () => { await addScansToItem(); await onUpdateDraft(draft.id, { feed: { ...(draft.feed || {}), adjusted: false } }) }} disabled={Boolean(working)}>{working === 'images' ? 'Uploading…' : 'Update catalogue photos'}</button> : null}
           </div>
         ) : null}
@@ -3785,12 +4004,16 @@ function initialReviewValues(draft, category, matchItem) {
 
 async function loadScanImageBlobs(draft) {
   const api = adminDesktopApi()
-  if (typeof api.readScanImage !== 'function') return []
   const images = []
   for (const [image, position] of [[draft.frontImage, 0], [draft.backImage, 1]]) {
-    if (!image?.path) continue
-    const file = await api.readScanImage(image)
-    images.push({ position, ext: file.ext, blob: new Blob([file.data], { type: file.mime }) })
+    if (image?.path && typeof api.readScanImage === 'function') {
+      const file = await api.readScanImage(image)
+      images.push({ position, ext: file.ext, blob: new Blob([file.data], { type: file.mime }) })
+    } else if (image?.cloudPath) {
+      // Reviewing on another computer: the uploaded copy of the scan.
+      const file = await downloadCloudImage(image)
+      images.push({ position, ext: file.ext, blob: file.blob })
+    }
   }
   return images
 }
