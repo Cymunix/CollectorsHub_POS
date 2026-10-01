@@ -3534,6 +3534,26 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
       return sortBy === 'confidence-asc' ? scoreA - scoreB : scoreB - scoreA
     })
 
+  // Scored 100% with nothing left to decide: link or add.
+  const perfectRows = aiRows.filter((draft) => confidenceOf(draft)?.score === 100 && ['link', 'add'].includes(confidenceOf(draft)?.readiness))
+  const perfectWaitingForSet = aiRows.filter((draft) => confidenceOf(draft)?.score === 100 && confidenceOf(draft)?.readiness === 'needs-set').length
+
+  // Approves the chosen cards in one go: exact matches are linked, new cards
+  // added (see linkHighConfidence / addConfidentCards for the details).
+  async function approveCards(ids) {
+    const chosen = rows.filter((draft) => ids.includes(draft.id))
+    const links = chosen.filter((draft) => confidenceOf(draft)?.readiness === 'link')
+    const adds = chosen.filter((draft) => confidenceOf(draft)?.readiness === 'add')
+    const linkResult = links.length ? await linkHighConfidence(links, { quiet: true }) : { linked: 0, failed: 0 }
+    const addResult = adds.length ? await addConfidentCards(adds.map((draft) => draft.id), { quiet: true }) : { created: 0, linked: 0, problems: [] }
+    const linked = linkResult.linked + addResult.linked
+    const problems = linkResult.failed + addResult.problems.length
+    setBulkWork({
+      label: `Approved ${linked + addResult.created} card${linked + addResult.created === 1 ? '' : 's'}: ${addResult.created} added as new items, ${linked} linked to existing items${problems ? `. ${problems} need a look${addResult.problems.length ? `: ${addResult.problems.slice(0, 3).join('; ')}` : ''}` : '.'}`,
+      finished: true,
+    })
+  }
+
   const highRows = aiRows.filter((draft) => confidenceOf(draft)?.tier === 'high')
   const highLinks = highRows.filter((draft) => confidenceOf(draft)?.readiness === 'link')
   const highAdds = highRows.filter((draft) => confidenceOf(draft)?.readiness === 'add')
@@ -3584,8 +3604,8 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
 
   // Links the confident exact matches. A copy of a card added from this
   // queue keeps the first copy's photos; other matches get these scans.
-  async function linkHighConfidence() {
-    const targets = [...highLinks]
+  async function linkHighConfidence(chosen = null, { quiet = false } = {}) {
+    const targets = [...(chosen || highLinks)]
     let done = 0
     let failed = 0
     setBulkWork({ label: 'Linking matches', done: 0, total: targets.length })
@@ -3618,13 +3638,14 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
       done += 1
       setBulkWork({ label: 'Linking matches', done, total: targets.length })
     }
-    setBulkWork({ label: `Linked ${done - failed} card${done - failed === 1 ? '' : 's'}${failed ? `; ${failed} could not be linked` : ''}.`, finished: true })
+    if (!quiet) setBulkWork({ label: `Linked ${done - failed} card${done - failed === 1 ? '' : 's'}${failed ? `; ${failed} could not be linked` : ''}.`, finished: true })
+    return { linked: done - failed, failed }
   }
 
   // Adds the chosen confident new cards to the catalogue from their AI
   // reading, exactly as the review form would. A card that turns out to exist
   // (e.g. a copy added earlier in the same run) is linked instead.
-  async function addConfidentCards(ids) {
+  async function addConfidentCards(ids, { quiet = false } = {}) {
     const targets = rows.filter((draft) => ids.includes(draft.id))
     let created = 0
     let linked = 0
@@ -3663,10 +3684,13 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
       }
       setBulkWork({ label: 'Adding cards to the catalogue', done: index + 1, total: targets.length })
     }
-    setBulkWork({
-      label: `Added ${created} new item${created === 1 ? '' : 's'}${linked ? `, linked ${linked} that already existed` : ''}${problems.length ? `. ${problems.length} need a look: ${problems.slice(0, 3).join('; ')}` : '.'}`,
-      finished: true,
-    })
+    if (!quiet) {
+      setBulkWork({
+        label: `Added ${created} new item${created === 1 ? '' : 's'}${linked ? `, linked ${linked} that already existed` : ''}${problems.length ? `. ${problems.length} need a look: ${problems.slice(0, 3).join('; ')}` : '.'}`,
+        finished: true,
+      })
+    }
+    return { created, linked, problems }
   }
 
   async function analyze(draft) {
@@ -3717,7 +3741,12 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
       ) : null}
       {aiRows.length || orientationTargets.length || setGroups.length ? (
         <div className="review-bulk-bar">
-          {highLinks.length ? <button className="admin-gold-button" type="button" onClick={linkHighConfidence} disabled={bulkRunning}>Link {highLinks.length} high-confidence match{highLinks.length === 1 ? '' : 'es'}</button> : null}
+          {perfectRows.length ? (
+            <button className="admin-gold-button review-approve-perfect" type="button" onClick={() => setBulkAdd({ ids: perfectRows.map((draft) => draft.id), mode: 'approve' })} disabled={bulkRunning} title={perfectWaitingForSet ? `${perfectWaitingForSet} more 100% card${perfectWaitingForSet === 1 ? '' : 's'} need their set set up first` : 'Link exact matches and add new cards, after a quick look at the thumbnails'}>
+              Approve all 100% ({perfectRows.length})
+            </button>
+          ) : perfectWaitingForSet ? <span className="review-bulk-copies">{perfectWaitingForSet} card{perfectWaitingForSet === 1 ? '' : 's'} at 100% need their set set up before they can be approved.</span> : null}
+          {highLinks.length ? <button className="admin-gold-button" type="button" onClick={() => linkHighConfidence()} disabled={bulkRunning}>Link {highLinks.length} high-confidence match{highLinks.length === 1 ? '' : 'es'}</button> : null}
           {highAdds.length ? <button className="admin-gold-button" type="button" onClick={() => setBulkAdd({ ids: highAdds.map((draft) => draft.id) })} disabled={bulkRunning}>Add {highAdds.length} high-confidence new card{highAdds.length === 1 ? '' : 's'}…</button> : null}
           {setGroups.map((group) => (
             <span className="review-set-group" key={group.key}>
@@ -3861,7 +3890,13 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           drafts={rows.filter((draft) => bulkAdd.ids.includes(draft.id))}
           confidenceOf={confidenceOf}
           onClose={() => setBulkAdd(null)}
-          onConfirm={(ids) => { setBulkAdd(null); addConfidentCards(ids) }}
+          mode={bulkAdd.mode || 'add'}
+          onConfirm={(ids) => {
+            const mode = bulkAdd.mode
+            setBulkAdd(null)
+            if (mode === 'approve') approveCards(ids)
+            else addConfidentCards(ids)
+          }}
         />
       ) : null}
       {setSetup ? (
@@ -3918,7 +3953,8 @@ function closestTaxonomyOption(options, text) {
 
 // Spot-check before adding confident cards in bulk: untick anything that
 // looks wrong (it stays in the queue).
-function BulkAddDialog({ drafts, confidenceOf, onClose, onConfirm }) {
+function BulkAddDialog({ drafts, confidenceOf, onClose, onConfirm, mode = 'add' }) {
+  const approving = mode === 'approve'
   const [selected, setSelected] = useState(() => new Set(drafts.map((draft) => draft.id)))
   const toggle = (id) => setSelected((current) => {
     const next = new Set(current)
@@ -3931,9 +3967,11 @@ function BulkAddDialog({ drafts, confidenceOf, onClose, onConfirm }) {
       <section>
         <div className="bulk-add-head">
           <div>
-            <p className="admin-kicker">Add to catalogue</p>
-            <h2 id="bulk-add-title">Add {selected.size} high-confidence card{selected.size === 1 ? '' : 's'}</h2>
-            <small>Each becomes a catalogue item from its AI reading, with its scans as photos. Cards that already exist are linked instead. Untick anything that looks wrong; it stays in the queue.</small>
+            <p className="admin-kicker">{approving ? 'Quick approve' : 'Add to catalogue'}</p>
+            <h2 id="bulk-add-title">{approving ? `Approve ${selected.size} card${selected.size === 1 ? '' : 's'} scored 100%` : `Add ${selected.size} high-confidence card${selected.size === 1 ? '' : 's'}`}</h2>
+            <small>{approving
+              ? 'Exact matches are linked to their catalogue item; new cards become catalogue items from their AI reading, with their scans as photos. Untick anything that looks wrong; it stays in the queue.'
+              : 'Each becomes a catalogue item from its AI reading, with its scans as photos. Cards that already exist are linked instead. Untick anything that looks wrong; it stays in the queue.'}</small>
           </div>
           <div className="bulk-add-select">
             <button type="button" onClick={() => setSelected(new Set(drafts.map((draft) => draft.id)))}>Select all</button>
@@ -3958,7 +3996,7 @@ function BulkAddDialog({ drafts, confidenceOf, onClose, onConfirm }) {
         </div>
         <div className="modal-actions">
           <button type="button" onClick={onClose}>Cancel</button>
-          <button className="update-prompt-primary" type="button" disabled={!selected.size} onClick={() => onConfirm([...selected])}>Add {selected.size} card{selected.size === 1 ? '' : 's'}</button>
+          <button className="update-prompt-primary" type="button" disabled={!selected.size} onClick={() => onConfirm([...selected])}>{approving ? 'Approve' : 'Add'} {selected.size} card{selected.size === 1 ? '' : 's'}</button>
         </div>
       </section>
     </div>
