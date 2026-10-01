@@ -1090,20 +1090,24 @@ async function rotateImageFile(filePath, degrees) {
 
 // Confident, readable words in one orientation of a card side. Upside-down
 // or sideways text reads as a handful of low-confidence fragments.
-async function readableWordCount(image) {
+// Also returns the confident words read, which the review screen uses to
+// cross-check the AI's card number and player name.
+async function readableWordCount(image, { withText = false } = {}) {
   const worker = await getOcrWorker()
   const { data } = await worker.recognize(image.toPNG(), {}, { blocks: true, text: false })
   let words = 0
+  const read = []
   for (const block of data.blocks || []) {
     for (const paragraph of block.paragraphs || []) {
       for (const line of paragraph.lines || []) {
         for (const word of line.words || []) {
           if (word.confidence >= 75 && /^[A-Za-z][A-Za-z'.-]{2,}$/.test(word.text)) words += 1
+          if (withText && word.confidence >= 60) read.push(word.text)
         }
       }
     }
   }
-  return words
+  return withText ? { words, text: read.join(' ') } : words
 }
 
 // Scores the likely orientations of one side. Cards fed top edge first come
@@ -1123,7 +1127,12 @@ async function scoreSideOrientation(filePath) {
   const confident = bestWords >= 3 && bestWords >= second * 2
   // A weaker reading that still points one way (e.g. a photo-heavy front).
   const lean = bestWords > second ? Number(bestTurn) : null
-  return { best: confident ? Number(bestTurn) : null, lean, words: bestWords, scores }
+  // Text of the best reading (full-size crop for small print such as numbers).
+  let text = ''
+  if (bestWords >= 3) {
+    try { text = (await readableWordCount(rotateNativeImage(image.resize({ width: Math.min(1600, image.getSize().width), quality: 'best' }), Number(bestTurn)), { withText: true })).text.slice(0, 4000) } catch {}
+  }
+  return { best: confident ? Number(bestTurn) : null, lean, words: bestWords, scores, text }
 }
 
 // Turns a scanned pair upright and decides which side is the front. The back
@@ -1207,6 +1216,10 @@ ipcMain.handle('scanner:feed-stack', async (event, options = {}) => {
           frontBackBy: oriented.frontBackBy,
           singleSided: !oriented.back,
           // Readable words per side, so the AI can double-check close calls.
+          ocrText: {
+            front: oriented.orientation[[first, second].indexOf(oriented.front)]?.text || '',
+            back: oriented.back ? oriented.orientation[[first, second].indexOf(oriented.back)]?.text || '' : '',
+          },
           words: oriented.back ? { front: oriented.orientation[[first, second].indexOf(oriented.front)]?.words ?? 0, back: oriented.orientation[[first, second].indexOf(oriented.back)]?.words ?? 0 } : null,
         },
       }

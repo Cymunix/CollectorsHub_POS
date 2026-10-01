@@ -85,6 +85,7 @@ import {
   removeCloudImages,
   signRemoteImages,
 } from './lib/scanReviewCloud'
+import { looseCardKey, scanConfidence } from './lib/scanConfidence'
 
 const adminNav = [
   { key: 'overview', label: 'Overview', icon: Gauge },
@@ -3499,6 +3500,175 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
     setBulkWork({ label: 'Re-checked ' + done + (done === 1 ? ' card: ' : ' cards: ') + found + ' now match an existing catalogue item.', finished: true })
   }
 
+  // ---- Confidence: score every analysed card, sort/filter by it, and act on
+  // the confident ones in bulk.
+  const [sortBy, setSortBy] = useState('confidence-desc')
+  const [tierFilter, setTierFilter] = useState('all')
+  const [bulkAdd, setBulkAdd] = useState(null)
+  const [setSetup, setSetSetup] = useState(null)
+
+  const copiesByCard = new Map()
+  ;(drafts || []).filter((draft) => draft.recognition?.result && draft.status !== 'Rejected').forEach((draft) => {
+    const key = looseCardKey(draft.recognition.result)
+    copiesByCard.set(key, [...(copiesByCard.get(key) || []), draft])
+  })
+  const confidenceById = new Map()
+  for (const draft of rows) {
+    if (draft.recognition?.status !== 'done') continue
+    const sibling = catalogedSiblingOf(draft)
+    confidenceById.set(draft.id, scanConfidence(draft, {
+      copies: copiesByCard.get(looseCardKey(draft.recognition.result)) || [],
+      exactMatch: sibling ? siblingMatch(sibling) : null,
+    }))
+  }
+  const confidenceOf = (draft) => confidenceById.get(draft.id) || null
+  const tierCounts = { high: 0, medium: 0, low: 0 }
+  confidenceById.forEach((entry) => { tierCounts[entry.tier] += 1 })
+
+  const displayRows = rows
+    .filter((draft) => tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter)
+    .sort((a, b) => {
+      if (sortBy === 'newest') return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+      const scoreA = confidenceOf(a)?.score ?? -1
+      const scoreB = confidenceOf(b)?.score ?? -1
+      return sortBy === 'confidence-asc' ? scoreA - scoreB : scoreB - scoreA
+    })
+
+  const highRows = aiRows.filter((draft) => confidenceOf(draft)?.tier === 'high')
+  const highLinks = highRows.filter((draft) => confidenceOf(draft)?.readiness === 'link')
+  const highAdds = highRows.filter((draft) => confidenceOf(draft)?.readiness === 'add')
+
+  // Cards whose set isn't in the catalogue yet, grouped by the set the AI
+  // read (wording variants such as "Panini - Donruss" and "Panini Donruss"
+  // are the same set).
+  const setGroups = []
+  {
+    const byKey = new Map()
+    for (const draft of aiRows) {
+      if (confidenceOf(draft)?.readiness !== 'needs-set') continue
+      const taxonomy = draft.recognition.taxonomy || {}
+      const propertyText = taxonomy.unresolved?.property || draft.recognition.result.property || ''
+      const key = [taxonomy.ids?.franchise_id || '', propertyText.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()].join('|')
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          label: propertyText.replace(/\s+-\s+/g, ' ').trim() || 'Unknown set',
+          subsetText: taxonomy.unresolved?.subset || draft.recognition.result.subfranchise || '',
+          taxonomy,
+          drafts: [],
+        })
+      }
+      byKey.get(key).drafts.push(draft)
+    }
+    setGroups.push(...[...byKey.values()].sort((a, b) => b.drafts.length - a.drafts.length))
+  }
+
+  // Applies a set chosen once to every card of a group.
+  async function applySetToGroup(group, choice) {
+    for (const draft of group.drafts) {
+      const taxonomy = draft.recognition.taxonomy || {}
+      await onUpdateDraft(draft.id, {
+        recognition: {
+          ...draft.recognition,
+          taxonomy: {
+            ...taxonomy,
+            ids: { ...(taxonomy.ids || {}), subset_id: choice.subset.id, property_id: choice.property.id },
+            names: { ...(taxonomy.names || {}), subset: choice.subset.name, property: choice.property.name },
+            unresolved: {},
+          },
+        },
+      })
+    }
+    setBulkWork({ label: `Set "${choice.property.name}" applied to ${group.drafts.length} card${group.drafts.length === 1 ? '' : 's'}.`, finished: true })
+  }
+
+  // Links the confident exact matches. A copy of a card added from this
+  // queue keeps the first copy's photos; other matches get these scans.
+  async function linkHighConfidence() {
+    const targets = [...highLinks]
+    let done = 0
+    let failed = 0
+    setBulkWork({ label: 'Linking matches', done: 0, total: targets.length })
+    for (const draft of targets) {
+      const sibling = catalogedSiblingOf(draft)
+      const match = sibling ? siblingMatch(sibling) : draft.scanAnalysis?.bestMatch
+      const itemId = match?.item?.item_id
+      if (!itemId) { failed += 1; continue }
+      try {
+        let attached = 0
+        let warnings = []
+        if (!sibling) {
+          const images = await loadScanImageBlobs(draft)
+          if (images.length) {
+            const upload = await attachScanImagesToItem(itemId, images)
+            attached = upload.attached
+            warnings = upload.warnings || []
+          }
+        }
+        await onUpdateDraft(draft.id, {
+          status: 'Matched',
+          matchedItemId: itemId,
+          imagesAttached: attached,
+          analysisError: warnings.join(' '),
+          audit: [...(draft.audit || []), { action: 'match', source: sibling ? 'queue-copy' : 'bulk-confident', itemId, images: attached, at: new Date().toISOString() }],
+        })
+      } catch {
+        failed += 1
+      }
+      done += 1
+      setBulkWork({ label: 'Linking matches', done, total: targets.length })
+    }
+    setBulkWork({ label: `Linked ${done - failed} card${done - failed === 1 ? '' : 's'}${failed ? `; ${failed} could not be linked` : ''}.`, finished: true })
+  }
+
+  // Adds the chosen confident new cards to the catalogue from their AI
+  // reading, exactly as the review form would. A card that turns out to exist
+  // (e.g. a copy added earlier in the same run) is linked instead.
+  async function addConfidentCards(ids) {
+    const targets = rows.filter((draft) => ids.includes(draft.id))
+    let created = 0
+    let linked = 0
+    const problems = []
+    setBulkWork({ label: 'Adding cards to the catalogue', done: 0, total: targets.length })
+    for (const [index, draft] of targets.entries()) {
+      const category = draft.recognition.taxonomy?.category || draft.category
+      const values = bulkReviewValues(draft, category)
+      try {
+        const found = await findSpecDuplicates({ category, values })
+        if (found.length) {
+          const itemId = found[0].item.item_id
+          await onUpdateDraft(draft.id, {
+            category,
+            status: 'Matched',
+            matchedItemId: itemId,
+            audit: [...(draft.audit || []), { action: 'match', source: 'bulk-add-duplicate', itemId, at: new Date().toISOString() }],
+          })
+          linked += 1
+        } else {
+          const images = await loadScanImageBlobs(draft)
+          const item = await createCatalogueItemFromReview({ category, values, confidence: confidenceOf(draft)?.score ?? null, images })
+          await onUpdateDraft(draft.id, {
+            category,
+            status: 'Catalogue Item Created',
+            createdItemId: item?.item_id || null,
+            imagesAttached: uploadedCount(images, item?.warnings),
+            analysisError: item?.warnings?.length ? item.warnings.join(' ') : '',
+            review: { category, values, matchId: '', attachImages: true, savedAt: new Date().toISOString() },
+            audit: [...(draft.audit || []), { action: 'create', source: 'bulk-confident', itemId: item?.item_id, images: images.length, at: new Date().toISOString() }],
+          })
+          created += 1
+        }
+      } catch (error) {
+        problems.push(`${draft.recognition.result.subject || 'Card'}: ${error.message || 'could not be added'}`)
+      }
+      setBulkWork({ label: 'Adding cards to the catalogue', done: index + 1, total: targets.length })
+    }
+    setBulkWork({
+      label: `Added ${created} new item${created === 1 ? '' : 's'}${linked ? `, linked ${linked} that already existed` : ''}${problems.length ? `. ${problems.length} need a look: ${problems.slice(0, 3).join('; ')}` : '.'}`,
+      finished: true,
+    })
+  }
+
   async function analyze(draft) {
     setBusyId(draft.id)
     try {
@@ -3545,8 +3715,16 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           )}
         </div>
       ) : null}
-      {aiRows.length || orientationTargets.length ? (
+      {aiRows.length || orientationTargets.length || setGroups.length ? (
         <div className="review-bulk-bar">
+          {highLinks.length ? <button className="admin-gold-button" type="button" onClick={linkHighConfidence} disabled={bulkRunning}>Link {highLinks.length} high-confidence match{highLinks.length === 1 ? '' : 'es'}</button> : null}
+          {highAdds.length ? <button className="admin-gold-button" type="button" onClick={() => setBulkAdd({ ids: highAdds.map((draft) => draft.id) })} disabled={bulkRunning}>Add {highAdds.length} high-confidence new card{highAdds.length === 1 ? '' : 's'}…</button> : null}
+          {setGroups.map((group) => (
+            <span className="review-set-group" key={group.key}>
+              <span><strong>{group.drafts.length}</strong> need the set <em>{group.label}</em></span>
+              <button type="button" onClick={() => setSetSetup(group)} disabled={bulkRunning}>Set up set</button>
+            </span>
+          ))}
           {orientationTargets.length ? <button type="button" onClick={fixOrientation} disabled={bulkRunning || aiBusy} title="Stack scans from before the AI orientation check: turn them the right way up and the right way round (uses the local AI, ~4 s per card)">Fix orientation ({orientationTargets.length})</button> : null}
           {linkableCopies.length ? (
             <span className="review-bulk-copies"><strong>{linkableCopies.length}</strong> {linkableCopies.length === 1 ? 'scan is a copy' : 'scans are copies'} of cards you already added.</span>
@@ -3557,8 +3735,24 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
         </div>
       ) : null}
       {!rows.length ? <EmptyAdminState text="No scanned drafts yet. Import front/back scanner images from Scan Intake to create review drafts." /> : null}
+      {confidenceById.size ? (
+        <div className="review-confidence-bar">
+          <div className="review-tier-filter" role="radiogroup" aria-label="Confidence">
+            {[['all', `All (${rows.length})`], ['high', `High (${tierCounts.high})`], ['medium', `Medium (${tierCounts.medium})`], ['low', `Low (${tierCounts.low})`]].map(([id, label]) => (
+              <button key={id} type="button" role="radio" aria-checked={tierFilter === id} className={`tier-${id}${tierFilter === id ? ' active' : ''}`} onClick={() => setTierFilter(id)}>{label}</button>
+            ))}
+          </div>
+          <label className="review-sort">Sort
+            <select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+              <option value="confidence-desc">Highest confidence first</option>
+              <option value="confidence-asc">Lowest confidence first</option>
+              <option value="newest">Newest first</option>
+            </select>
+          </label>
+        </div>
+      ) : null}
       <div className="review-draft-list">
-        {rows.map((draft) => {
+        {displayRows.map((draft) => {
           const title = scanDraftTitle(draft)
           const metadataRows = meaningfulScanMetadata(draft.metadata)
           const route = scanRouteLabel(draft.scanAnalysis?.route)
@@ -3576,6 +3770,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
                 key={draft.id}
                 draft={draft}
                 finished={finished}
+                confidence={confidenceOf(draft)}
                 exactMatch={ownExact || (catalogedSibling ? siblingMatch(catalogedSibling) : null)}
                 findExisting={() => findExistingFor(draft)}
                 onOpenItem={(itemId) => setOpenItemId(itemId)}
@@ -3661,6 +3856,21 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           )
         })}
       </div>
+      {bulkAdd ? (
+        <BulkAddDialog
+          drafts={rows.filter((draft) => bulkAdd.ids.includes(draft.id))}
+          confidenceOf={confidenceOf}
+          onClose={() => setBulkAdd(null)}
+          onConfirm={(ids) => { setBulkAdd(null); addConfidentCards(ids) }}
+        />
+      ) : null}
+      {setSetup ? (
+        <SetSetupDialog
+          group={setSetup}
+          onClose={() => setSetSetup(null)}
+          onApply={async (choice) => { const group = setSetup; setSetSetup(null); await applySetToGroup(group, choice) }}
+        />
+      ) : null}
       {reviewDraft ? <ScanReviewEditor key={reviewDraft.id} draft={reviewDraft} onUpdateDraft={onUpdateDraft} onClose={() => setReviewDraftId('')} /> : null}
       {openItemId ? (
         <div className="register-modal existing-item-modal" role="dialog" aria-modal="true">
@@ -3673,6 +3883,175 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   )
 }
 
+// Catalogue values for a card added in bulk: the AI reading as the review
+// form would fill it, with the taxonomy the AI's set resolved to (or the set
+// chosen for its group).
+function bulkReviewValues(draft, category) {
+  const ids = draft.recognition?.taxonomy?.ids || {}
+  const values = initialReviewValues(draft, category, null)
+  reviewFields(category).forEach((field) => {
+    if (field.taxonomy) values[field.key] = ids[field.key] || ''
+  })
+  return values
+}
+
+// Taxonomy names compared loosely: case, punctuation and maker names
+// ("Panini", "Topps"...) aside. Exact first, then one containing the other.
+function looseTaxonomyName(value) {
+  return String(value || '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((word) => word && !['panini', 'topps', 'upper', 'deck', 'the'].includes(word))
+    .join(' ')
+}
+
+function closestTaxonomyOption(options, text) {
+  const wanted = looseTaxonomyName(text)
+  if (!wanted) return null
+  return options.find((option) => looseTaxonomyName(option.name) === wanted)
+    || options.find((option) => {
+      const name = looseTaxonomyName(option.name)
+      return name && (name.includes(wanted) || wanted.includes(name))
+    })
+    || null
+}
+
+// Spot-check before adding confident cards in bulk: untick anything that
+// looks wrong (it stays in the queue).
+function BulkAddDialog({ drafts, confidenceOf, onClose, onConfirm }) {
+  const [selected, setSelected] = useState(() => new Set(drafts.map((draft) => draft.id)))
+  const toggle = (id) => setSelected((current) => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  return (
+    <div className="register-modal bulk-add-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-add-title">
+      <section>
+        <div className="bulk-add-head">
+          <div>
+            <p className="admin-kicker">Add to catalogue</p>
+            <h2 id="bulk-add-title">Add {selected.size} high-confidence card{selected.size === 1 ? '' : 's'}</h2>
+            <small>Each becomes a catalogue item from its AI reading, with its scans as photos. Cards that already exist are linked instead. Untick anything that looks wrong; it stays in the queue.</small>
+          </div>
+          <div className="bulk-add-select">
+            <button type="button" onClick={() => setSelected(new Set(drafts.map((draft) => draft.id)))}>Select all</button>
+            <button type="button" onClick={() => setSelected(new Set())}>Select none</button>
+          </div>
+        </div>
+        <div className="bulk-add-grid">
+          {drafts.map((draft) => {
+            const result = draft.recognition.result
+            const on = selected.has(draft.id)
+            return (
+              <label key={draft.id} className={`bulk-add-card${on ? '' : ' off'}`}>
+                <input type="checkbox" checked={on} onChange={() => toggle(draft.id)} />
+                {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="" /> : <span className="bulk-add-noimage" />}
+                <strong>{result.subject}</strong>
+                <small>#{String(result.id_number || '').replace(/^(no\.?|#)\s*/i, '')} · {result.release_year}</small>
+                <small>{[result.team, result.collection, result.parallel].filter(Boolean).join(' · ')}</small>
+                <small className={`confidence-chip tier-${confidenceOf(draft)?.tier}`}>{confidenceOf(draft)?.score}%</small>
+              </label>
+            )
+          })}
+        </div>
+        <div className="modal-actions">
+          <button type="button" onClick={onClose}>Cancel</button>
+          <button className="update-prompt-primary" type="button" disabled={!selected.size} onClick={() => onConfirm([...selected])}>Add {selected.size} card{selected.size === 1 ? '' : 's'}</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// Chooses (or creates) the catalogue product line and set for a group of
+// cards whose set the catalogue doesn't have yet, once for the whole group.
+function SetSetupDialog({ group, onClose, onApply }) {
+  const taxonomy = group.taxonomy || {}
+  const ids = taxonomy.ids || {}
+  const NEW = '__new__'
+  const [options, setOptions] = useState({ subset: [], property: [] })
+  const [subsetId, setSubsetId] = useState(ids.subset_id || '')
+  const [subsetName, setSubsetName] = useState(group.subsetText || '')
+  const [propertyId, setPropertyId] = useState('')
+  const [propertyName, setPropertyName] = useState(group.label || '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    loadCatalogueTaxonomyOptions({ categoryId: taxonomy.categoryId, subcategoryId: ids.subcategory_id, franchiseId: ids.franchise_id, subsetId: subsetId && subsetId !== NEW ? subsetId : '' })
+      .then((next) => {
+        if (cancelled) return
+        setOptions({ subset: next.subset || [], property: next.property || [] })
+        // Default to an existing option close to the AI's wording ("Donruss
+        // Football" is the catalogue's "Panini - Donruss Football"), else "new",
+        // so the same product line or set isn't created twice.
+        setSubsetId((current) => current || closestTaxonomyOption(next.subset || [], group.subsetText)?.id || NEW)
+        setPropertyId((current) => current || closestTaxonomyOption(next.property || [], group.label)?.id || NEW)
+      })
+      .catch((loadError) => { if (!cancelled) setError(loadError.message || 'Could not load the catalogue sets.') })
+    return () => { cancelled = true }
+  }, [subsetId])
+
+  async function apply() {
+    setBusy(true)
+    setError('')
+    try {
+      const parents = { category: taxonomy.category || 'Sports Cards', subcategoryId: ids.subcategory_id, franchiseId: ids.franchise_id }
+      const subset = subsetId === NEW
+        ? await createTaxonomyOption('subset', subsetName, parents)
+        : options.subset.find((option) => option.id === subsetId)
+      if (!subset) throw new Error('Choose a product line.')
+      const property = propertyId === NEW
+        ? await createTaxonomyOption('property', propertyName, { ...parents, subsetId: subset.id })
+        : options.property.find((option) => option.id === propertyId)
+      if (!property) throw new Error('Choose a set.')
+      await onApply({ subset, property })
+    } catch (applyError) {
+      setError(applyError.message || 'Could not set up the set.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="register-modal set-setup-modal" role="dialog" aria-modal="true" aria-labelledby="set-setup-title">
+      <section>
+        <p className="admin-kicker">Set up a set · {group.drafts.length} card{group.drafts.length === 1 ? '' : 's'}</p>
+        <h2 id="set-setup-title">{group.label}</h2>
+        <small>{[taxonomy.category, taxonomy.names?.subcategory, taxonomy.names?.franchise].filter(Boolean).join(' › ')}</small>
+        <label>Product line (subfranchise)
+          <select value={subsetId} onChange={(event) => { setSubsetId(event.target.value); setPropertyId('') }} disabled={busy}>
+            {options.subset.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+            <option value={NEW}>+ New product line…</option>
+          </select>
+        </label>
+        {subsetId === NEW ? <input value={subsetName} onChange={(event) => setSubsetName(event.target.value)} placeholder="e.g. Donruss Football" disabled={busy} /> : null}
+        <label>Set (property)
+          <select value={propertyId} onChange={(event) => setPropertyId(event.target.value)} disabled={busy}>
+            {subsetId !== NEW ? options.property.map((option) => <option key={option.id} value={option.id}>{option.name}</option>) : null}
+            <option value={NEW}>+ New set…</option>
+          </select>
+        </label>
+        {propertyId === NEW ? <input value={propertyName} onChange={(event) => setPropertyName(event.target.value)} placeholder="e.g. 2025 Panini Donruss Football" disabled={busy} /> : null}
+        {error ? <p className="admin-error">{error}</p> : null}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="update-prompt-primary" type="button" onClick={apply} disabled={busy || (subsetId === NEW && !subsetName.trim()) || (propertyId === NEW && !propertyName.trim())}>{busy ? 'Saving…' : `Use for ${group.drafts.length} card${group.drafts.length === 1 ? '' : 's'}`}</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+const CONFIDENCE_READINESS_TEXT = {
+  link: 'Ready to link to the catalogue',
+  add: 'Ready to add as a new item',
+  'needs-set': 'Needs its set set up',
+  check: 'Compare with a similar item',
+}
+
 const AI_MATCH_TEXT = {
   exact: ['Exact match found', 'Approve links this scan to the existing catalogue item (no duplicate is created) and makes the scans its catalogue photos.'],
   likely: ['Likely match', 'Approve opens the catalogue form so you can confirm the match.'],
@@ -3682,7 +4061,7 @@ const AI_MATCH_TEXT = {
 
 // Summary of one AI-analysed card. Only fields the model flagged as uncertain
 // are highlighted, so the reviewer checks those instead of every field.
-function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit, onUpdateDraft, onRetry, onRemove, findExisting, onOpenItem }) {
+function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit, onUpdateDraft, onRetry, onRemove, findExisting, onOpenItem, confidence = null }) {
   const recognition = draft.recognition || {}
   const result = recognition.result || {}
   const taxonomy = recognition.taxonomy || { names: {}, unresolved: {} }
@@ -3836,6 +4215,17 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
       </div>
       <div>
         <p className="ai-review-source">Local AI · {recognition.providerLabel || 'Qwen3-VL 8B'}</p>
+        {confidence && !finished ? (
+          <div className={`confidence-badge-row tier-${confidence.tier}`}>
+            <span className={`confidence-chip tier-${confidence.tier}`}>{confidence.tier === 'high' ? 'High' : confidence.tier === 'medium' ? 'Medium' : 'Low'} · {confidence.score}%</span>
+            <span className="confidence-ready">{CONFIDENCE_READINESS_TEXT[confidence.readiness]}</span>
+            {confidence.reasons.length ? (
+              <span className="confidence-reasons">
+                {confidence.reasons.map((reason) => <span key={reason.text} className={reason.good ? 'good' : 'bad'}>{reason.good ? '✓' : '!'} {reason.text}</span>)}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         <strong className={`ai-review-title${flag('subject')}${flag('id_number')}`}>{title}</strong>
         {taxonomyName('property', 'property') || result.collection ? (
           <span className={`ai-review-release${flag('property')}${flag('collection')}`}>

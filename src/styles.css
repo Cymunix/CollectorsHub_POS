@@ -7534,3 +7534,185 @@ button:disabled {
   font-weight: 800;
   padding: 4px 10px;
 }
+
+/* Review confidence */
+.review-confidence-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 0 0 12px;
+}
+
+.review-tier-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-tier-filter button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 12px;
+}
+
+.review-tier-filter button.active {
+  background: #1f2a3a;
+  border-color: #1f2a3a;
+  color: #fff;
+}
+
+.review-sort {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.review-set-group {
+  align-items: center;
+  display: inline-flex;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.confidence-badge-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 2px 0 6px;
+}
+
+.confidence-chip {
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 2px 9px;
+}
+
+.confidence-chip.tier-high { background: #dcfce7; color: #166534; }
+.confidence-chip.tier-medium { background: #fef3c7; color: #8a5d00; }
+.confidence-chip.tier-low { background: #fee2e2; color: #b42318; }
+
+.confidence-ready {
+  color: #526176;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.confidence-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 4px 10px;
+}
+
+.confidence-reasons .good { color: #166534; }
+.confidence-reasons .bad { color: #b42318; font-weight: 700; }
+
+.bulk-add-modal section,
+.set-setup-modal section {
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.bulk-add-modal section {
+  max-width: min(1100px, calc(100vw - 32px));
+  width: 100%;
+}
+
+.bulk-add-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.bulk-add-select {
+  display: flex;
+  gap: 6px;
+}
+
+.bulk-add-select button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.bulk-add-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  margin: 14px 0;
+}
+
+.bulk-add-card {
+  border: 2px solid #d6a632;
+  border-radius: 10px;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  position: relative;
+}
+
+.bulk-add-card.off {
+  border-color: #e3e8ef;
+  opacity: 0.45;
+}
+
+.bulk-add-card input {
+  left: 8px;
+  position: absolute;
+  top: 8px;
+}
+
+.bulk-add-card img,
+.bulk-add-noimage {
+  background: #f4f6f8;
+  border-radius: 6px;
+  height: 160px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.bulk-add-card strong {
+  font-size: 13px;
+}
+
+.bulk-add-card small {
+  color: #526176;
+  font-size: 11px;
+}
+
+.set-setup-modal section {
+  display: grid;
+  gap: 10px;
+}
+
+.set-setup-modal label {
+  display: grid;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.set-setup-modal select,
+.set-setup-modal input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  padding: 7px 9px;
+}

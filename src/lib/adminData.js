@@ -1685,7 +1685,18 @@ export function scannedFieldValue(draft, field) {
     const key = field.proposedKey || field.key
     value = key === 'upc' ? reviewText(proposed.upc || proposed.barcodes) : reviewText(proposed[key])
   }
+  if (field.key === 'team') return cleanTeamName(value)
   return field.personName || PERSON_NAME_FIELDS.has(field.key) ? titleCaseIfShouting(value) : value
+}
+
+// Team names as printed on cards: drop trademark symbols and fix capitals
+// ("vancouver CANUCKS®" -> "Vancouver Canucks").
+export function cleanTeamName(value) {
+  // Trademark symbols (registered, trade mark, copyright).
+  const plain = String(value || '').replace(/[®™©]/g, '').replace(/\s+/g, ' ').trim()
+  if (!plain) return plain
+  const messy = /^[a-z]/.test(plain) || /\b[A-Z]{4,}\b/.test(plain)
+  return messy ? plain.toLowerCase().replace(/(^|[\s.-])([a-z])/g, (match, separator, letter) => separator + letter.toUpperCase()) : plain
 }
 
 function reviewColumnValue(field, value) {
