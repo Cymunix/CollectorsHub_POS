@@ -11,6 +11,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase configuration.')
 }
 
+// The public project address and key (already part of the app), for the
+// desktop app's read-only catalogue backup.
+export const SUPABASE_PUBLIC_CONFIG = { supabaseUrl, anonKey: supabaseAnonKey }
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,

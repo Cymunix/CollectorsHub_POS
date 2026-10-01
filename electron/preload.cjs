@@ -31,6 +31,17 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   },
   recropScan: (image, rect) => ipcRenderer.invoke('scanner:recrop', { image, rect }),
   compactScans: (images) => ipcRenderer.invoke('scanner:compact-scans', images),
+  configureCatalogueBackup: (config) => ipcRenderer.invoke('backup:configure', config),
+  getCatalogueBackupStatus: () => ipcRenderer.invoke('backup:status'),
+  chooseCatalogueBackupFolder: () => ipcRenderer.invoke('backup:choose-folder'),
+  recordCatalogueChange: (change) => ipcRenderer.invoke('backup:record', change),
+  verifyCatalogueBackup: () => ipcRenderer.invoke('backup:verify'),
+  openCatalogueBackupFolder: () => ipcRenderer.invoke('backup:open-folder'),
+  onCatalogueBackupStatus: (callback) => {
+    const listener = (_event, status) => callback(status)
+    ipcRenderer.on('backup:status', listener)
+    return () => ipcRenderer.removeListener('backup:status', listener)
+  },
   getScanStorage: () => ipcRenderer.invoke('scanner:get-storage'),
   unusedScans: (request) => ipcRenderer.invoke('scanner:unused-scans', request),
   chooseScanStorage: () => ipcRenderer.invoke('scanner:choose-storage'),

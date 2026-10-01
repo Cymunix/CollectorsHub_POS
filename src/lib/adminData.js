@@ -214,6 +214,13 @@ const ITEM_IN_USE_TABLES = [
 // Returns { deleted: [ids], skipped: [{ id, reason }], failed: [{ id, message }] }.
 // Items in use are skipped; deletes run in batches, and a batch that fails is
 // retried item by item so one bad row never blocks the rest.
+// Local catalogue backup (desktop app only): every catalogue write is also
+// recorded in the backup folder, including writes Supabase refused. Fire and
+// forget: the backup never blocks or breaks the save.
+export function backupCatalogueChange(change) {
+  try { globalThis.window?.nordvikDesktop?.recordCatalogueChange?.(change)?.catch?.(() => {}) } catch {}
+}
+
 export async function deleteCatalogueItems(itemIds = [], onProgress = () => {}) {
   const ids = [...new Set(itemIds)].filter(Boolean)
   const inUse = new Map()
@@ -246,6 +253,7 @@ export async function deleteCatalogueItems(itemIds = [], onProgress = () => {}) 
     }
     onProgress({ phase: 'deleting', done: Math.min(i + 50, toDelete.length), total: toDelete.length })
   }
+  if (deleted.length) backupCatalogueChange({ action: 'delete', itemIds: deleted })
   return { deleted, skipped, failed }
 }
 
@@ -818,7 +826,11 @@ export async function updateCatalogueItemRecord(itemId, patch) {
     .select(CATALOGUE_SELECT.join(','))
     .maybeSingle()
 
-  if (error) throw error
+  if (error) {
+    backupCatalogueChange({ action: 'update', ok: false, error: error.message, itemIds: [itemId], payload: cleanPatch })
+    throw error
+  }
+  backupCatalogueChange({ action: 'update', itemIds: [itemId] })
   return data
 }
 
@@ -1153,6 +1165,12 @@ export async function updateExplorerRecord({ table, record, patch }) {
     .eq(pk, pkValue)
     .select('*')
     .maybeSingle()
+  if (selected.table === 'items' || selected.table === 'item_images') {
+    const itemId = selected.table === 'items' ? pkValue : record?.item_id
+    backupCatalogueChange(error
+      ? { action: 'update', ok: false, error: error.message, itemIds: [itemId], payload: { table: selected.table, [pk]: pkValue, patch: cleanPatch } }
+      : { action: selected.table === 'items' ? 'update' : 'photos', itemIds: [itemId] })
+  }
 
   if (error) throw error
   return data
@@ -1868,6 +1886,7 @@ async function attachItemImages(itemId, images = []) {
   if (rowError) return [`Image record save failed: ${rowError.message}`]
   const front = uploaded.find((row) => row.position === 0) || uploaded[0]
   const { error: itemError } = await supabase.from('items').update({ image_path: front.image_path }).eq('item_id', itemId)
+  backupCatalogueChange({ action: 'photos', itemIds: [itemId] })
   return itemError ? [`Front image link not updated: ${itemError.message}`] : []
 }
 
@@ -1875,19 +1894,20 @@ async function attachItemImages(itemId, images = []) {
 // a scan was saved the wrong way round. The website shows position 0 as the
 // front, and items.image_path follows it.
 export async function swapItemFrontBack(itemId) {
-  const { data: rows, error } = await supabase.from('item_images').select('id, image_path, position').eq('item_id', itemId).in('position', [0, 1])
+  const { data: rows, error } = await supabase.from('item_images').select('item_image_id, image_path, position').eq('item_id', itemId).in('position', [0, 1])
   if (error) throw error
   const front = (rows || []).find((row) => row.position === 0)
   const back = (rows || []).find((row) => row.position === 1)
   if (!front || !back) throw new Error('This item needs both a front and a back photo to swap them.')
   // Via a temporary position, in case (item_id, position) must stay unique.
-  const steps = [[front.id, { position: 99 }], [back.id, { position: 0, is_primary: true }], [front.id, { position: 1, is_primary: false }]]
+  const steps = [[front.item_image_id, { position: 99 }], [back.item_image_id, { position: 0, is_primary: true }], [front.item_image_id, { position: 1, is_primary: false }]]
   for (const [id, patch] of steps) {
-    const { error: stepError } = await supabase.from('item_images').update(patch).eq('id', id)
+    const { error: stepError } = await supabase.from('item_images').update(patch).eq('item_image_id', id)
     if (stepError) throw stepError
   }
   const { error: itemError } = await supabase.from('items').update({ image_path: back.image_path }).eq('item_id', itemId)
   if (itemError) throw itemError
+  backupCatalogueChange({ action: 'photos', itemIds: [itemId] })
 }
 
 // Number of catalogue images an item already has (item_images rows).
@@ -1931,7 +1951,11 @@ export async function createCatalogueItemFromReview({ category, values, confiden
   }, groups, values, { dropEmpty: isSpecCategory(category) })
 
   const { data, error } = await supabase.from('items').insert(payload).select(CATALOGUE_SELECT.join(',')).single()
-  if (error) throw error
+  if (error) {
+    // Kept in the local backup so the card isn't lost.
+    backupCatalogueChange({ action: 'create', ok: false, error: error.message, payload: { category, ...payload, property_id: values.property_id || null } })
+    throw error
+  }
 
   const warnings = []
   if (values.property_id) {
@@ -1939,6 +1963,7 @@ export async function createCatalogueItemFromReview({ category, values, confiden
     if (propertyError) warnings.push(`Property link failed: ${propertyError.message}`)
   }
   warnings.push(...await attachItemImages(data.item_id, images))
+  backupCatalogueChange({ action: 'create', itemIds: [data.item_id] })
   return { ...data, warnings }
 }
 

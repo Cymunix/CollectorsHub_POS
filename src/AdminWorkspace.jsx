@@ -87,6 +87,7 @@ import {
   signRemoteImages,
 } from './lib/scanReviewCloud'
 import { looseCardKey, scanConfidence } from './lib/scanConfidence'
+import { SUPABASE_PUBLIC_CONFIG } from './lib/supabaseClient'
 
 const adminNav = [
   { key: 'overview', label: 'Overview', icon: Gauge },
@@ -1041,6 +1042,86 @@ function MarketDataAdmin({ storeContext = {} }) {
   )
 }
 
+// Local catalogue backup: a second copy of the catalogue (and our own photos)
+// in a folder, written as items are saved and checked against Supabase daily.
+function CatalogueBackupPanel() {
+  const api = adminDesktopApi()
+  const supported = typeof api.getCatalogueBackupStatus === 'function'
+  const [status, setStatus] = useState(null)
+  const [error, setError] = useState('')
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!supported) return undefined
+    api.configureCatalogueBackup?.(SUPABASE_PUBLIC_CONFIG).then(setStatus).catch(() => api.getCatalogueBackupStatus().then(setStatus).catch(() => {}))
+    return api.onCatalogueBackupStatus?.((next) => setStatus(next))
+  }, [])
+
+  if (!supported) return null
+
+  async function chooseFolder() {
+    setError('')
+    try { setStatus(await api.chooseCatalogueBackupFolder()) } catch (chooseError) { setError(chooseError.message || 'Could not use that folder.') }
+  }
+
+  async function verifyNow() {
+    setError('')
+    try {
+      const result = await api.verifyCatalogueBackup()
+      setStatus(result.status)
+      setOpen(true)
+    } catch (verifyError) {
+      setError(verifyError.message || 'The backup check failed.')
+    }
+  }
+
+  const last = status?.last
+  const problems = last ? (last.missingFromSupabase || 0) + (last.failedWrites || 0) + (last.photos?.notFoundInSupabase || 0) : 0
+  const progress = status?.progress
+  return (
+    <section className={`admin-panel catalogue-backup${problems ? ' attention' : ''}`}>
+      <div className="catalogue-backup-head">
+        <div>
+          <strong>Catalogue backup</strong>
+          <small>
+            {!status?.dir ? 'Not set up: choose a folder to keep a second copy of the catalogue and your photos.'
+              : status.verifying ? `${progress?.stage || 'Checking'}${progress?.done ? ` · ${progress.done.toLocaleString()}${progress.total ? ` of ${progress.total.toLocaleString()}` : ''}` : ''}…`
+                : last ? `${status.dir} · last checked ${new Date(last.finishedAt).toLocaleString()} · ${last.supabaseItems.toLocaleString()} items${problems ? ` · ${problems} to look at` : ' · everything matches'}`
+                  : `${status.dir} · not checked yet`}
+          </small>
+        </div>
+        <div className="catalogue-backup-actions">
+          {status?.dir ? <button type="button" onClick={verifyNow} disabled={status?.verifying}>{status?.verifying ? 'Checking…' : 'Verify now'}</button> : null}
+          {status?.dir ? <button type="button" onClick={() => api.openCatalogueBackupFolder?.()}>Open folder</button> : null}
+          <button type="button" onClick={chooseFolder} disabled={status?.verifying}>{status?.dir ? 'Change folder…' : 'Choose folder…'}</button>
+          {last ? <button type="button" onClick={() => setOpen((current) => !current)}>{open ? 'Hide report' : 'Report'}</button> : null}
+        </div>
+      </div>
+      {error ? <p className="admin-error">{error}</p> : null}
+      {open && last ? (
+        <div className="catalogue-backup-report">
+          <p>
+            {last.firstSnapshot ? 'First full copy taken. ' : `${last.newInSupabase} new and ${last.changedInSupabase} changed item${last.changedInSupabase === 1 ? '' : 's'} copied from Supabase (added or edited on the website, by imports or here). `}
+            Photos: {last.photos.own} of your own ({last.photos.downloaded} newly saved); photos from public card databases are kept as links.
+          </p>
+          {last.failedWrites ? (
+            <div><strong>{last.failedWrites} save{last.failedWrites === 1 ? '' : 's'} Supabase refused</strong> (kept in the backup journal):
+              <ul>{last.failedSamples.map((entry) => <li key={entry.at}>{new Date(entry.at).toLocaleString()} · {entry.action} · {entry.error}</li>)}</ul>
+            </div>
+          ) : null}
+          {last.missingFromSupabase ? (
+            <div><strong>{last.missingFromSupabase} item{last.missingFromSupabase === 1 ? ' is' : 's are'} in the backup but no longer in Supabase</strong> (saved in missing-from-supabase.jsonl):
+              <ul>{last.missingSamples.map((entry) => <li key={entry.item_id}>{entry.name || 'Unnamed'} <code>{entry.item_id}</code></li>)}</ul>
+            </div>
+          ) : null}
+          {last.photos.notFoundInSupabase ? <p><strong>{last.photos.notFoundInSupabase} photo record{last.photos.notFoundInSupabase === 1 ? ' points' : 's point'} to a file that isn't in Supabase storage.</strong></p> : null}
+          {!problems ? <p className="admin-success">Supabase and the backup match.</p> : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 function AdminCatalogue() {
   const [search, setSearch] = useState('')
   const [categoryId, setCategoryId] = useState('')
@@ -1131,6 +1212,7 @@ function AdminCatalogue() {
 
   return (
     <div className="admin-stack">
+      <CatalogueBackupPanel />
       <section className="admin-panel">
         <div className="admin-panel-header">
           <div>

@@ -11,6 +11,7 @@ const { createWorker } = require('tesseract.js')
 const { OllamaCardRecognitionProvider } = require('./cardRecognition.cjs')
 const { ScannerSession } = require('./scannerSession.cjs')
 const { rotateNativeImage } = require('./imageRotate.cjs')
+const { CatalogueBackup } = require('./catalogueBackup.cjs')
 
 const execFileAsync = promisify(execFile)
 
@@ -987,6 +988,110 @@ ipcMain.handle('scanner:unused-scans', async (_event, { referencedNames = [], re
     await logScanner({ event: 'scan-storage-unused-deleted', deleted, freedBytes })
   }
   return { files: unused.length, bytes: unused.reduce((sum, entry) => sum + entry.bytes, 0), deleted, freedBytes }
+})
+
+// ---------------------------------------------------------------------------
+// Local catalogue backup (see catalogueBackup.cjs). The folder is a setting;
+// the renderer supplies the Supabase URL and public key at start-up.
+const catalogueBackup = new CatalogueBackup({ log: (entry) => logScanner(entry) })
+let backupProgress = null
+let backupSupabase = null
+
+function configureCatalogueBackup() {
+  const dir = readSettings().catalogueBackupDir || ''
+  catalogueBackup.configure(dir && backupSupabase ? { dir, ...backupSupabase } : null)
+}
+
+async function catalogueBackupStatus() {
+  return {
+    dir: readSettings().catalogueBackupDir || '',
+    ready: catalogueBackup.ready,
+    verifying: Boolean(catalogueBackup.verifying),
+    progress: backupProgress,
+    last: catalogueBackup.ready ? await catalogueBackup.lastVerify() : null,
+  }
+}
+
+function sendBackupStatus() {
+  catalogueBackupStatus().then((status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup:status', status)
+  }).catch(() => {})
+}
+
+async function runCatalogueVerify() {
+  if (!catalogueBackup.ready || catalogueBackup.verifying) return catalogueBackup.verifying
+  backupProgress = { stage: 'Starting' }
+  sendBackupStatus()
+  try {
+    return await catalogueBackup.verify({
+      onProgress: (progress) => {
+        backupProgress = progress
+        sendBackupStatus()
+      },
+    })
+  } finally {
+    backupProgress = null
+    sendBackupStatus()
+  }
+}
+
+// Daily check: an hour after start-up and then hourly, verify when the last
+// verify is more than a day old.
+const BACKUP_VERIFY_EVERY_MS = 24 * 60 * 60 * 1000
+async function maybeVerifyCatalogueBackup() {
+  if (!catalogueBackup.ready || catalogueBackup.verifying) return
+  const last = await catalogueBackup.lastVerify()
+  if (last && Date.now() - Date.parse(last.finishedAt) < BACKUP_VERIFY_EVERY_MS) return
+  runCatalogueVerify().catch((error) => logScanner({ event: 'catalogue-backup-verify-failed', message: error.message }))
+}
+setTimeout(() => {
+  maybeVerifyCatalogueBackup()
+  setInterval(maybeVerifyCatalogueBackup, 60 * 60 * 1000)
+}, 60 * 60 * 1000)
+
+ipcMain.handle('backup:configure', (_event, { supabaseUrl = '', anonKey = '' } = {}) => {
+  backupSupabase = supabaseUrl && anonKey ? { supabaseUrl: String(supabaseUrl).replace(/\/+$/, ''), anonKey } : null
+  configureCatalogueBackup()
+  return catalogueBackupStatus()
+})
+
+ipcMain.handle('backup:status', () => catalogueBackupStatus())
+
+ipcMain.handle('backup:choose-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose the catalogue backup folder',
+    defaultPath: readSettings().catalogueBackupDir || undefined,
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  refocusMainWindow()
+  if (result.canceled || !result.filePaths?.[0]) return catalogueBackupStatus()
+  const chosen = path.resolve(result.filePaths[0])
+  const probe = path.join(chosen, `.collectorshub-write-test-${randomUUID()}`)
+  try {
+    await writeFile(probe, 'ok')
+    await unlink(probe)
+  } catch (error) {
+    throw new Error(`CollectorsHub can't save files in that folder (${error.code || error.message}). Choose another folder.`)
+  }
+  await writeSettings({ ...readSettings(), catalogueBackupDir: chosen })
+  configureCatalogueBackup()
+  return catalogueBackupStatus()
+})
+
+ipcMain.handle('backup:record', (_event, change = {}) => {
+  // Not awaited by the caller's save; errors are logged by the backup itself.
+  catalogueBackup.recordChange(change).then(() => sendBackupStatus())
+  return true
+})
+
+ipcMain.handle('backup:verify', async () => {
+  const report = await runCatalogueVerify()
+  return { report, status: await catalogueBackupStatus() }
+})
+
+ipcMain.handle('backup:open-folder', async () => {
+  const dir = readSettings().catalogueBackupDir
+  if (dir) await shell.openPath(dir)
 })
 
 let moveInProgress = false

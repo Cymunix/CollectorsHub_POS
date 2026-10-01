@@ -7752,3 +7752,63 @@ button:disabled {
   font-weight: 800;
   padding: 6px 10px;
 }
+
+
+/* Catalogue backup */
+.catalogue-backup {
+  padding: 12px 16px;
+}
+
+.catalogue-backup.attention {
+  border-color: #f0b35a;
+}
+
+.catalogue-backup-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.catalogue-backup-head strong {
+  display: block;
+  font-size: 14px;
+}
+
+.catalogue-backup-head small {
+  color: #526176;
+  font-size: 12px;
+}
+
+.catalogue-backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.catalogue-backup-actions button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.catalogue-backup-report {
+  border-top: 1px solid #e3e8ef;
+  display: grid;
+  font-size: 13px;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.catalogue-backup-report ul {
+  margin: 4px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  padding-left: 18px;
+}
