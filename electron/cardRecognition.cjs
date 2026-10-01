@@ -11,6 +11,7 @@
 
 const { nativeImage } = require('electron')
 const { readFile } = require('node:fs/promises')
+const { rotateNativeImage } = require('./imageRotate.cjs')
 
 const OLLAMA_URL = 'http://127.0.0.1:11434'
 const QWEN_MODEL = 'qwen3-vl:8b-instruct'
@@ -21,6 +22,7 @@ const QWEN_MODEL = 'qwen3-vl:8b-instruct'
 const AI_IMAGE_LONG_EDGE = 1600
 // The front/back check only needs to see the layout.
 const SIDE_CHECK_EDGE = 640
+const UPRIGHT_CHECK_EDGE = 512
 const STATUS_TIMEOUT_MS = 4000
 const RECOGNITION_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -361,6 +363,48 @@ class OllamaCardRecognitionProvider {
     try {
       const answer = JSON.parse(data?.message?.content).back_image
       return answer === 1 || answer === 2 ? answer : null
+    } catch {
+      return null
+    }
+  }
+
+  // Clockwise turn (0/90/180/270) that puts a card side the right way up.
+  // The model picks the upright one of the four rotations, with a question
+  // per side: fronts by the people in the photo (54/54 in testing, where the
+  // text check failed on sideways printed names), backs by the text only,
+  // because back photos are often printed sideways (18/18; the photo-based
+  // question got 2/5 on backs). ~3 s each.
+  async uprightTurn(filePath, signal, side = 'front') {
+    const image = nativeImage.createFromPath(filePath)
+    if (image.isEmpty()) return null
+    const { width, height } = image.getSize()
+    const scale = Math.min(1, UPRIGHT_CHECK_EDGE / Math.max(width, height))
+    const small = image.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'best' })
+    const turns = [0, 90, 180, 270]
+    const response = await ollamaFetch('/api/chat', {
+      method: 'POST',
+      timeoutMs: RECOGNITION_TIMEOUT_MS,
+      signal,
+      body: {
+        model: this.model,
+        stream: false,
+        keep_alive: '10m',
+        options: { num_ctx: 8192, temperature: 0 },
+        format: { type: 'object', properties: { upright_image: { type: 'integer', enum: [1, 2, 3, 4] } }, required: ['upright_image'] },
+        messages: [{
+          role: 'user',
+          content: side === 'back'
+            ? 'These 4 images are the same trading card BACK, each turned a different way. Which ONE is the right way up? Judge ONLY by the printed text: the name heading, the biography paragraph and the statistics table must read normally, left to right in horizontal lines, not sideways and not upside down. Ignore any photos (photos on card backs are often printed sideways). Answer 1, 2, 3 or 4.'
+            : 'These 4 images are the same trading card side, each turned a different way. Which ONE is the right way up, as the card is meant to be viewed: people standing upright with heads at the top, and the main printed text (player name, headings) reading left to right? Answer 1, 2, 3 or 4.',
+          images: turns.map((turn) => rotateNativeImage(small, turn).toJPEG(85).toString('base64')),
+        }],
+      },
+    })
+    if (!response.ok) throw classifyOllamaError(response.status, await response.text().catch(() => ''))
+    const data = await response.json().catch(() => null)
+    try {
+      const pick = JSON.parse(data?.message?.content).upright_image
+      return turns[pick - 1] ?? null
     } catch {
       return null
     }

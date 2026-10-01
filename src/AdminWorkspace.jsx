@@ -245,6 +245,16 @@ function needsSideCheck(draft) {
   return feed.words.back < feed.words.front * 2 + 5
 }
 
+// Sides whose text-based orientation was weak get the AI upright check:
+// photo-heavy fronts (often with the name printed sideways) and backs whose
+// text didn't read well (light text on colour).
+function needsUprightCheck(draft) {
+  const feed = draft.feed
+  if (!feed || feed.uprightChecked || feed.adjusted) return null
+  const weak = (words) => feed.checkRotation || !feed.words || words == null || words < 15
+  return { front: Boolean(draft.frontImage) && weak(feed.words?.front), back: Boolean(draft.backImage) && weak(feed.words?.back) }
+}
+
 function createLocalId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`
 }
@@ -421,7 +431,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
       await patchRecognition(draft.id, { status: 'analysing', error: '', code: '' })
       const jobId = createLocalId('ai_job')
       aiRunRef.current.jobId = jobId
-      const response = await api.recognizeCard({ jobId, front: draft.frontImage ? { path: draft.frontImage.path } : null, back: draft.backImage ? { path: draft.backImage.path } : null, checkSides: needsSideCheck(draft) })
+      const response = await api.recognizeCard({ jobId, front: draft.frontImage || null, back: draft.backImage || null, checkSides: needsSideCheck(draft), checkUpright: needsUprightCheck(draft) })
         .catch((error) => ({ ok: false, code: 'AI_ERROR', message: error.message }))
 
       if (!response.ok) {
@@ -440,9 +450,12 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
 
       // The catalogue lookup runs while the AI starts on the next card.
       matching.push((async () => {
-      if (response.sidesSwapped) {
+      if (response.orientation) {
+        const fixed = response.orientation.images
         await saveScanDrafts((drafts) => drafts.map((entry) => (
-          entry.id === draft.id ? { ...entry, frontImage: entry.backImage, backImage: entry.frontImage, feed: { ...(entry.feed || {}), swappedByAi: true } } : entry
+          entry.id === draft.id
+            ? { ...entry, ...(fixed ? { frontImage: fixed.front, backImage: fixed.back } : {}), feed: { ...(entry.feed || {}), uprightChecked: true, swappedByAi: Boolean(response.sidesSwapped || entry.feed?.swappedByAi) } }
+            : entry
         )))
       }
       try {
@@ -3209,6 +3222,61 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
     setBulkWork({ label: 'Linked ' + targets.length + (targets.length === 1 ? ' copy' : ' copies') + ' to their catalogue items.', finished: true })
   }
 
+  // Stack scans from before the AI orientation check: check them now. Cards
+  // already added whose scans became the catalogue photos get the corrected
+  // photos uploaded too.
+  const orientationTargets = (drafts || []).filter((draft) => (
+    draft.feed && !draft.feed.uprightChecked && !draft.feed.adjusted && draft.status !== 'Rejected'
+    && !['queued', 'analysing', 'failed'].includes(draft.recognition?.status) && draft.frontImage?.path
+  ))
+
+  async function fixOrientation() {
+    const api = adminDesktopApi()
+    if (typeof api.checkCardOrientation !== 'function') return
+    const targets = [...orientationTargets]
+    let fixed = 0
+    let photos = 0
+    let failed = 0
+    setBulkWork({ label: 'Checking card orientation', done: 0, total: targets.length })
+    for (const [index, draft] of targets.entries()) {
+      const result = await api.checkCardOrientation({
+        front: draft.frontImage,
+        back: draft.backImage || null,
+        checkSides: needsSideCheck(draft),
+        checkUpright: needsUprightCheck(draft) || { front: true, back: Boolean(draft.backImage) },
+      }).catch((error) => ({ ok: false, message: error.message }))
+      if (!result.ok) {
+        failed += 1
+        if (['OLLAMA_UNAVAILABLE', 'MODEL_MISSING'].includes(result.code)) {
+          setBulkWork({ label: result.message || 'The local AI is not available.', finished: true })
+          return
+        }
+      } else {
+        const next = result.changed ? { frontImage: result.images.front, backImage: result.images.back } : {}
+        await onUpdateDraft(draft.id, { ...next, feed: { ...(draft.feed || {}), uprightChecked: true, swappedByAi: Boolean(result.sidesSwapped || draft.feed?.swappedByAi) } })
+        if (result.changed) {
+          fixed += 1
+          // Only the scan that supplied the item's photos re-uploads them.
+          const itemId = draft.createdItemId || (draft.imagesAttached ? draft.matchedItemId : '')
+          if (itemId && COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)) {
+            try {
+              const images = await loadScanImageBlobs({ ...draft, ...next })
+              if (images.length) {
+                const upload = await attachScanImagesToItem(itemId, images)
+                if (upload.attached) photos += 1
+              }
+            } catch {}
+          }
+        }
+      }
+      setBulkWork({ label: 'Checking card orientation', done: index + 1, total: targets.length })
+    }
+    setBulkWork({
+      label: `Checked ${targets.length} card${targets.length === 1 ? '' : 's'}: ${fixed} corrected${photos ? `, ${photos} catalogue item${photos === 1 ? '' : 's'} given the corrected photos` : ''}${failed ? `, ${failed} could not be checked` : ''}.`,
+      finished: true,
+    })
+  }
+
   // Cards analysed before their catalogue item existed: look them up again.
   async function recheckMatches() {
     const targets = [...recheckable]
@@ -3261,8 +3329,9 @@ function PendingReview({ drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onR
           <button type="button" onClick={onCreateMore}>Open Scan Queue</button>
         </div>
       ) : null}
-      {aiRows.length ? (
+      {aiRows.length || orientationTargets.length ? (
         <div className="review-bulk-bar">
+          {orientationTargets.length ? <button type="button" onClick={fixOrientation} disabled={bulkRunning || aiBusy} title="Stack scans from before the AI orientation check: turn them the right way up and the right way round (uses the local AI, ~4 s per card)">Fix orientation ({orientationTargets.length})</button> : null}
           {linkableCopies.length ? (
             <span className="review-bulk-copies"><strong>{linkableCopies.length}</strong> {linkableCopies.length === 1 ? 'scan is a copy' : 'scans are copies'} of cards you already added.</span>
           ) : null}

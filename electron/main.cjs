@@ -10,6 +10,7 @@ const { autoUpdater } = require('electron-updater')
 const { createWorker } = require('tesseract.js')
 const { OllamaCardRecognitionProvider } = require('./cardRecognition.cjs')
 const { ScannerSession } = require('./scannerSession.cjs')
+const { rotateNativeImage } = require('./imageRotate.cjs')
 
 const execFileAsync = promisify(execFile)
 
@@ -1079,28 +1080,6 @@ ipcMain.handle('scanner:recrop', async (_event, { image, rect } = {}) => {
 // Scan strip centred on the feeder: fits a standard card either way round.
 const FEED_STRIP_IN = { width: 4, height: 4 }
 
-// Rotates a nativeImage clockwise by 0/90/180/270 degrees (BGRA bitmap copy).
-function rotateNativeImage(image, degrees) {
-  const turn = ((degrees % 360) + 360) % 360
-  if (!turn) return image
-  const { width, height } = image.getSize()
-  const source = image.toBitmap()
-  const target = Buffer.alloc(source.length)
-  const outWidth = turn === 180 ? width : height
-  const outHeight = turn === 180 ? height : width
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      let tx
-      let ty
-      if (turn === 90) { tx = height - 1 - y; ty = x }
-      else if (turn === 180) { tx = width - 1 - x; ty = height - 1 - y }
-      else { tx = y; ty = width - 1 - x }
-      source.copy(target, (ty * outWidth + tx) * 4, (y * width + x) * 4, (y * width + x) * 4 + 4)
-    }
-  }
-  return nativeImage.createFromBitmap(target, { width: outWidth, height: outHeight })
-}
-
 async function rotateImageFile(filePath, degrees) {
   if (!degrees || !filePath || !existsSync(filePath)) return
   const image = nativeImage.createFromPath(filePath)
@@ -1275,8 +1254,9 @@ ipcMain.handle('scanner:feed-stack', async (event, options = {}) => {
   }
 })
 
-// Manual orientation fix from review: rotates the master and raw scan.
-ipcMain.handle('scanner:rotate-image', async (_event, image, degrees) => {
+// Rotates a scan (master and raw) into new files, so the renderer never
+// shows a cached copy. Returns the updated image reference.
+async function rotateScanImageObject(image, degrees) {
   const imagePath = resolveScanImagePath(image)
   const turn = ((Number(degrees) % 360) + 360) % 360
   if (![90, 180, 270].includes(turn)) return image
@@ -1303,6 +1283,47 @@ ipcMain.handle('scanner:rotate-image', async (_event, image, degrees) => {
     rawUrl: rawPath ? getScanImageUrl(path.basename(rawPath), rawPath) : '',
     displayPath: '',
     displayUrl: '',
+  }
+}
+
+// Manual orientation fix from review.
+ipcMain.handle('scanner:rotate-image', (_event, image, degrees) => rotateScanImageObject(image, degrees))
+
+// Orientation of a stack-scanned pair, checked by the local AI where the
+// text-based check was weak: which side is the back (sides), and which way up
+// each side goes (upright). Returns the (possibly swapped/rotated) images.
+async function checkCardImages({ front, back, checkSides = false, checkUpright = {} }, signal) {
+  let images = { front, back }
+  let flags = { front: Boolean(checkUpright.front), back: Boolean(checkUpright.back) }
+  let sidesSwapped = false
+  const turns = { front: 0, back: 0 }
+  if (checkSides && front && back) {
+    const backIndex = await cardRecognition.backSideIndex({ firstPath: resolveScanImagePath(front), secondPath: resolveScanImagePath(back) }, signal).catch(() => null)
+    if (backIndex === 1) {
+      sidesSwapped = true
+      images = { front: back, back: front }
+      flags = { front: flags.back, back: flags.front }
+    }
+  }
+  for (const side of ['front', 'back']) {
+    if (!flags[side] || !images[side]) continue
+    const turn = await cardRecognition.uprightTurn(resolveScanImagePath(images[side]), signal, side).catch((error) => {
+      if (error?.code === 'CANCELLED' || signal?.aborted) throw error
+      return null
+    })
+    if (turn) {
+      images[side] = await rotateScanImageObject(images[side], turn)
+      turns[side] = turn
+    }
+  }
+  return { images, sidesSwapped, turns, changed: sidesSwapped || Boolean(turns.front || turns.back) }
+}
+
+ipcMain.handle('ai:check-orientation', async (_event, request = {}) => {
+  try {
+    return { ok: true, ...(await checkCardImages(request)) }
+  } catch (error) {
+    return { ok: false, code: error.code || 'AI_ERROR', message: error.message || 'The orientation check failed.' }
   }
 })
 
@@ -1357,7 +1378,7 @@ ipcMain.handle('ai:cancel-install', () => {
 
 // Returns { ok, result, model, durationMs } or { ok: false, code, message } so
 // one failed card never throws across the batch loop in the renderer.
-ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false } = {}) => {
+ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false, checkUpright = null } = {}) => {
   const controller = new AbortController()
   if (jobId) recognitionJobs.set(jobId, controller)
   try {
@@ -1369,18 +1390,24 @@ ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSi
     } catch (error) {
       return { ok: false, code: 'IMAGE_MISSING', message: error.message }
     }
-    // Stack scans whose front/back call was not clear-cut: confirm with the AI
-    // and swap before identifying if the back came first.
-    let sidesSwapped = false
-    if (checkSides && frontPath && backPath) {
-      const backIndex = await cardRecognition.backSideIndex({ firstPath: frontPath, secondPath: backPath }, controller.signal).catch(() => null)
-      if (backIndex === 1) {
-        sidesSwapped = true
-        ;[frontPath, backPath] = [backPath, frontPath]
-      }
+    // Stack scans: where the text-based front/back or orientation call was
+    // weak, the AI checks it first, so the card is identified (and later
+    // saved) the right way round and the right way up.
+    let orientation = null
+    if (checkSides || checkUpright?.front || checkUpright?.back) {
+      orientation = await checkCardImages({ front, back, checkSides, checkUpright: checkUpright || {} }, controller.signal)
+      frontPath = orientation.images.front ? resolveScanImagePath(orientation.images.front) : ''
+      backPath = orientation.images.back ? resolveScanImagePath(orientation.images.back) : ''
     }
     const output = await cardRecognition.recognizeCard({ frontPath, backPath }, controller.signal)
-    return { ok: true, ...output, sidesSwapped, provider: cardRecognition.id, providerLabel: cardRecognition.label }
+    return {
+      ok: true,
+      ...output,
+      sidesSwapped: Boolean(orientation?.sidesSwapped),
+      orientation: orientation ? { images: orientation.changed ? orientation.images : null, turns: orientation.turns } : null,
+      provider: cardRecognition.id,
+      providerLabel: cardRecognition.label,
+    }
   } catch (error) {
     return { ok: false, code: error.code || 'AI_ERROR', message: error.message || 'Local AI analysis failed.' }
   } finally {
