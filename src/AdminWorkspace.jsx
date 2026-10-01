@@ -861,6 +861,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
               onAddToQueue: addCardToQueue,
               onAnalyseSoon: analyseSoon,
               feeder: { state: feedState, start: startFeed, stop: stopFeed },
+              // File names every card in the queue uses (kept by the clean-up).
+              referencedScanFiles: () => scanDraftsRef.current.flatMap((draft) => [draft.frontImage, draft.backImage]).flatMap((image) => [image?.path, image?.rawPath, image?.displayPath]).filter(Boolean).map((file) => String(file).split(/[\\/]/).pop()),
               onRemove: deleteScanDraft,
               onAnalyse: analyseCards,
               onCancel: cancelAnalysis,
@@ -2992,7 +2994,7 @@ function ScanIntake({ onCreateDraft, ai }) {
         {scanMode === 'card' ? (
           <p className="scan-mode-note">Place the card in the {CARD_POSITIONS.find((entry) => entry.id === cardPosition)?.hint || 'calibrated position'} of the scanner glass, portrait or landscape.</p>
         ) : null}
-        <ScanStorageSettings />
+        <ScanStorageSettings getReferenced={ai.referencedScanFiles} />
         <details className="scanner-calibration">
           <summary>Scanner calibration</summary>
           <div className="scanner-calibration-grid">
@@ -3067,7 +3069,7 @@ function formatStorageBytes(bytes) {
 }
 
 // Where scan images are saved, with a way to move them to another drive.
-function ScanStorageSettings() {
+function ScanStorageSettings({ getReferenced = () => [] }) {
   const api = adminDesktopApi()
   const supported = typeof api.getScanStorage === 'function'
   const [info, setInfo] = useState(null)
@@ -3075,10 +3077,17 @@ function ScanStorageSettings() {
   const [progress, setProgress] = useState(null)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [unused, setUnused] = useState(null)
+
+  async function checkUnused() {
+    if (typeof api.unusedScans !== 'function') return
+    try { setUnused(await api.unusedScans({ referencedNames: getReferenced() })) } catch { setUnused(null) }
+  }
 
   useEffect(() => {
     if (!supported) return undefined
     api.getScanStorage().then(setInfo).catch(() => setInfo(null))
+    checkUnused()
     return api.onMoveScansProgress?.((next) => setProgress(next))
   }, [])
 
@@ -3094,6 +3103,26 @@ function ScanStorageSettings() {
       if (!next.canceled) setMessage(`New scans will be saved in ${next.dir}.`)
     } catch (chooseError) {
       setError(chooseError.message || 'Could not use that folder.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function deleteUnused() {
+    if (!unused?.files) return
+    const confirmed = window.confirm(`Delete ${unused.files} scan file${unused.files === 1 ? '' : 's'} (${formatStorageBytes(unused.bytes)}) that no card uses? Cards in review and approved cards are not affected. This can't be undone.`)
+    adminDesktopApi().refocusWindow?.()
+    if (!confirmed) return
+    setBusy('unused')
+    setError('')
+    setMessage('')
+    try {
+      const result = await api.unusedScans({ referencedNames: getReferenced(), remove: true })
+      setMessage(`Deleted ${result.deleted} unused scan file${result.deleted === 1 ? '' : 's'}, freeing ${formatStorageBytes(result.freedBytes)}.`)
+      setInfo(await api.getScanStorage())
+      await checkUnused()
+    } catch (unusedError) {
+      setError(unusedError.message || 'Could not delete the unused files.')
     } finally {
       setBusy('')
     }
@@ -3127,8 +3156,12 @@ function ScanStorageSettings() {
         {info?.elsewhereFiles ? (
           <p className="scan-mode-note">{info.elsewhereFiles} earlier scan file{info.elsewhereFiles === 1 ? '' : 's'} ({formatStorageBytes(info.elsewhereBytes)}) {info.elsewhereFiles === 1 ? 'is' : 'are'} still in a previous folder. They keep working there; move them to free up that drive.</p>
         ) : null}
+        {unused?.files ? (
+          <p className="scan-mode-note">{unused.files} scan file{unused.files === 1 ? '' : 's'} ({formatStorageBytes(unused.bytes)}) {unused.files === 1 ? "isn't" : "aren't"} used by any card (removed or declined cards, old versions from rotating or re-cropping, interrupted stacks).</p>
+        ) : null}
         <div className="scan-storage-actions">
           <button type="button" onClick={choose} disabled={Boolean(busy)}>{busy === 'choose' ? 'Choosing…' : 'Change folder…'}</button>
+          {unused?.files ? <button type="button" onClick={deleteUnused} disabled={Boolean(busy)}>{busy === 'unused' ? 'Deleting…' : `Delete unused files (${formatStorageBytes(unused.bytes)})`}</button> : null}
           {info?.elsewhereFiles ? (
             <button type="button" onClick={move} disabled={Boolean(busy)}>
               {busy === 'move' ? `Moving… ${progress?.done || 0} of ${progress?.total || info.elsewhereFiles}` : `Move ${info.elsewhereFiles} earlier scan${info.elsewhereFiles === 1 ? '' : 's'} here`}

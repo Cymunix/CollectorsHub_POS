@@ -943,6 +943,52 @@ ipcMain.handle('scanner:compact-scans', async (_event, { front = null, back = nu
   return { frontImage, backImage, freedBytes }
 })
 
+// Scan files no card refers to any more (removed or declined cards, old
+// versions left by rotating/re-cropping, interrupted stacks). A file is kept
+// if any card in the renderer's queue or in the saved store mentions it, or if
+// it is less than a day old (a stack may still be scanning or analysing).
+const UNUSED_MIN_AGE_MS = 24 * 60 * 60 * 1000
+
+async function unusedScanFiles(referencedNames = []) {
+  const keep = new Set(referencedNames.map((name) => String(name).toLowerCase()))
+  let storeText = ''
+  try { storeText = (await readFile(getStoreFile(), 'utf8')).toLowerCase() } catch {}
+  const now = Date.now()
+  const unused = []
+  for (const dir of allScanDirs()) {
+    let entries = []
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      if (!entry.isFile() || !/\.(png|jpe?g|bmp)$/i.test(entry.name)) continue
+      const name = entry.name.toLowerCase()
+      if (keep.has(name) || storeText.includes(name)) continue
+      const file = path.join(dir, entry.name)
+      let info
+      try { info = await stat(file) } catch { continue }
+      if (now - info.mtimeMs < UNUSED_MIN_AGE_MS) continue
+      unused.push({ file, bytes: info.size })
+    }
+  }
+  return unused
+}
+
+ipcMain.handle('scanner:unused-scans', async (_event, { referencedNames = [], remove = false } = {}) => {
+  const unused = await unusedScanFiles(referencedNames)
+  let deleted = 0
+  let freedBytes = 0
+  if (remove) {
+    for (const { file, bytes } of unused) {
+      try {
+        await unlink(file)
+        deleted += 1
+        freedBytes += bytes
+      } catch {}
+    }
+    await logScanner({ event: 'scan-storage-unused-deleted', deleted, freedBytes })
+  }
+  return { files: unused.length, bytes: unused.reduce((sum, entry) => sum + entry.bytes, 0), deleted, freedBytes }
+})
+
 let moveInProgress = false
 
 // Moves scans from earlier folders into the current one (copy, check size,

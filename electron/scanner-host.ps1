@@ -41,7 +41,7 @@ $script:bedHeightIn = 0
 $WIA_WARMING_UP = 0x80210007
 $WIA_BUSY = 0x80210006
 $WIA_OFFLINE = 0x80210005
-$WIA_COVER_OPEN = 0x8021000C
+$WIA_COVER_OPEN = 0x80210016
 $WIA_NO_DEVICE = 0x80210015
 $WIA_DEVICE_COMMUNICATION = 0x8021000A
 
@@ -129,6 +129,17 @@ function Invoke-Feed($request) {
       '0x80210020' { 'DOUBLE_FEED' }
       '0x80210004' { 'PAPER_PROBLEM' }
       '0x80210006' { 'BUSY' }
+      '0x8021000D' { 'BUSY' }
+      '0x80210016' { 'COVER_OPEN' }
+      '0x80210005' { 'OFFLINE' }
+      '0x8021000A' { 'OFFLINE' }
+      # General error, user intervention, driver exception, bad driver response,
+      # and the plain E_FAIL the driver returns while stuck after one of them.
+      '0x80210001' { 'SCANNER_STUCK' }
+      '0x80210008' { 'SCANNER_STUCK' }
+      '0x8021000E' { 'SCANNER_STUCK' }
+      '0x8021000F' { 'SCANNER_STUCK' }
+      '0x80004005' { 'SCANNER_STUCK' }
       default { 'FEED_FAILED' }
     }
     $result.message = switch ($result.code) {
@@ -136,8 +147,11 @@ function Invoke-Feed($request) {
       'PAPER_JAM' { 'A card jammed in the FastFoto. Clear it, reload the remaining cards and scan again.' }
       'DOUBLE_FEED' { 'Two cards fed at once. Reload the remaining cards and scan again.' }
       'PAPER_PROBLEM' { 'The FastFoto reported a feeding problem. Check the cards and scan again.' }
-      'BUSY' { 'The FastFoto is busy (another program may be using it).' }
-      default { "The FastFoto scan failed ($hr)." }
+      'BUSY' { 'The FastFoto is busy: another program (such as Epson FastFoto or ScanSmart) may be using it. Close it and scan again.' }
+      'COVER_OPEN' { 'The FastFoto cover is open. Close it and scan again.' }
+      'OFFLINE' { 'CollectorsHub lost contact with the FastFoto. Check it is on and connected, then scan again.' }
+      'SCANNER_STUCK' { "The FastFoto stopped responding ($hr). Check for a card stuck in the feeder, then turn the FastFoto off, wait 10 seconds, turn it back on and scan again." }
+      default { "The FastFoto scan failed ($hr). If it keeps failing, turn the FastFoto off and on." }
     }
   } elseif ([int]$result.pages -eq 0 -and -not $result.cancelled) {
     $result.ok = $false

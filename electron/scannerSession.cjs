@@ -236,9 +236,18 @@ class ScannerSession extends EventEmitter {
     try {
       const reply = await this.request({ op: 'feed', dpi, widthIn, heightIn, outDir, cancelPath }, FEED_TIMEOUT_MS, onPage)
       if (reply.feederName) this.feederName = reply.feederName
+      // After the driver gets stuck, start the next scan from a fresh scanner
+      // process (once the FastFoto itself has been reset).
+      if (!reply.ok && ['SCANNER_STUCK', 'OFFLINE', 'FEED_FAILED'].includes(reply.code)) this.restartAfterFeed = true
       return reply
     } finally {
       this.feeding = false
+      if (this.restartAfterFeed) {
+        this.restartAfterFeed = false
+        this.kill()
+        // The next request starts a new scanner process.
+        this.setState('ready')
+      }
       if (this.closeWhenIdle) {
         this.closeWhenIdle = false
         this.close()
