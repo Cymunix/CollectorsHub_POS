@@ -249,6 +249,8 @@ function normaliseResult(raw) {
     else if (types.includes('integer')) result[key] = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : null
     else result[key] = String(value).trim() || null
   })
+  // Base-set cards have no named collection; the catalogue calls it "Base".
+  if (!result.collection && !/insert|autograph|patch|relic/i.test(String(result.card_type || ''))) result.collection = 'Base'
   // App-side guard: a barcode is 8-14 digits; anything else (e.g. "No. 42") is dropped.
   const barcodeDigits = String(result.barcodes || '').replace(/[\s-]/g, '')
   result.barcodes = /^\d{8,14}$/.test(barcodeDigits) ? barcodeDigits : null

@@ -1602,6 +1602,19 @@ export const AI_FIELD_FOR_REVIEW_KEY = {
   finish: 'finish',
 }
 
+// A card from the release's base set: not an insert/autograph/relic card and
+// not in a named collection.
+export function isBaseSetCard(card = {}) {
+  return !/insert|autograph|patch|relic/i.test(String(card.card_type || ''))
+}
+
+// "Base" and an empty collection are the same thing (older catalogue items
+// were saved with it blank).
+function collectionKey(value) {
+  const text = matchText(value)
+  return text === 'base' ? '' : text
+}
+
 export function recognitionResult(draft) {
   return draft?.recognition?.status === 'done' ? draft.recognition.result || null : null
 }
@@ -1663,6 +1676,8 @@ export function scannedFieldValue(draft, field) {
     // The AI reading replaces OCR and the intake form's defaults entirely: a
     // null means "not determinable", not "fall back to a guess".
     value = aiValueText(ai[AI_FIELD_FOR_REVIEW_KEY[field.key]])
+    // Base-set cards have no named collection; the catalogue calls it "Base".
+    if (field.key === 'collection' && !value && isBaseSetCard(ai)) value = 'Base'
   } else if (field.scan) {
     value = reviewText(field.scan(draft?.metadata || {}))
   } else {
@@ -2253,7 +2268,7 @@ function serialDenominator(value) {
 // Refinement fields that separate variants of the same player/number/release.
 // Each returns 'match', 'mismatch' or 'unknown'.
 const REFINE_FIELDS = [
-  { key: 'collection', weight: 10, compare: (card, item) => matchText(card.collection) === matchText(item.dynamic_fields?.collection) ? 'match' : 'mismatch' },
+  { key: 'collection', weight: 10, compare: (card, item) => collectionKey(card.collection) === collectionKey(item.dynamic_fields?.collection) ? 'match' : 'mismatch' },
   // No parallel read from the card means a base card: it matches items with no parallel.
   { key: 'parallel', weight: 10, compare: (card, item) => matchText(card.parallel) === matchText(item.dynamic_fields?.parallel) ? 'match' : 'mismatch' },
   { key: 'variation', weight: 4, compare: (card, item) => matchText(card.variation) === matchText(item.dynamic_fields?.variation) ? 'match' : 'mismatch' },
