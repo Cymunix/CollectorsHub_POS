@@ -354,6 +354,50 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     if (draft?.cloud) deleteCloudReviewDraft(draft).catch(() => {})
   }
 
+  // ---- Local scan archive: once a card is approved (its photos are in the
+  // catalogue) its large local files are replaced by one small JPEG per side.
+  // Runs in the background, one card at a time; cards in review are untouched.
+  const compactingRef = useRef(false)
+
+  async function compactApprovedScans() {
+    const api = adminDesktopApi()
+    if (compactingRef.current || typeof api.compactScans !== 'function') return
+    compactingRef.current = true
+    try {
+      for (;;) {
+        const draft = scanDraftsRef.current.find((entry) => (
+          COMPLETED_SCAN_REVIEW_STATUSES.has(entry.status)
+          && [entry.frontImage, entry.backImage].some((image) => image?.path && !image.archived)
+        ))
+        if (!draft) break
+        let result = null
+        try { result = await api.compactScans({ front: draft.frontImage || null, back: draft.backImage || null }) } catch { result = null }
+        // Marked archived even if a file couldn't be compacted (e.g. already
+        // missing), so a card is only ever tried once.
+        const archived = (before, after) => {
+          if (!before) return before
+          const next = { ...(after || before), archived: true }
+          delete next.freedBytes
+          // Already uploaded to the cloud queue: don't upload the archive copy.
+          if (before.cloudPath) { next.cloudPath = before.cloudPath; next.cloudSource = next.path }
+          return next
+        }
+        await saveScanDrafts((drafts) => drafts.map((entry) => (
+          entry.id === draft.id
+            ? { ...entry, frontImage: archived(entry.frontImage, result?.frontImage), backImage: archived(entry.backImage, result?.backImage) }
+            : entry
+        )), { fromCloud: true })
+      }
+    } finally {
+      compactingRef.current = false
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(compactApprovedScans, 4000)
+    return () => window.clearTimeout(timer)
+  }, [scanDrafts])
+
   // ---- Cloud review queue: analysed cards are uploaded so they can be
   // reviewed from any machine signed in as a platform admin; changes made on
   // one machine reach the others within ~30 s.

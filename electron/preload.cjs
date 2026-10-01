@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
     return () => ipcRenderer.removeListener('scanner:status', listener)
   },
   recropScan: (image, rect) => ipcRenderer.invoke('scanner:recrop', { image, rect }),
+  compactScans: (images) => ipcRenderer.invoke('scanner:compact-scans', images),
   getScanStorage: () => ipcRenderer.invoke('scanner:get-storage'),
   chooseScanStorage: () => ipcRenderer.invoke('scanner:choose-storage'),
   moveScans: () => ipcRenderer.invoke('scanner:move-scans'),

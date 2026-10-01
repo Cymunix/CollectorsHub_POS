@@ -880,6 +880,69 @@ ipcMain.handle('scanner:choose-storage', async () => {
   return scanStorageInfo()
 })
 
+// After a card is approved its photos are in the catalogue, so the local
+// files only need to be a small archive: each side becomes one JPEG (long edge
+// ARCHIVE_LONG_EDGE) and the lossless master, raw scan and display copy are
+// deleted (~15-20 MB per card down to ~0.5 MB).
+const ARCHIVE_LONG_EDGE = 1200
+const ARCHIVE_QUALITY = 85
+
+async function compactScanImage(image) {
+  if (!image?.path || image.archived) return image
+  let masterPath
+  try {
+    masterPath = resolveScanImagePath(image)
+  } catch {
+    return image
+  }
+  const master = nativeImage.createFromPath(masterPath)
+  if (master.isEmpty()) return image
+  const { width, height } = master.getSize()
+  const scale = Math.min(1, ARCHIVE_LONG_EDGE / Math.max(width, height))
+  const small = scale < 1 ? master.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'best' }) : master
+  const archivePath = path.join(path.dirname(masterPath), `${path.basename(masterPath).replace(/\.[^.]+$/, '')}.archive.jpg`)
+  await writeFile(archivePath, small.toJPEG(ARCHIVE_QUALITY))
+  // The archive is written; now remove the large files (each only if it is a
+  // CollectorsHub scan file, never anything else).
+  let freed = 0
+  for (const candidate of [masterPath, image.rawPath, image.displayPath]) {
+    if (!candidate) continue
+    let file
+    try { file = resolveScanImagePath({ path: candidate }) } catch { continue }
+    if (path.resolve(file) === path.resolve(archivePath)) continue
+    try {
+      freed += (await stat(file)).size
+      await unlink(file)
+    } catch {}
+  }
+  return {
+    ...image,
+    path: archivePath,
+    url: getScanImageUrl(path.basename(archivePath), archivePath),
+    fileName: path.basename(archivePath),
+    rawPath: '',
+    rawUrl: '',
+    displayPath: '',
+    displayUrl: '',
+    archived: true,
+    freedBytes: freed,
+  }
+}
+
+ipcMain.handle('scanner:compact-scans', async (_event, { front = null, back = null } = {}) => {
+  let freedBytes = 0
+  const compact = async (image) => {
+    const next = await compactScanImage(image)
+    if (next === image || !next) return next
+    freedBytes += next.freedBytes || 0
+    const { freedBytes: _freed, ...rest } = next
+    return rest
+  }
+  const frontImage = await compact(front)
+  const backImage = await compact(back)
+  return { frontImage, backImage, freedBytes }
+})
+
 let moveInProgress = false
 
 // Moves scans from earlier folders into the current one (copy, check size,
