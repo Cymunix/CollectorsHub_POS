@@ -101,7 +101,7 @@ export function scanConfidence(draft, { copies = [], exactMatch = null } = {}) {
   let readiness = 'add'
   if (matchStatus === 'exact') readiness = 'link'
   else if (matchStatus === 'likely' || matchStatus === 'multiple') readiness = 'check'
-  else if (unresolved.property || unresolved.subset) readiness = 'needs-set'
+  else if (unresolved.property || unresolved.subset || unresolved.franchise || unresolved.subcategory) readiness = 'needs-set'
 
   return { score, tier, reasons, readiness }
 }

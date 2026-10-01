@@ -42,6 +42,7 @@ import {
   identifyScannedDraft,
   analyseRecognizedCard,
   recognizedCardKey,
+  TRADING_DYNAMIC_KEYS,
   swapItemFrontBack,
   CATALOGUE_EDIT_CHILDREN,
   CATALOGUE_EDIT_GROUPS,
@@ -1263,6 +1264,9 @@ const DYNAMIC_FIELD_CHOICES = {
 }
 // Sports Cards card-metadata keys shown even when the item has no value yet.
 const SPORTS_DYNAMIC_KEYS = ['collection', 'card_type', 'team', 'rookie', 'parallel', 'variation', 'serial_numbering', 'autograph', 'autograph_type', 'relic', 'finish', 'source']
+// Trading Cards: the website's card-metadata keys (traits/abilities are lists).
+const TRADING_EDITOR_KEYS = ['collection', 'includes', 'included_in', 'source', ...TRADING_DYNAMIC_KEYS]
+const LIST_DYNAMIC_KEYS = new Set(['traits', 'abilities'])
 const TAXONOMY_PARENT = {
   subcategory: 'category_id',
   franchise: 'subcategory_id',
@@ -1278,20 +1282,22 @@ function dynamicFieldLabel(key) {
 }
 
 function dynamicRowKind(value) {
+  // A list of words/sentences (traits, abilities): edited one per line.
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) return 'list'
   if (value !== null && typeof value === 'object') return 'json'
   if (typeof value === 'boolean') return 'boolean'
   if (typeof value === 'number') return 'number'
   return 'text'
 }
 
-function dynamicRowsFrom(dynamicFields = {}, isSports = false) {
+// presetKeys: the category's card-metadata keys, shown even when empty.
+function dynamicRowsFrom(dynamicFields = {}, presetKeys = []) {
   const rows = Object.entries(dynamicFields || {}).map(([key, value]) => {
     const kind = dynamicRowKind(value)
-    return { key, kind, value: kind === 'json' ? JSON.stringify(value, null, 2) : value == null ? '' : String(value), existed: true }
+    const text = kind === 'json' ? JSON.stringify(value, null, 2) : kind === 'list' ? value.join('\n') : value == null ? '' : String(value)
+    return { key, kind, value: text, existed: true }
   })
-  if (isSports) {
-    SPORTS_DYNAMIC_KEYS.filter((key) => !rows.some((row) => row.key === key)).forEach((key) => rows.push({ key, kind: 'text', value: '', existed: false }))
-  }
+  presetKeys.filter((key) => !rows.some((row) => row.key === key)).forEach((key) => rows.push({ key, kind: LIST_DYNAMIC_KEYS.has(key) ? 'list' : 'text', value: '', existed: false }))
   return rows.sort((a, b) => a.key.localeCompare(b.key))
 }
 
@@ -1308,6 +1314,9 @@ function dynamicFieldsFromRows(rows) {
       } catch {
         throw new Error(`"${key}" is not valid JSON.`)
       }
+    } else if (row.kind === 'list') {
+      const entries = row.value.split('\n').map((entry) => entry.trim()).filter(Boolean)
+      if (entries.length || row.existed) result[key] = entries
     } else if (row.kind === 'boolean') {
       result[key] = row.value === 'true'
     } else if (row.kind === 'number') {
@@ -1352,10 +1361,12 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
   const categoryName = (options.category || []).find((option) => option.id === values?.category_id)?.name
     || names[`category:${values?.category_id}`] || ''
   const isSports = categoryName.toLowerCase() === 'sports cards'
+  const isTrading = categoryName.toLowerCase() === 'trading cards'
+  const presetKeys = isSports ? SPORTS_DYNAMIC_KEYS : isTrading ? TRADING_EDITOR_KEYS : []
 
   useEffect(() => {
-    if (values) setDynamicRows(dynamicRowsFrom(item.dynamic_fields, isSports))
-  }, [item.item_id, isSports, values === null])
+    if (values) setDynamicRows(dynamicRowsFrom(item.dynamic_fields, presetKeys))
+  }, [item.item_id, isSports, isTrading, values === null])
 
   useEffect(() => {
     if (!values) return undefined
@@ -1440,6 +1451,7 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
 
   function renderDynamicInput(row, index) {
     const choices = DYNAMIC_FIELD_CHOICES[row.key]
+    if (row.kind === 'list') return <textarea rows={Math.min(6, row.value.split('\n').length + 1)} value={row.value} onChange={(event) => setDynamic(index, { value: event.target.value })} placeholder="One per line" />
     if (row.kind === 'json') return <textarea className="catalogue-editor-json" rows={Math.min(8, row.value.split('\n').length + 1)} value={row.value} onChange={(event) => setDynamic(index, { value: event.target.value })} spellCheck="false" />
     if (row.kind === 'boolean') {
       return (
@@ -1461,7 +1473,7 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
     return <input type={row.kind === 'number' ? 'number' : 'text'} value={row.value} onChange={(event) => setDynamic(index, { value: event.target.value })} />
   }
 
-  const originalRows = dynamicRowsFrom(item.dynamic_fields, isSports)
+  const originalRows = dynamicRowsFrom(item.dynamic_fields, presetKeys)
   return (
     <div className="catalogue-editor">
       {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
@@ -1478,7 +1490,7 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
           </tbody>
         ))}
         <tbody>
-          <tr className="scan-review-group"><th colSpan={2}>{isSports ? 'Card Metadata & Other Data' : 'Category Data'} <small>(dynamic_fields)</small></th></tr>
+          <tr className="scan-review-group"><th colSpan={2}>{isSports || isTrading ? 'Card Metadata & Other Data' : 'Category Data'} <small>(dynamic_fields)</small></th></tr>
           {dynamicRows.map((row, index) => {
             const before = originalRows.find((entry) => entry.key === row.key)
             const edited = !before || before.value !== row.value
@@ -3592,8 +3604,8 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           ...draft.recognition,
           taxonomy: {
             ...taxonomy,
-            ids: { ...(taxonomy.ids || {}), subset_id: choice.subset.id, property_id: choice.property.id },
-            names: { ...(taxonomy.names || {}), subset: choice.subset.name, property: choice.property.name },
+            ids: { ...(taxonomy.ids || {}), subcategory_id: choice.subcategory.id, franchise_id: choice.franchise.id, subset_id: choice.subset.id, property_id: choice.property.id },
+            names: { ...(taxonomy.names || {}), subcategory: choice.subcategory.name, franchise: choice.franchise.name, subset: choice.subset.name, property: choice.property.name },
             unresolved: {},
           },
         },
@@ -4008,75 +4020,114 @@ function BulkAddDialog({ drafts, confidenceOf, onClose, onConfirm, mode = 'add' 
 function SetSetupDialog({ group, onClose, onApply }) {
   const taxonomy = group.taxonomy || {}
   const ids = taxonomy.ids || {}
+  const unresolved = taxonomy.unresolved || {}
+  const trading = taxonomy.category === 'Trading Cards'
   const NEW = '__new__'
-  const [options, setOptions] = useState({ subset: [], property: [] })
-  const [subsetId, setSubsetId] = useState(ids.subset_id || '')
-  const [subsetName, setSubsetName] = useState(group.subsetText || '')
-  const [propertyId, setPropertyId] = useState('')
-  const [propertyName, setPropertyName] = useState(group.label || '')
+  // Each level: the chosen option id (or NEW), and the name for a new one.
+  const LEVELS = [
+    { level: 'subcategory', label: trading ? 'Subcategory (brand)' : 'Subcategory (sport)', text: unresolved.subcategory || taxonomy.names?.subcategory || '' },
+    { level: 'franchise', label: trading ? 'Franchise' : 'Franchise (league)', text: unresolved.franchise || taxonomy.names?.franchise || '' },
+    { level: 'subset', label: trading ? 'Subfranchise (era / storyline)' : 'Product line (subfranchise)', text: unresolved.subset || group.subsetText || '' },
+    { level: 'property', label: trading ? 'Property (release)' : 'Set (property)', text: unresolved.property || group.label || '' },
+  ]
+  const [chosen, setChosen] = useState(() => ({
+    subcategory: ids.subcategory_id || '',
+    franchise: ids.franchise_id || '',
+    subset: ids.subset_id || '',
+    property: '',
+  }))
+  const [names, setNames] = useState(() => Object.fromEntries(LEVELS.map((entry) => [entry.level, entry.text])))
+  const [options, setOptions] = useState({ subcategory: [], franchise: [], subset: [], property: [] })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const real = (id) => (id && id !== NEW ? id : '')
 
   useEffect(() => {
     let cancelled = false
-    loadCatalogueTaxonomyOptions({ categoryId: taxonomy.categoryId, subcategoryId: ids.subcategory_id, franchiseId: ids.franchise_id, subsetId: subsetId && subsetId !== NEW ? subsetId : '' })
+    loadCatalogueTaxonomyOptions({ categoryId: taxonomy.categoryId, subcategoryId: real(chosen.subcategory), franchiseId: real(chosen.franchise), subsetId: real(chosen.subset) })
       .then((next) => {
         if (cancelled) return
-        setOptions({ subset: next.subset || [], property: next.property || [] })
-        // Default to an existing option close to the AI's wording ("Donruss
-        // Football" is the catalogue's "Panini - Donruss Football"), else "new",
-        // so the same product line or set isn't created twice.
-        setSubsetId((current) => current || closestTaxonomyOption(next.subset || [], group.subsetText)?.id || NEW)
-        setPropertyId((current) => current || closestTaxonomyOption(next.property || [], group.label)?.id || NEW)
+        setOptions({ subcategory: next.subcategory || [], franchise: next.franchise || [], subset: next.subset || [], property: next.property || [] })
+        // Fill each undecided level whose parent is decided: an existing
+        // option close to the AI's wording, else "new" (so nothing is created
+        // twice under a slightly different name).
+        setChosen((current) => {
+          const result = { ...current }
+          const parentDecided = { subcategory: true, franchise: Boolean(result.subcategory), subset: Boolean(result.franchise), property: Boolean(result.subset) }
+          for (const entry of LEVELS) {
+            if (result[entry.level] || !parentDecided[entry.level]) continue
+            const list = { subcategory: next.subcategory, franchise: next.franchise, subset: next.subset, property: next.property }[entry.level] || []
+            // Only fill one level per load: the next level needs this one's options.
+            result[entry.level] = closestTaxonomyOption(list, entry.text)?.id || NEW
+            break
+          }
+          return result
+        })
       })
-      .catch((loadError) => { if (!cancelled) setError(loadError.message || 'Could not load the catalogue sets.') })
+      .catch((loadError) => { if (!cancelled) setError(loadError.message || 'Could not load the catalogue taxonomy.') })
     return () => { cancelled = true }
-  }, [subsetId])
+  }, [chosen.subcategory, chosen.franchise, chosen.subset])
+
+  function choose(level, value) {
+    const order = ['subcategory', 'franchise', 'subset', 'property']
+    setChosen((current) => {
+      const next = { ...current, [level]: value }
+      // Changing a level resets the levels under it.
+      order.slice(order.indexOf(level) + 1).forEach((child) => { next[child] = '' })
+      return next
+    })
+  }
 
   async function apply() {
     setBusy(true)
     setError('')
     try {
-      const parents = { category: taxonomy.category || 'Sports Cards', subcategoryId: ids.subcategory_id, franchiseId: ids.franchise_id }
-      const subset = subsetId === NEW
-        ? await createTaxonomyOption('subset', subsetName, parents)
-        : options.subset.find((option) => option.id === subsetId)
-      if (!subset) throw new Error('Choose a product line.')
-      const property = propertyId === NEW
-        ? await createTaxonomyOption('property', propertyName, { ...parents, subsetId: subset.id })
-        : options.property.find((option) => option.id === propertyId)
-      if (!property) throw new Error('Choose a set.')
-      await onApply({ subset, property })
+      const category = taxonomy.category || 'Sports Cards'
+      const pick = (level) => options[level].find((option) => option.id === chosen[level])
+      const subcategory = chosen.subcategory === NEW ? await createTaxonomyOption('subcategory', names.subcategory, { category }) : pick('subcategory')
+      if (!subcategory) throw new Error('Choose a subcategory.')
+      const franchise = chosen.franchise === NEW ? await createTaxonomyOption('franchise', names.franchise, { category, subcategoryId: subcategory.id }) : pick('franchise')
+      if (!franchise) throw new Error('Choose a franchise.')
+      const subset = chosen.subset === NEW ? await createTaxonomyOption('subset', names.subset, { category, subcategoryId: subcategory.id, franchiseId: franchise.id }) : pick('subset')
+      if (!subset) throw new Error('Choose a subfranchise.')
+      const property = chosen.property === NEW ? await createTaxonomyOption('property', names.property, { category, subcategoryId: subcategory.id, franchiseId: franchise.id, subsetId: subset.id }) : pick('property')
+      if (!property) throw new Error('Choose a property.')
+      await onApply({ subcategory, franchise, subset, property })
     } catch (applyError) {
       setError(applyError.message || 'Could not set up the set.')
       setBusy(false)
     }
   }
 
+  const ready = LEVELS.every((entry) => chosen[entry.level] && (chosen[entry.level] !== NEW || String(names[entry.level] || '').trim()))
   return (
     <div className="register-modal set-setup-modal" role="dialog" aria-modal="true" aria-labelledby="set-setup-title">
       <section>
         <p className="admin-kicker">Set up a set · {group.drafts.length} card{group.drafts.length === 1 ? '' : 's'}</p>
         <h2 id="set-setup-title">{group.label}</h2>
-        <small>{[taxonomy.category, taxonomy.names?.subcategory, taxonomy.names?.franchise].filter(Boolean).join(' › ')}</small>
-        <label>Product line (subfranchise)
-          <select value={subsetId} onChange={(event) => { setSubsetId(event.target.value); setPropertyId('') }} disabled={busy}>
-            {options.subset.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-            <option value={NEW}>+ New product line…</option>
-          </select>
-        </label>
-        {subsetId === NEW ? <input value={subsetName} onChange={(event) => setSubsetName(event.target.value)} placeholder="e.g. Donruss Football" disabled={busy} /> : null}
-        <label>Set (property)
-          <select value={propertyId} onChange={(event) => setPropertyId(event.target.value)} disabled={busy}>
-            {subsetId !== NEW ? options.property.map((option) => <option key={option.id} value={option.id}>{option.name}</option>) : null}
-            <option value={NEW}>+ New set…</option>
-          </select>
-        </label>
-        {propertyId === NEW ? <input value={propertyName} onChange={(event) => setPropertyName(event.target.value)} placeholder="e.g. 2025 Panini Donruss Football" disabled={busy} /> : null}
+        <small>{taxonomy.category || 'Catalogue'} · choose each level once for all these cards. Existing entries with similar names are picked automatically.</small>
+        {LEVELS.map((entry, index) => {
+          const parentReady = index === 0 || Boolean(chosen[LEVELS[index - 1].level])
+          const parentIsNew = index > 0 && LEVELS.slice(0, index).some((parent) => chosen[parent.level] === NEW)
+          return (
+            <React.Fragment key={entry.level}>
+              <label>{entry.label}
+                <select value={chosen[entry.level]} onChange={(event) => choose(entry.level, event.target.value)} disabled={busy || !parentReady}>
+                  <option value="">—</option>
+                  {!parentIsNew ? options[entry.level].map((option) => <option key={option.id} value={option.id}>{option.name}</option>) : null}
+                  <option value={NEW}>+ New {entry.label.split(' (')[0].toLowerCase()}…</option>
+                </select>
+              </label>
+              {chosen[entry.level] === NEW ? (
+                <input value={names[entry.level]} onChange={(event) => setNames((current) => ({ ...current, [entry.level]: event.target.value }))} placeholder={entry.text || 'Name'} disabled={busy} />
+              ) : null}
+            </React.Fragment>
+          )
+        })}
         {error ? <p className="admin-error">{error}</p> : null}
         <div className="modal-actions">
           <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="update-prompt-primary" type="button" onClick={apply} disabled={busy || (subsetId === NEW && !subsetName.trim()) || (propertyId === NEW && !propertyName.trim())}>{busy ? 'Saving…' : `Use for ${group.drafts.length} card${group.drafts.length === 1 ? '' : 's'}`}</button>
+          <button className="update-prompt-primary" type="button" onClick={apply} disabled={busy || !ready}>{busy ? 'Saving…' : `Use for ${group.drafts.length} card${group.drafts.length === 1 ? '' : 's'}`}</button>
         </div>
       </section>
     </div>

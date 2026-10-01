@@ -1511,6 +1511,82 @@ export const SCAN_REVIEW_GROUPS = [
   },
 ]
 
+// Trading Cards (Pokémon, Magic: The Gathering, Yu-Gi-Oh!, One Piece...)
+// follows the CollectorsHub Trading Cards spec: the cascade is brand ›
+// franchise › era/storyline › release, and the card metadata uses the same
+// dynamic_fields keys as the website's Trading Cards form (traits and
+// abilities are lists).
+const TRADING_CARD_METADATA = [
+  ['evolves_from', 'Evolves From'],
+  ['evolves_to', 'Evolves To'],
+  ['attack', 'Attack'],
+  ['health', 'Health'],
+  ['damage', 'Damage'],
+  ['shields', 'Shields'],
+  ['type', 'Type'],
+  ['traits', 'Traits', { list: true }],
+  ['abilities', 'Abilities', { list: true }],
+  ['weakness', 'Weakness'],
+  ['resistance', 'Resistance'],
+  ['artist', 'Artist'],
+  ['language', 'Language'],
+  ['legal', 'Legal'],
+  ['cost', 'Cost'],
+  ['finish', 'Finish'],
+  ['unit_level', 'Unit Level'],
+]
+
+export const TRADING_DYNAMIC_KEYS = TRADING_CARD_METADATA.map(([key]) => key)
+
+const TRADING_REVIEW_GROUPS = [
+  {
+    id: 'taxonomy',
+    label: 'Cascading Taxonomy',
+    fields: [
+      { key: 'subcategory_id', label: 'Subcategory (brand)', column: 'subcategory_id', taxonomy: 'subcategory', required: true, scan: (meta) => meta.brand || meta.game },
+      { key: 'franchise_id', label: 'Franchise', column: 'franchise_id', taxonomy: 'franchise', scan: (meta) => meta.franchise },
+      { key: 'subset_id', label: 'Subfranchise (era / storyline)', column: 'subset_id', taxonomy: 'subset', scan: (meta) => meta.series || meta.era },
+      { key: 'property_id', label: 'Property (release)', taxonomy: 'property', scan: (meta) => meta.set || meta.setName },
+      { key: 'item_type_id', label: 'Item Type', column: 'item_type_id', taxonomy: 'item_type', scan: () => 'Card' },
+    ],
+  },
+  {
+    id: 'facets',
+    label: 'Attached Facets',
+    fields: [
+      { key: 'collection', label: 'Collection', path: ['collection'], scan: (meta) => meta.collection },
+      { key: 'subject', label: 'Subject (what it depicts)', column: 'subject', required: true, scan: (meta) => meta.cardName || meta.subject || meta.name },
+      { key: 'card_number', label: 'ID Number', column: 'card_number', scan: (meta) => meta.cardNumber || meta.idNumber },
+      { key: 'publisher_id', label: 'Publisher / Manufacturer', column: 'publisher_id', taxonomy: 'publisher', scan: (meta) => meta.publisher || meta.manufacturer },
+    ],
+  },
+  {
+    id: 'item',
+    label: 'Item Metadata',
+    fields: [
+      { key: 'description', label: 'Description', column: 'description', multiline: true, scan: (meta) => meta.description },
+      { key: 'retail_price', label: 'Retail Price', column: 'retail_price', type: 'number', scan: () => '' },
+      { key: 'release_year', label: 'Release Year', column: 'release_year', type: 'number', scan: (meta) => meta.year || meta.releaseYear },
+      { key: 'availability', label: 'Availability', column: 'availability', scan: () => '' },
+      { key: 'upc', label: 'Barcodes', column: 'upc', scan: (meta) => meta.barcodes || meta.barcode },
+      { key: 'includes', label: 'Includes', path: ['includes'], scan: () => '' },
+      { key: 'included_in', label: 'Included In', path: ['included_in'], scan: () => '' },
+      { key: 'source', label: 'Source (internal provenance)', path: ['source'], scan: () => '' },
+    ],
+  },
+  {
+    id: 'card',
+    label: 'Card Metadata',
+    fields: TRADING_CARD_METADATA.map(([key, label, extra = {}]) => ({
+      key,
+      label: extra.list ? `${label} (one per line)` : label,
+      path: [key],
+      ...(extra.list ? { list: true, multiline: true } : {}),
+      scan: (meta) => meta[key],
+    })),
+  },
+]
+
 // Sports Cards follows the website's finalized Add Item spec exactly
 // (Nordvik docs/add-item-form-spec.md, "Sports Cards — FINALIZED"): the same
 // sections, fields, columns, link tables and dynamic_fields keys as the
@@ -1576,6 +1652,24 @@ const SPORTS_REVIEW_GROUPS = [
 
 // Review field key -> local AI recognition result key.
 export const AI_FIELD_FOR_REVIEW_KEY = {
+  // Trading Cards card metadata ('type' is the game classification, kept
+  // apart from the sports card_type).
+  evolves_from: 'evolves_from',
+  evolves_to: 'evolves_to',
+  attack: 'attack',
+  health: 'health',
+  damage: 'damage',
+  shields: 'shields',
+  type: 'tcg_type',
+  traits: 'traits',
+  abilities: 'abilities',
+  weakness: 'weakness',
+  resistance: 'resistance',
+  artist: 'artist',
+  language: 'language',
+  legal: 'legal',
+  cost: 'cost',
+  unit_level: 'unit_level',
   subcategory_id: 'subcategory',
   franchise_id: 'franchise',
   subset_id: 'subfranchise',
@@ -1621,16 +1715,18 @@ export function recognitionResult(draft) {
 
 function aiValueText(value) {
   if (value == null) return ''
+  if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean).join('\n')
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   return String(value).trim()
 }
 
 export function isSpecCategory(category) {
-  return category === 'Sports Cards'
+  return category === 'Sports Cards' || category === 'Trading Cards'
 }
 
 export function scanReviewGroups(category) {
   if (category === 'Sports Cards') return SPORTS_REVIEW_GROUPS
+  if (category === 'Trading Cards') return TRADING_REVIEW_GROUPS
   return SCAN_REVIEW_GROUPS
     .filter((group) => !group.categories || group.categories.includes(category))
     .map((group) => ({ ...group, fields: group.fields.filter((field) => !field.categories || field.categories.includes(category)) }))
@@ -1652,7 +1748,9 @@ export function catalogueFieldValue(item, field) {
   if (field.taxonomy === 'property') return reviewText(item._property_id)
   if (field.column) return reviewText(item[field.column])
   const leaf = field.path[field.path.length - 1]
-  return reviewText(readPath(item.dynamic_fields, field.path) ?? item.dynamic_fields?.[leaf] ?? item.attributes?.[leaf])
+  const value = readPath(item.dynamic_fields, field.path) ?? item.dynamic_fields?.[leaf] ?? item.attributes?.[leaf]
+  if (field.list) return (Array.isArray(value) ? value : value ? [value] : []).map((entry) => String(entry).trim()).filter(Boolean).join('\n')
+  return reviewText(value)
 }
 
 // OCR returns names in capitals ("MICAH PARSONS"); store them as "Micah Parsons".
@@ -1677,7 +1775,7 @@ export function scannedFieldValue(draft, field) {
     // null means "not determinable", not "fall back to a guess".
     value = aiValueText(ai[AI_FIELD_FOR_REVIEW_KEY[field.key]])
     // Base-set cards have no named collection; the catalogue calls it "Base".
-    if (field.key === 'collection' && !value && isBaseSetCard(ai)) value = 'Base'
+    if (field.key === 'collection' && !value && isBaseSetCard(ai) && !/trading/i.test(String(ai.category || draft?.category || ''))) value = 'Base'
   } else if (field.scan) {
     value = reviewText(field.scan(draft?.metadata || {}))
   } else {
@@ -1718,6 +1816,7 @@ function writeDynamicFields(baseDynamicFields, groups, values, { dropEmpty = fal
     const value = String(values[field.key] ?? '').trim()
     // The website's form stores only filled dynamic fields.
     if (dropEmpty && !value) delete target[leaf]
+    else if (field.list) target[leaf] = value.split('\n').map((entry) => entry.trim()).filter(Boolean)
     else target[leaf] = value
   })
   return dynamicFields
@@ -1813,8 +1912,9 @@ function itemNameFromValues(category, values) {
 export async function createCatalogueItemFromReview({ category, values, confidence = null, images = [] }) {
   const groups = scanReviewGroups(category)
   const name = itemNameFromValues(category, values)
-  if (!name) throw new Error(isSpecCategory(category) ? 'A Subject (player) is required before adding the card to the catalogue.' : 'A name is required before adding the item to the catalogue.')
-  if (isSpecCategory(category) && !values.subcategory_id) throw new Error('Select a Subcategory (sport) before adding the card to the catalogue.')
+  const trading = category === 'Trading Cards'
+  if (!name) throw new Error(isSpecCategory(category) ? `A Subject (${trading ? 'what the card depicts' : 'player'}) is required before adding the card to the catalogue.` : 'A name is required before adding the item to the catalogue.')
+  if (isSpecCategory(category) && !values.subcategory_id) throw new Error(`Select a Subcategory (${trading ? 'brand' : 'sport'}) before adding the card to the catalogue.`)
 
   const payload = { category_id: await categoryIdForName(category) }
   groups.flatMap((group) => group.fields).filter((field) => field.column).forEach((field) => {

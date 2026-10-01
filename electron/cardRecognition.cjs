@@ -63,6 +63,23 @@ const CARD_SCHEMA = {
     autograph_type: nullable('string'),
     memorabilia_relic: nullable('boolean'),
     finish: nullable('string'),
+    // Trading card games (Pokémon, Magic, Yu-Gi-Oh!...): null for sports cards.
+    evolves_from: nullable('string'),
+    evolves_to: nullable('string'),
+    attack: nullable('string'),
+    health: nullable('string'),
+    damage: nullable('string'),
+    shields: nullable('string'),
+    tcg_type: nullable('string'),
+    traits: { type: 'array', items: { type: 'string' } },
+    abilities: { type: 'array', items: { type: 'string' } },
+    weakness: nullable('string'),
+    resistance: nullable('string'),
+    artist: nullable('string'),
+    language: nullable('string'),
+    legal: nullable('string'),
+    cost: nullable('string'),
+    unit_level: nullable('string'),
     uncertain_fields: { type: 'array', items: { type: 'string' } },
   },
   required: [
@@ -70,6 +87,8 @@ const CARD_SCHEMA = {
     'collection', 'subject', 'subjects', 'id_number', 'publisher_manufacturer', 'description',
     'release_year', 'barcodes', 'card_type', 'team', 'rookie', 'parallel', 'variation',
     'serial_numbering', 'autograph', 'autograph_type', 'memorabilia_relic', 'finish',
+    'evolves_from', 'evolves_to', 'attack', 'health', 'damage', 'shields', 'tcg_type', 'traits',
+    'abilities', 'weakness', 'resistance', 'artist', 'language', 'legal', 'cost', 'unit_level',
     'uncertain_fields',
   ],
   additionalProperties: false,
@@ -170,6 +189,43 @@ Only identify the finish when reasonably clear. Examples: Foil, Holofoil, Refrac
 
 Do not guess at foil/parallel/variation based solely on general colours.
 
+TRADING CARD GAMES
+Cards from a trading card GAME (Pokémon, Magic: The Gathering, Yu-Gi-Oh!, One Piece, Disney Lorcana,
+Star Wars and similar) are NOT sports cards. For them the fields above mean:
+- category: Trading Cards
+- subcategory: the brand / game, e.g. Pokémon, Magic: The Gathering, Yu-Gi-Oh!, One Piece.
+- franchise: the product family within the brand. For Pokémon cards from the main expansion sets use: Core Sets.
+  Return null if unsure.
+- subfranchise: the era, generation or storyline, e.g. Scarlet & Violet, Sword & Shield, Illustration Contest.
+- property: the specific release / set, e.g. Stellar Crown, Surging Sparks.
+- item_type: Card.
+- collection: only a named collector line printed on the card; otherwise null (never "Base").
+- subject / subjects: what the card depicts (the card name, e.g. Feraligatr). One entry.
+- id_number: the card's own collector number as printed, without the set size (213/191 -> 213).
+- publisher_manufacturer: e.g. The Pokémon Company, Wizards of the Coast, Konami, Bandai.
+- release_year: the year printed on the card (copyright line) for that release.
+- description: flavour / description text printed on the card, if any.
+- finish: print treatment such as Holo, Reverse Holo, Full Art, or None.
+- team, rookie, parallel, variation, serial_numbering, autograph, autograph_type, memorabilia_relic, card_type:
+  null / false (sports-card fields).
+Card metadata for trading card games (null when the card doesn't show it):
+- evolves_from: the previous form, e.g. "Evolves from Croconaw" -> Croconaw.
+- evolves_to: the next form, only if printed.
+- attack: an offensive stat printed as a number (e.g. Yu-Gi-Oh! ATK, One Piece power). Not attack names.
+- health: hit points / life, e.g. HP 180 -> 180.
+- damage: a printed damage value or modifier, only if the game has a single one.
+- shields: a defensive resource / protection value, only if printed.
+- tcg_type: the card's primary game classification, e.g. Water (Pokémon type), Red (Magic colour), Effect Monster.
+- traits: what the card is associated with (e.g. creature types, tags) as a list.
+- abilities: the card's named abilities (e.g. Deep Submergence) as a list.
+- weakness: e.g. Lightning / Electric. resistance: likewise.
+- artist: the illustrator credited on the card (e.g. "Illus. Acorviart" -> Acorviart).
+- language: the printing language, e.g. English, Japanese.
+- legal: tournament legality only if printed (e.g. a regulation mark); otherwise null.
+- cost: the play / resource cost to use the card (e.g. mana cost), if the game has one.
+- unit_level: a printed level / rank (e.g. Yu-Gi-Oh! level), if any.
+For sports cards all of these card-metadata fields are null and traits/abilities are empty lists.
+
 Return only data matching the provided JSON schema.`
 
 async function ollamaFetch(pathname, { method = 'GET', body, timeoutMs, signal } = {}) {
@@ -250,7 +306,9 @@ function normaliseResult(raw) {
     else result[key] = String(value).trim() || null
   })
   // Base-set cards have no named collection; the catalogue calls it "Base".
-  if (!result.collection && !/insert|autograph|patch|relic/i.test(String(result.card_type || ''))) result.collection = 'Base'
+  // (A sports-card convention; trading card games leave it empty.)
+  const tradingCardGame = /trading/i.test(String(result.category || ''))
+  if (!tradingCardGame && !result.collection && !/insert|autograph|patch|relic/i.test(String(result.card_type || ''))) result.collection = 'Base'
   // App-side guard: a barcode is 8-14 digits; anything else (e.g. "No. 42") is dropped.
   const barcodeDigits = String(result.barcodes || '').replace(/[\s-]/g, '')
   result.barcodes = /^\d{8,14}$/.test(barcodeDigits) ? barcodeDigits : null
