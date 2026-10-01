@@ -2948,6 +2948,7 @@ function ScanIntake({ onCreateDraft, ai }) {
         {scanMode === 'card' ? (
           <p className="scan-mode-note">Place the card in the {CARD_POSITIONS.find((entry) => entry.id === cardPosition)?.hint || 'calibrated position'} of the scanner glass, portrait or landscape.</p>
         ) : null}
+        <ScanStorageSettings />
         <details className="scanner-calibration">
           <summary>Scanner calibration</summary>
           <div className="scanner-calibration-grid">
@@ -3011,6 +3012,95 @@ function ScanIntake({ onCreateDraft, ai }) {
       </section>
       <LocalAiPanel ai={ai} />
     </div>
+  )
+}
+
+function formatStorageBytes(bytes) {
+  if (bytes == null) return '—'
+  const gb = bytes / (1024 ** 3)
+  if (gb >= 1) return `${gb.toFixed(1)} GB`
+  return `${Math.max(0, Math.round(bytes / (1024 ** 2)))} MB`
+}
+
+// Where scan images are saved, with a way to move them to another drive.
+function ScanStorageSettings() {
+  const api = adminDesktopApi()
+  const supported = typeof api.getScanStorage === 'function'
+  const [info, setInfo] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [progress, setProgress] = useState(null)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!supported) return undefined
+    api.getScanStorage().then(setInfo).catch(() => setInfo(null))
+    return api.onMoveScansProgress?.((next) => setProgress(next))
+  }, [])
+
+  if (!supported) return null
+
+  async function choose() {
+    setBusy('choose')
+    setError('')
+    setMessage('')
+    try {
+      const next = await api.chooseScanStorage()
+      setInfo(next)
+      if (!next.canceled) setMessage(`New scans will be saved in ${next.dir}.`)
+    } catch (chooseError) {
+      setError(chooseError.message || 'Could not use that folder.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function move() {
+    setBusy('move')
+    setError('')
+    setMessage('')
+    setProgress({ done: 0, total: info?.elsewhereFiles || 0 })
+    try {
+      const result = await api.moveScans()
+      setInfo(result)
+      setMessage(`Moved ${result.moved} scan file${result.moved === 1 ? '' : 's'} to ${result.dir}.${result.failed ? ` ${result.failed} could not be moved (they stay where they were and still work).` : ''}`)
+    } catch (moveError) {
+      setError(moveError.message || 'The move failed. Scans that were not moved still work from their old folder.')
+    } finally {
+      setBusy('')
+      setProgress(null)
+    }
+  }
+
+  return (
+    <details className="scanner-calibration scan-storage">
+      <summary>Scan image storage</summary>
+      <div className="scan-storage-body">
+        <p>
+          Saving scans to <code>{info?.dir || '…'}</code>
+          {info ? <> · {info.files} file{info.files === 1 ? '' : 's'}, {formatStorageBytes(info.bytes)} · {formatStorageBytes(info.freeBytes)} free on that drive</> : null}
+        </p>
+        {info?.elsewhereFiles ? (
+          <p className="scan-mode-note">{info.elsewhereFiles} earlier scan file{info.elsewhereFiles === 1 ? '' : 's'} ({formatStorageBytes(info.elsewhereBytes)}) {info.elsewhereFiles === 1 ? 'is' : 'are'} still in a previous folder. They keep working there; move them to free up that drive.</p>
+        ) : null}
+        <div className="scan-storage-actions">
+          <button type="button" onClick={choose} disabled={Boolean(busy)}>{busy === 'choose' ? 'Choosing…' : 'Change folder…'}</button>
+          {info?.elsewhereFiles ? (
+            <button type="button" onClick={move} disabled={Boolean(busy)}>
+              {busy === 'move' ? `Moving… ${progress?.done || 0} of ${progress?.total || info.elsewhereFiles}` : `Move ${info.elsewhereFiles} earlier scan${info.elsewhereFiles === 1 ? '' : 's'} here`}
+            </button>
+          ) : null}
+        </div>
+        {busy === 'move' && progress?.total ? (
+          <div className="local-ai-progress">
+            <div className="local-ai-progress-bar"><span style={{ width: `${Math.round(((progress.done || 0) / progress.total) * 100)}%` }} /></div>
+            <small>Copying each file, checking it, then removing the original. Scanning can continue meanwhile.</small>
+          </div>
+        ) : null}
+        {message ? <p className="admin-success">{message}</p> : null}
+        {error ? <p className="admin-error">{error}</p> : null}
+      </div>
+    </details>
   )
 }
 

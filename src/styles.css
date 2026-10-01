@@ -7716,3 +7716,39 @@ button:disabled {
   font-size: 14px;
   padding: 7px 9px;
 }
+
+/* Scan image storage */
+.scan-storage-body {
+  display: grid;
+  font-size: 13px;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+
+.scan-storage-body p {
+  margin: 0;
+}
+
+.scan-storage-body code {
+  background: #f4f6f8;
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 1px 5px;
+  word-break: break-all;
+}
+
+.scan-storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scan-storage-actions button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 10px;
+}

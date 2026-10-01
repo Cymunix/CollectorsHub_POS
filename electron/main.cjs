@@ -1,6 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } = require('electron')
 const path = require('node:path')
-const { appendFile, copyFile, mkdir, readFile, unlink, writeFile } = require('node:fs/promises')
+const { appendFile, copyFile, mkdir, readdir, readFile, stat, statfs, unlink, writeFile } = require('node:fs/promises')
 const { existsSync, readFileSync } = require('node:fs')
 const { pathToFileURL } = require('node:url')
 const { randomUUID } = require('node:crypto')
@@ -57,27 +57,6 @@ function getDataDir() {
 
 function getStoreFile() {
   return path.join(getDataDir(), 'store.json')
-}
-
-function getScanDir() {
-  return path.join(getDataDir(), 'scan-images')
-}
-
-function getScanImageUrl(fileName, filePath) {
-  if (isDev) return pathToFileURL(filePath).toString()
-  return `collectorshub-pos://scan-images/${encodeURIComponent(fileName)}`
-}
-
-function resolveScanImagePath(image = {}) {
-  const candidate = image.path || ''
-  if (!candidate) throw new Error('No scan image path was provided for OCR.')
-  const resolved = path.resolve(candidate)
-  const scanDir = path.resolve(getScanDir())
-  if (!resolved.startsWith(scanDir + path.sep)) {
-    throw new Error('Scan OCR can only read images saved by CollectorsHub.')
-  }
-  if (!existsSync(resolved)) throw new Error('Scan image file was not found.')
-  return resolved
 }
 
 function cleanOcrLine(line) {
@@ -755,6 +734,205 @@ function configureAutoUpdates() {
 ipcMain.handle('store:load', async () => ensureStore())
 ipcMain.handle('store:save', async (_event, nextStore) => saveStore(nextStore))
 ipcMain.handle('app:get-data-path', () => getStoreFile())
+
+// ---------------------------------------------------------------------------
+// Where scan images are saved. Defaults to the app data folder on C:, and can
+// be moved to another drive. Earlier folders stay readable: a scan referenced
+// by an old path is found by its file name in the current or a previous scan
+// folder, so moving files never breaks queued cards.
+
+function getSettingsFile() {
+  return path.join(getDataDir(), 'settings.json')
+}
+
+let settingsCache = null
+
+function readSettings() {
+  if (settingsCache) return settingsCache
+  try {
+    settingsCache = JSON.parse(readFileSync(getSettingsFile(), 'utf8')) || {}
+  } catch {
+    settingsCache = {}
+  }
+  return settingsCache
+}
+
+async function writeSettings(next) {
+  settingsCache = next
+  await mkdir(getDataDir(), { recursive: true })
+  await writeFile(getSettingsFile(), JSON.stringify(next, null, 2))
+}
+
+function defaultScanDir() {
+  return path.join(getDataDir(), 'scan-images')
+}
+
+function getScanDir() {
+  return readSettings().scanImageDir || defaultScanDir()
+}
+
+// Current folder first, then earlier ones.
+function allScanDirs() {
+  const dirs = [getScanDir(), ...(readSettings().previousScanDirs || []), defaultScanDir()]
+  return [...new Set(dirs.map((dir) => path.resolve(dir)))]
+}
+
+function findScanFile(fileName) {
+  for (const dir of allScanDirs()) {
+    const candidate = path.join(dir, fileName)
+    if (existsSync(candidate)) return candidate
+  }
+  return ''
+}
+
+function getScanImageUrl(fileName, filePath) {
+  if (isDev) return pathToFileURL(filePath).toString()
+  return `collectorshub-pos://scan-images/${encodeURIComponent(fileName)}`
+}
+
+function resolveScanImagePath(image = {}) {
+  const candidate = image.path || ''
+  if (!candidate) throw new Error('No scan image path was provided for OCR.')
+  const resolved = path.resolve(candidate)
+  const inScanDir = allScanDirs().some((dir) => resolved.startsWith(dir + path.sep))
+  if (!inScanDir) throw new Error('Scan OCR can only read images saved by CollectorsHub.')
+  if (existsSync(resolved)) return resolved
+  // Moved to another scan folder since this path was recorded.
+  const moved = findScanFile(path.basename(resolved))
+  if (moved) return moved
+  throw new Error('Scan image file was not found.')
+}
+
+async function folderUsage(dir) {
+  let files = 0
+  let bytes = 0
+  try {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      files += 1
+      try { bytes += (await stat(path.join(dir, entry.name))).size } catch {}
+    }
+  } catch {}
+  return { files, bytes }
+}
+
+async function freeSpace(dir) {
+  try {
+    const info = await statfs(dir)
+    return Number(info.bavail) * Number(info.bsize)
+  } catch {
+    return null
+  }
+}
+
+async function scanStorageInfo() {
+  const dir = getScanDir()
+  await mkdir(dir, { recursive: true }).catch(() => {})
+  const here = await folderUsage(dir)
+  let elsewhereFiles = 0
+  let elsewhereBytes = 0
+  for (const other of allScanDirs().slice(1)) {
+    if (other === path.resolve(dir)) continue
+    const usage = await folderUsage(other)
+    elsewhereFiles += usage.files
+    elsewhereBytes += usage.bytes
+  }
+  return {
+    dir,
+    defaultDir: defaultScanDir(),
+    isDefault: path.resolve(dir) === path.resolve(defaultScanDir()),
+    files: here.files,
+    bytes: here.bytes,
+    freeBytes: await freeSpace(dir),
+    elsewhereFiles,
+    elsewhereBytes,
+  }
+}
+
+ipcMain.handle('scanner:get-storage', () => scanStorageInfo())
+
+// Picks a new folder for future scans (existing scans stay where they are
+// until moved).
+ipcMain.handle('scanner:choose-storage', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose where to save scan images',
+    defaultPath: getScanDir(),
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  refocusMainWindow()
+  if (result.canceled || !result.filePaths?.[0]) return { canceled: true, ...(await scanStorageInfo()) }
+  const chosen = path.resolve(result.filePaths[0])
+  // Must be writable.
+  const probe = path.join(chosen, `.collectorshub-write-test-${randomUUID()}`)
+  try {
+    await writeFile(probe, 'ok')
+    await unlink(probe)
+  } catch (error) {
+    throw new Error(`CollectorsHub can't save files in that folder (${error.code || error.message}). Choose another folder.`)
+  }
+  const settings = readSettings()
+  const current = path.resolve(getScanDir())
+  if (chosen !== current) {
+    const previous = [...new Set([current, ...(settings.previousScanDirs || [])].filter((dir) => dir !== chosen))]
+    await writeSettings({ ...settings, scanImageDir: chosen, previousScanDirs: previous })
+  }
+  await logScanner({ event: 'scan-storage-changed', from: current, to: chosen })
+  return scanStorageInfo()
+})
+
+let moveInProgress = false
+
+// Moves scans from earlier folders into the current one (copy, check size,
+// then delete the original). Queued cards keep working throughout because
+// scans are found by file name in any scan folder.
+ipcMain.handle('scanner:move-scans', async (event) => {
+  if (moveInProgress) throw new Error('A move is already running.')
+  moveInProgress = true
+  const send = (payload) => { if (!event.sender.isDestroyed()) event.sender.send('scanner:move-progress', payload) }
+  const target = path.resolve(getScanDir())
+  let moved = 0
+  let skipped = 0
+  let failed = 0
+  try {
+    await mkdir(target, { recursive: true })
+    const sources = allScanDirs().filter((dir) => dir !== target)
+    const files = []
+    for (const dir of sources) {
+      try {
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          if (entry.isFile()) files.push({ dir, name: entry.name })
+        }
+      } catch {}
+    }
+    for (const [index, file] of files.entries()) {
+      const from = path.join(file.dir, file.name)
+      const to = path.join(target, file.name)
+      try {
+        if (existsSync(to)) {
+          // Same name already there (an earlier, interrupted move): keep the
+          // copy that is complete.
+          const [a, b] = await Promise.all([stat(from), stat(to)])
+          if (a.size === b.size) await unlink(from)
+          skipped += 1
+        } else {
+          await copyFile(from, to)
+          const [a, b] = await Promise.all([stat(from), stat(to)])
+          if (a.size !== b.size) throw new Error('size mismatch')
+          await unlink(from)
+          moved += 1
+        }
+      } catch {
+        failed += 1
+      }
+      if (index % 10 === 0 || index === files.length - 1) send({ done: index + 1, total: files.length })
+    }
+    await logScanner({ event: 'scan-storage-moved', to: target, moved, skipped, failed })
+    return { moved, skipped, failed, ...(await scanStorageInfo()) }
+  } finally {
+    moveInProgress = false
+  }
+})
+
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('app:exit', () => app.quit())
 ipcMain.handle('app:refocus', () => refocusMainWindow())
@@ -1461,7 +1639,8 @@ app.whenReady().then(async () => {
       const url = new URL(request.url)
       if (url.hostname === 'scan-images') {
         const fileName = path.basename(decodeURIComponent(url.pathname.replace(/^\/+/, '')))
-        const filePath = path.join(getScanDir(), fileName)
+        // Current scan folder first, then earlier ones (scans moved to another drive).
+        const filePath = findScanFile(fileName) || path.join(getScanDir(), fileName)
         return net.fetch(pathToFileURL(filePath).toString())
       }
 

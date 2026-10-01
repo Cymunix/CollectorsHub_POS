@@ -30,6 +30,14 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
     return () => ipcRenderer.removeListener('scanner:status', listener)
   },
   recropScan: (image, rect) => ipcRenderer.invoke('scanner:recrop', { image, rect }),
+  getScanStorage: () => ipcRenderer.invoke('scanner:get-storage'),
+  chooseScanStorage: () => ipcRenderer.invoke('scanner:choose-storage'),
+  moveScans: () => ipcRenderer.invoke('scanner:move-scans'),
+  onMoveScansProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress)
+    ipcRenderer.on('scanner:move-progress', listener)
+    return () => ipcRenderer.removeListener('scanner:move-progress', listener)
+  },
   feedStack: (options) => ipcRenderer.invoke('scanner:feed-stack', options),
   cancelFeed: () => ipcRenderer.invoke('scanner:cancel-feed'),
   refreshFeeder: () => ipcRenderer.invoke('scanner:refresh-feeder'),
