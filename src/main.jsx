@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
+import StoreScanIntake from './StoreScanIntake'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
@@ -170,6 +171,9 @@ function getRegisterOpeningCash(register, session) {
 function App() {
   const [activeView, setActiveView] = useState('register')
   const [store, setStore] = useState(emptyStore)
+  // Latest store for saves made from long-running screens (store scan intake).
+  const storeRef = useRef(store)
+  storeRef.current = store
   const [isLoaded, setIsLoaded] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [dataPath, setDataPath] = useState('')
@@ -818,6 +822,7 @@ function App() {
         <nav className="nav-list" aria-label="Main">
           <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} />
+          {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan to Inventory" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
           <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} />
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
           <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} />
@@ -838,7 +843,7 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {activeView !== 'register' && activeView !== 'inventory' ? (
+        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' ? (
           <>
             <header className="topbar">
               <div>
@@ -914,6 +919,15 @@ function App() {
             search={search}
             setSearch={setSearch}
             syncStatus={syncStatus}
+          />
+        ) : null}
+
+        {activeView === 'scan' ? (
+          <StoreScanIntake
+            session={authSession}
+            savedQueue={store.storeScanQueue || []}
+            onSaveQueue={(queue) => persist({ ...storeRef.current, storeScanQueue: queue })}
+            onStockChanged={handleSyncNow}
           />
         ) : null}
 
@@ -1108,6 +1122,7 @@ function viewTitle(activeView) {
     transactions: 'Transactions',
     reports: 'Reports',
     settings: 'Settings',
+    scan: 'Scan to Inventory',
   }
 
   return titles[activeView] || 'Register'

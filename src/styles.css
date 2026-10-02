@@ -7975,3 +7975,46 @@ button:disabled {
   border-color: #f0b35a;
   color: #5c3b00;
 }
+
+/* Store scan intake (POS) */
+.store-scan { display: grid; gap: 14px; padding: 4px 0 24px; }
+.store-scan-head { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
+.store-scan-head h2 { margin: 2px 0 4px; }
+.store-scan-head small { color: #5b6677; display: block; max-width: 720px; }
+.store-scan-kicker { color: #8a6a17; font-size: 12px; font-weight: 800; letter-spacing: .04em; margin: 0; text-transform: uppercase; }
+.store-scan-ai { border-radius: 999px; font-size: 12px; font-weight: 800; padding: 5px 10px; background: #fde8e8; color: #8a1c1c; white-space: nowrap; }
+.store-scan-ai.ready { background: #e3f6e8; color: #1d6b35; }
+.store-scan-ai.checking { background: #eef1f5; color: #455066; }
+.store-scan-controls { display: flex; flex-wrap: wrap; gap: 12px; }
+.store-scan-controls label { display: grid; font-size: 12px; font-weight: 700; gap: 4px; min-width: 160px; }
+.store-scan-controls select, .store-scan-controls input, .store-scan-card-fields select, .store-scan-card-fields input, .store-scan-card-body select, .store-scan-search-form input { border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; padding: 7px 9px; }
+.store-scan-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.store-scan button { align-items: center; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer; display: inline-flex; font-weight: 800; gap: 6px; padding: 7px 12px; }
+.store-scan button.primary { background: #d6a632; border-color: #d6a632; color: #0b111b; }
+.store-scan button.link { background: none; border: 0; color: #2457a6; padding: 0; }
+.store-scan button:disabled { cursor: default; opacity: .55; }
+.store-scan-counts { color: #5b6677; font-size: 13px; margin-left: auto; }
+.store-scan-message { color: #1d6b35; margin: 0; }
+.store-scan-error { color: #a12020; font-size: 13px; margin: 0; }
+.store-scan-empty { color: #5b6677; }
+.store-scan-list { display: grid; gap: 8px; }
+.store-scan-card { align-items: center; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; display: grid; gap: 12px; grid-template-columns: 64px minmax(0, 1fr) auto auto; padding: 8px 12px; }
+.store-scan-card.choose, .store-scan-card.unmatched, .store-scan-card.failed { border-color: #f0b35a; }
+.store-scan-card img, .store-scan-noimage { background: #eef1f5; border-radius: 6px; display: block; height: 88px; object-fit: contain; width: 64px; }
+.store-scan-card-body { display: grid; gap: 3px; min-width: 0; }
+.store-scan-card-body small { color: #5b6677; }
+.store-scan-status { font-size: 12px; font-weight: 800; color: #455066; }
+.store-scan-status.ready { color: #1d6b35; }
+.store-scan-status.choose, .store-scan-status.unmatched, .store-scan-status.failed { color: #9a5b00; }
+.store-scan-match { font-size: 13px; }
+.store-scan-card-fields { display: flex; gap: 6px; }
+.store-scan-card-fields input[type=number] { width: 64px; }
+.store-scan-card-fields input[inputmode] { width: 80px; }
+.store-scan-card-actions { display: flex; gap: 6px; }
+.store-scan-done ul { margin: 8px 0; max-height: 240px; overflow: auto; }
+.store-scan-search section { background: #fff; border-radius: 12px; display: grid; gap: 12px; max-height: 80vh; max-width: 560px; overflow: auto; padding: 18px; width: 100%; }
+.store-scan-search-form { display: flex; gap: 8px; }
+.store-scan-search-form input { flex: 1; }
+.store-scan-search-results { display: grid; gap: 6px; }
+.store-scan-search-results button { display: grid; justify-items: start; text-align: left; }
+@media (max-width: 900px) { .store-scan-card { grid-template-columns: 64px minmax(0, 1fr); } }

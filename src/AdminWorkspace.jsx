@@ -257,7 +257,7 @@ function adminDesktopApi() {
 
 // Stack scans decide front/back from how much text each side has. When that
 // was a close call (or fell back to feed order) the AI double-checks it.
-function needsSideCheck(draft) {
+export function needsSideCheck(draft) {
   const feed = draft.feed
   if (!feed || feed.singleSided || feed.adjusted || !draft.frontImage || !draft.backImage) return false
   if (feed.frontBackBy !== 'text' || !feed.words) return true
@@ -267,7 +267,7 @@ function needsSideCheck(draft) {
 // Sides whose text-based orientation was weak get the AI upright check:
 // photo-heavy fronts (often with the name printed sideways) and backs whose
 // text didn't read well (light text on colour).
-function needsUprightCheck(draft) {
+export function needsUprightCheck(draft) {
   const feed = draft.feed
   if (!feed || feed.uprightChecked || feed.adjusted) return null
   const weak = (words) => feed.checkRotation || !feed.words || words == null || words < 15
@@ -3494,7 +3494,7 @@ const SCANNER_STATE_TEXT = {
 
 // Per-computer scanner preferences (scan mode, card position): remembered in
 // this browser profile only; the app works the same without them.
-function readScannerPref(key, fallback) {
+export function readScannerPref(key, fallback) {
   try {
     const raw = window.localStorage.getItem(`collectorshub-scanner-${key}`)
     return raw == null ? fallback : JSON.parse(raw)
@@ -3503,7 +3503,7 @@ function readScannerPref(key, fallback) {
   }
 }
 
-function writeScannerPref(key, value) {
+export function writeScannerPref(key, value) {
   try {
     window.localStorage.setItem(`collectorshub-scanner-${key}`, JSON.stringify(value))
   } catch {}
