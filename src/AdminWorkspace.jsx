@@ -4719,9 +4719,13 @@ function reviewItemName(category, values) {
 // levels start empty for new items and are resolved against the live
 // taxonomy once its options load.
 function initialReviewValues(draft, category, matchItem) {
+  // Taxonomy the card's set already resolved to (AI analysis, Re-check
+  // catalogue matches, or Set up set), when reviewing in that category.
+  const taxonomy = draft?.recognition?.taxonomy
+  const knownIds = taxonomy && (taxonomy.category || draft.category) === category ? taxonomy.ids || {} : {}
   return Object.fromEntries(reviewFields(category).map((field) => {
     const current = catalogueFieldValue(matchItem, field)
-    if (field.taxonomy) return [field.key, matchItem ? current : '']
+    if (field.taxonomy) return [field.key, matchItem ? current : knownIds[field.key] || '']
     // Provenance describes how a record was created; never re-stamp an existing item.
     if (field.key === 'source' && matchItem) return [field.key, current]
     const scanned = scannedFieldValue(draft, field)

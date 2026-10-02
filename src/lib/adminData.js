@@ -2193,7 +2193,10 @@ export async function loadSportsTaxonomyOptions({ category = 'Sports Cards', sub
 async function loadTaxonomyLevels({ categoryId = '', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
   const propertyQuery = () => {
     let query = supabase.from('properties').select('property_id, name').eq('franchise_id', franchiseId).order('name')
-    if (subsetId) query = query.eq('subset_id', subsetId)
+    // A chosen subfranchise narrows the list, but properties not tied to any
+    // subfranchise stay available (many releases have none set), otherwise
+    // they could never be picked once a subfranchise is chosen.
+    if (subsetId) query = query.or(`subset_id.eq.${subsetId},subset_id.is.null`)
     return query.then(({ data }) => optionRows(data, 'property_id'))
   }
   const [subcategory, franchise, subset, property, itemType, publisher] = await Promise.all([
