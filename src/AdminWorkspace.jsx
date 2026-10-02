@@ -790,6 +790,26 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     return result
   }
 
+  // The FastFoto, if connected (for the top bar's Scan stack button).
+  const [quickFeeder, setQuickFeeder] = useState('')
+  useEffect(() => {
+    const api = adminDesktopApi()
+    const update = (status) => { if (status && 'feederName' in status) setQuickFeeder(status.feederName || '') }
+    api.getScannerStatus?.().then(update).catch(() => {})
+    api.refreshFeeder?.().then(update).catch(() => {})
+    return api.onScannerStatus?.(update)
+  }, [])
+
+  function quickScanStack() {
+    setActiveView('scan')
+    startFeed({
+      category: readScannerPref('category', 'Trading Cards'),
+      mode: readScannerPref('mode', 'Create Catalogue Items'),
+      autoAnalyse: readScannerPref('feedAutoAnalyse', true),
+      loadFaceDown: readScannerPref('feedFaceDown', true),
+    })
+  }
+
   async function stopFeed() {
     setFeedState((current) => (current ? { ...current, stopping: true } : current))
     await adminDesktopApi().cancelFeed?.()
@@ -852,10 +872,30 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
             <p className="admin-mode-label">COLLECTORSHUB ADMIN</p>
             <h1>{adminNav.find((entry) => entry.key === activeView)?.label || 'Overview'}</h1>
           </div>
-          <span className="admin-status-pill">
-            <span />
-            {syncStatus?.online ? 'Online' : 'Offline'}
-          </span>
+          <div className="admin-topbar-actions">
+            {feedState?.running ? (
+              <button type="button" className="admin-quick-scan running" onClick={() => setActiveView('scan')} title="A FastFoto stack is scanning">
+                <ScanLine size={16} /> Scanning stack… {Math.floor((feedState.pages || 0) / 2)} card{Math.floor((feedState.pages || 0) / 2) === 1 ? '' : 's'}
+              </button>
+            ) : (
+              <>
+                {quickFeeder ? (
+                  <button type="button" className="admin-quick-scan" onClick={quickScanStack} title={`Feed the loaded stack through the ${quickFeeder} (uses your last Scan Intake settings)`}>
+                    <ScanLine size={16} /> Scan stack
+                  </button>
+                ) : null}
+                {activeView !== 'scan' ? (
+                  <button type="button" className="admin-quick-scan primary" onClick={() => setActiveView('scan')}>
+                    <ScanLine size={16} /> Scan
+                  </button>
+                ) : null}
+              </>
+            )}
+            <span className="admin-status-pill">
+              <span />
+              {syncStatus?.online ? 'Online' : 'Offline'}
+            </span>
+          </div>
         </header>
 
         {activeView === 'overview' ? <AdminOverview onNavigate={setActiveView} /> : null}
@@ -2853,8 +2893,10 @@ function DataExplorer() {
 }
 
 function ScanIntake({ onCreateDraft, ai }) {
-  const [category, setCategory] = useState('Trading Cards')
-  const [mode, setMode] = useState('Create Catalogue Items')
+  const [category, setCategory] = useState(() => readScannerPref('category', 'Trading Cards'))
+  const [mode, setMode] = useState(() => readScannerPref('mode', 'Create Catalogue Items'))
+  useEffect(() => { writeScannerPref('category', category) }, [category])
+  useEffect(() => { writeScannerPref('mode', mode) }, [mode])
   const [frontImage, setFrontImage] = useState(null)
   const [backImage, setBackImage] = useState(null)
   const [scannerMessage, setScannerMessage] = useState('')

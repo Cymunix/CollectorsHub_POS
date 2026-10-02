@@ -7940,3 +7940,38 @@ button:disabled {
 .checklist-status.new { color: #166534; font-weight: 800; }
 .checklist-status.placeholder { color: #8a5d00; }
 .checklist-status.scanned { color: #526176; }
+
+
+/* Top bar quick scan */
+.admin-topbar-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-quick-scan {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #1f2a3a;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 900;
+  gap: 6px;
+  padding: 7px 14px;
+}
+
+.admin-quick-scan.primary {
+  background: #d6a632;
+  border-color: #d6a632;
+  color: #0b111b;
+}
+
+.admin-quick-scan.running {
+  background: #fff4e5;
+  border-color: #f0b35a;
+  color: #5c3b00;
+}
