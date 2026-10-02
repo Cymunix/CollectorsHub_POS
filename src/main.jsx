@@ -78,7 +78,12 @@ const defaultStaffLogin = {
   username: 'HaydenM8',
   password: '181222',
 }
-const transientStoreCodes = new Set(['NOR001'])
+// Store codes whose register data is kept in memory only (fake sales, no
+// shifts, nothing saved). Empty: NOR001 (Nordvik Test Store) now runs live
+// like any store, kept apart in Supabase instead - stores.is_test_store marks
+// its sales as test data (excluded from in-store prices and sales history)
+// and store_settings hides the store and its stock from the public website.
+const transientStoreCodes = new Set([])
 const storeOpeningCashByCode = {
   NOR001: 300,
 }
