@@ -801,6 +801,12 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
   }
 
   const aiQueue = scanDrafts.filter((draft) => ['queued', 'analysing', 'failed'].includes(draft.recognition?.status))
+  // Analysed cards waiting in Review (shown while the rest are still analysing).
+  const reviewReadyCount = scanDrafts.filter((draft) => (
+    !['queued', 'analysing', 'failed'].includes(draft.recognition?.status)
+    && draft.status !== 'Rejected'
+    && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)
+  )).length
 
   return (
     <main className="admin-shell">
@@ -818,6 +824,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
             <button className={activeView === key ? 'admin-nav-button active' : 'admin-nav-button'} type="button" key={key} onClick={() => setActiveView(key)}>
               <Icon size={17} />
               <span>{label}</span>
+              {key === 'review' && reviewReadyCount ? <em className="admin-nav-badge" title="Cards ready to review">{reviewReadyCount}</em> : null}
             </button>
           ))}
         </nav>
@@ -869,6 +876,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
               onCancel: cancelAnalysis,
               onRetry: retryAi,
               onOpenReview: () => setActiveView('review'),
+              reviewReadyCount,
             }}
           />
         ) : null}
@@ -3295,6 +3303,13 @@ function LocalAiPanel({ ai }) {
         <span className="local-ai-pill"><span />{label}</span>
       </div>
 
+      {ai.reviewReadyCount ? (
+        <div className="local-ai-review-ready">
+          <span><strong>{ai.reviewReadyCount}</strong> card{ai.reviewReadyCount === 1 ? ' is' : 's are'} ready to review{analysis ? ' while the rest analyse' : ''}.</span>
+          <button className="admin-gold-button" type="button" onClick={ai.onOpenReview}>Review now</button>
+        </div>
+      ) : null}
+
       {status.state === 'unavailable' ? (
         <div className="local-ai-callout">
           <strong>Local AI unavailable</strong>
@@ -3786,7 +3801,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   const tierCounts = { high: 0, medium: 0, low: 0 }
   confidenceById.forEach((entry) => { tierCounts[entry.tier] += 1 })
 
-  const displayRows = rows
+  const sortedRows = rows
     .filter((draft) => tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter)
     .sort((a, b) => {
       if (sortBy === 'newest') return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
@@ -3794,6 +3809,25 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
       const scoreB = confidenceOf(b)?.score ?? -1
       return sortBy === 'confidence-asc' ? scoreA - scoreB : scoreB - scoreA
     })
+
+  // A steady list while the AI is still finishing cards: the cards on screen
+  // keep their places, and newly finished ones wait behind a "show" bar
+  // instead of being slotted in among (or above) the ones being reviewed.
+  // Changing the sort/filter or pressing Show re-sorts everything.
+  const orderRef = useRef({ key: '', ids: [] })
+  const [orderTick, setOrderTick] = useState(0)
+  const orderKey = `${sortBy}|${tierFilter}|${orderTick}`
+  const sortedIds = sortedRows.map((draft) => draft.id)
+  let displayRows = sortedRows
+  let heldCount = 0
+  if (orderRef.current.key !== orderKey || !orderRef.current.ids.length) {
+    orderRef.current = { key: orderKey, ids: sortedIds }
+  } else {
+    const byId = new Map(sortedRows.map((draft) => [draft.id, draft]))
+    const known = new Set(orderRef.current.ids)
+    displayRows = orderRef.current.ids.filter((id) => byId.has(id)).map((id) => byId.get(id))
+    heldCount = sortedIds.filter((id) => !known.has(id)).length
+  }
 
   // Scored 100% with nothing left to decide: link or add.
   const perfectRows = aiRows.filter((draft) => confidenceOf(draft)?.score === 100 && ['link', 'add'].includes(confidenceOf(draft)?.readiness))
@@ -4039,6 +4073,12 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
               <option value="newest">Newest first</option>
             </select>
           </label>
+        </div>
+      ) : null}
+      {heldCount ? (
+        <div className="review-new-cards">
+          <span><strong>{heldCount}</strong> more card{heldCount === 1 ? ' has' : 's have'} finished analysing.</span>
+          <button type="button" onClick={() => setOrderTick((tick) => tick + 1)}>Show {heldCount === 1 ? 'it' : 'them'}</button>
         </div>
       ) : null}
       <div className="review-draft-list">

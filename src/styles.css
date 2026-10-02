@@ -7812,3 +7812,42 @@ button:disabled {
   overflow: auto;
   padding-left: 18px;
 }
+
+/* Review while the AI is still working */
+.admin-nav-badge {
+  background: #d6a632;
+  border-radius: 999px;
+  color: #0b111b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  margin-left: auto;
+  min-width: 22px;
+  padding: 1px 7px;
+  text-align: center;
+}
+
+.local-ai-review-ready,
+.review-new-cards {
+  align-items: center;
+  background: #fffaf0;
+  border: 1px solid #ecd9a8;
+  border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 10px 0;
+  padding: 8px 12px;
+}
+
+.review-new-cards button {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 10px;
+}
