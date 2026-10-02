@@ -206,7 +206,7 @@ Star Wars and similar) are NOT sports cards. For them the fields above mean:
 - release_year: the year printed on the card (copyright line) for that release.
 - description: ONLY the flavour text: the small italic Pokédex entry or flavour line (on Magic, the italic flavour
   text under the rules). Never put abilities, attacks, rules or effect text here. null if the card has none.
-- finish: print treatment such as Holo, Reverse Holo, Full Art, or None.
+- finish: print treatment. Pokémon: Holo, Reverse Holo, or None. Magic and Yu-Gi-Oh!: Foil or Nonfoil.
 - team, rookie, parallel, variation, serial_numbering, autograph, autograph_type, memorabilia_relic, card_type:
   null / false (sports-card fields).
 Card metadata for trading card games (null when the card doesn't show it):
@@ -216,23 +216,32 @@ Card metadata for trading card games (null when the card doesn't show it):
 - health: hit points / life, e.g. HP 180 -> 180.
 - damage: a printed damage value or modifier, only if the game has a single one.
 - shields: a defensive resource / protection value, only if printed.
-- tcg_type: the card's primary game classification, e.g. Water (Pokémon type), Red (Magic colour), Effect Monster.
+- tcg_type: the card's primary game classification: the Pokémon type (e.g. Water); the Magic colour(s) written
+  out (e.g. Green, or "Red, Blue" for more than one, Colorless for none); the Yu-Gi-Oh! card type (e.g. Effect Monster).
 - traits: one entry each.
   Pokémon: each box labelled "Ability" (red banner), written as "Name: effect",
   e.g. "Deep Submergence: Once during your turn, ...". An Ability has no energy cost and no damage.
-  Other games: what the card is associated with (e.g. Magic creature types such as Goblin, Wizard; tags).
+  Magic: the subtypes after the dash in the type line, one each ("Creature — Vampire Rogue" -> Vampire, Rogue;
+  "Land — Forest Island" -> Forest, Island). Other games: what the card is associated with (tags, archetypes).
 - abilities: one entry each.
   Pokémon: each ATTACK (move), written as "Name (Cost) Damage: effect", where Cost is the energy symbols to its
   left in order and Damage is the number to its right exactly as printed; leave out parts the attack doesn't have,
   e.g. "Hydro Pump (Water Water Colorless) 160+: This attack does 20 more damage for each Water Energy..."
   or "Bite (Colorless) 30". Anything with an energy cost or damage is an attack and goes HERE, never in traits.
-  Magic: each rules-text paragraph. Yu-Gi-Oh!: the card's effect text.
+  Magic: each rules-text paragraph exactly as printed, one entry each (keywords such as Lifelink or Flying are
+  their own entry), with symbols written in braces: {T} for tap, {W} {U} {B} {R} {G} for coloured mana, {C} colourless,
+  numbers as {2}, and {X}. E.g. "{2}{B}: This creature gains lifelink until end of turn." or "{T}: Add {G}."
+  Yu-Gi-Oh!: the card's effect text.
 - On Pokémon cards, leave damage null (each attack carries its own damage).
 - weakness: e.g. Lightning / Electric. resistance: likewise.
 - artist: the illustrator credited on the card (e.g. "Illus. Acorviart" -> Acorviart).
 - language: the printing language, e.g. English, Japanese.
 - legal: tournament legality only if printed (e.g. a regulation mark); otherwise null.
-- cost: the play / resource cost to use the card (e.g. mana cost), if the game has one.
+- cost: the play / resource cost to use the card, if the game has one.
+  Magic: the mana cost in the top corner written out - each colour with its count first, then the generic number
+  as "Any Colour", then X: {2}{G} -> "1 Green, 2 Any Colour"; {U}{R} -> "1 Blue, 1 Red";
+  {1}{B}{B} -> "2 Black, 1 Any Colour"; {X}{G} -> "1 Green, 1 {X}". Lands have no cost: null.
+  Pokémon: null (attack costs go with each attack).
 - unit_level: a printed level / rank (e.g. Yu-Gi-Oh! level), if any.
 For sports cards all of these card-metadata fields are null and traits/abilities are empty lists.
 
