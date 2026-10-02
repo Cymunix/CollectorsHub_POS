@@ -2671,3 +2671,148 @@ export async function findSpecDuplicates({ category, values = {} }) {
   })
   return match.candidates.filter((candidate) => candidate.exact)
 }
+
+// ---------------------------------------------------------------------------
+// Set checklists: placeholder catalogue items for every card in a set, so a
+// set shows complete (and collectors can track it) before every card has been
+// scanned. A scan that matches a placeholder fills it in on approval.
+
+export const CHECKLIST_PLACEHOLDER_KEY = 'checklist_placeholder'
+
+export function isChecklistPlaceholder(item) {
+  return Boolean(item?.dynamic_fields?.[CHECKLIST_PLACEHOLDER_KEY])
+}
+
+// One card per line, in the shapes checklists usually come in:
+//   1 Josh Allen - Buffalo Bills        #1 Josh Allen, Bills
+//   1. Josh Allen | Buffalo Bills RC    BLLR-EN033 Sadion, the Timelord
+//   1<TAB>Josh Allen<TAB>Buffalo Bills  (pasted from a spreadsheet)
+// A trailing RC / Rookie marks a rookie card; SP / SSP marks a short print.
+// teams: whether lines carry a team after the name (sports cards). Trading
+// card names often contain commas ("Sadion, the Timelord"), so for them the
+// rest of the line is the name.
+export function parseChecklist(text, { teams = true } = {}) {
+  const rows = []
+  const seen = new Set()
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    const line = rawLine.replace(/ /g, ' ').trim()
+    if (!line) continue
+    let parts
+    if (line.includes('\t')) {
+      parts = line.split('\t').map((part) => part.trim()).filter(Boolean)
+    } else {
+      const match = line.match(/^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)[.):]?\s+(.+)$/)
+      if (!match) { rows.push({ raw: line, error: 'No card number at the start of the line' }); continue }
+      parts = teams
+        ? [match[1], ...match[2].split(/\s+[-–—|]\s+|\s*,\s+(?=[^,]+$)/).map((part) => part.trim()).filter(Boolean)]
+        : [match[1], match[2].trim()]
+    }
+    let [number, name = '', team = ''] = parts
+    number = String(number || '').replace(/^#/, '').trim()
+    const flags = { rookie: false, shortPrint: false }
+    const stripFlags = (value) => String(value || '').replace(/\s+\b(RC|Rookie|SSP|SP)\b\.?$/i, (all, flag) => {
+      if (/^(rc|rookie)$/i.test(flag)) flags.rookie = true
+      else flags.shortPrint = true
+      return ''
+    }).trim()
+    name = stripFlags(stripFlags(name))
+    team = stripFlags(stripFlags(team))
+    if (!number || !name) { rows.push({ raw: line, error: 'Needs a card number and a name' }); continue }
+    const key = number.toLowerCase()
+    if (seen.has(key)) { rows.push({ raw: line, error: `Card ${number} is listed twice` }); continue }
+    seen.add(key)
+    rows.push({ raw: line, number, name, team, rookie: flags.rookie, shortPrint: flags.shortPrint })
+  }
+  return rows
+}
+
+// The cards already in the catalogue for a set: by Property when one is
+// chosen, otherwise by Subfranchise (+ year for sports product lines).
+export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId = '', subsetId = '', propertyId = '', releaseYear = '' }) {
+  if (!categoryId) return []
+  const rows = []
+  for (let from = 0; ; from += 1000) {
+    let query = supabase.from('items')
+      .select(propertyId ? 'item_id, name, subject, card_number, release_year, image_path, dynamic_fields, item_properties!inner(property_id)' : 'item_id, name, subject, card_number, release_year, image_path, dynamic_fields')
+      .eq('category_id', categoryId)
+    if (subcategoryId) query = query.eq('subcategory_id', subcategoryId)
+    if (franchiseId) query = query.eq('franchise_id', franchiseId)
+    if (subsetId) query = query.eq('subset_id', subsetId)
+    if (propertyId) query = query.eq('item_properties.property_id', propertyId)
+    else if (releaseYear) query = query.eq('release_year', Number(releaseYear))
+    const { data, error } = await query.order('item_id').range(from, from + 999)
+    if (error) throw error
+    rows.push(...(data || []))
+    if (!data || data.length < 1000) break
+  }
+  return rows
+}
+
+// Creates a placeholder item for each checklist row that the set doesn't have
+// yet. Returns { created: [ids], skipped: number }.
+export async function createChecklistPlaceholders({ category, ids, releaseYear = '', rows = [], existing = [] }) {
+  const categoryId = await categoryIdForName(category)
+  if (!categoryId || !ids?.subcategory_id) throw new Error('Choose the set (at least the category and subcategory) first.')
+  const have = new Set(existing.map((item) => cardNumberText(item.card_number)))
+  const todo = rows.filter((row) => !row.error && !have.has(cardNumberText(row.number)))
+  const created = []
+  for (let index = 0; index < todo.length; index += 100) {
+    const payload = todo.slice(index, index + 100).map((row) => {
+      const dynamic = { [CHECKLIST_PLACEHOLDER_KEY]: true, source: 'Set checklist' }
+      if (row.team) dynamic.team = row.team
+      if (row.rookie) dynamic.rookie = 'Yes'
+      if (row.shortPrint) dynamic.variation = 'Short Print'
+      return {
+        category_id: categoryId,
+        subcategory_id: ids.subcategory_id || null,
+        franchise_id: ids.franchise_id || null,
+        subset_id: ids.subset_id || null,
+        item_type_id: ids.item_type_id || null,
+        publisher_id: ids.publisher_id || null,
+        name: row.name,
+        subject: row.name,
+        card_number: row.number,
+        release_year: releaseYear ? Number(releaseYear) : null,
+        completion_eligible: true,
+        dynamic_fields: dynamic,
+      }
+    })
+    const { data, error } = await supabase.from('items').insert(payload).select('item_id')
+    if (error) {
+      backupCatalogueChange({ action: 'create', ok: false, error: error.message, payload: { checklist: payload } })
+      throw error
+    }
+    const newIds = (data || []).map((row) => row.item_id)
+    created.push(...newIds)
+    if (ids.property_id && newIds.length) {
+      const { error: linkError } = await supabase.from('item_properties').insert(newIds.map((itemId) => ({ item_id: itemId, property_id: ids.property_id })))
+      if (linkError) throw new Error(`Placeholders created, but linking them to the set failed: ${linkError.message}`)
+    }
+    backupCatalogueChange({ action: 'create', itemIds: newIds })
+  }
+  return { created, skipped: rows.length - todo.length }
+}
+
+// A scan approved against a placeholder: fill the placeholder's empty fields
+// from the reviewed values (never overwriting what the checklist set) and
+// mark it scanned.
+export async function fillChecklistPlaceholder({ item, category, values }) {
+  if (!isChecklistPlaceholder(item)) return null
+  const groups = scanReviewGroups(category)
+  const patch = {}
+  groups.flatMap((group) => group.fields).forEach((field) => {
+    if (!field.column || field.taxonomy) return
+    if (String(item[field.column] ?? '').trim()) return
+    const value = reviewColumnValue(field, values[field.key])
+    if (value != null && value !== '') patch[field.column] = value
+  })
+  const filled = writeDynamicFields({}, groups, values, { dropEmpty: true })
+  const dynamic = { ...(item.dynamic_fields || {}) }
+  Object.entries(filled).forEach(([key, value]) => {
+    if (dynamic[key] == null || dynamic[key] === '') dynamic[key] = value
+  })
+  delete dynamic[CHECKLIST_PLACEHOLDER_KEY]
+  dynamic.scanner_source = 'CollectorsHub Desktop scanner'
+  patch.dynamic_fields = dynamic
+  return updateCatalogueItemRecord(item.item_id, patch)
+}

@@ -44,6 +44,11 @@ import {
   recognizedCardKey,
   TRADING_DYNAMIC_KEYS,
   swapItemFrontBack,
+  parseChecklist,
+  loadSetItems,
+  createChecklistPlaceholders,
+  isChecklistPlaceholder,
+  fillChecklistPlaceholder,
   CATALOGUE_EDIT_CHILDREN,
   CATALOGUE_EDIT_GROUPS,
   catalogueEditValues,
@@ -1131,6 +1136,7 @@ function CatalogueBackupPanel() {
 }
 
 function AdminCatalogue() {
+  const [checklistOpen, setChecklistOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [franchiseId, setFranchiseId] = useState('')
@@ -1227,7 +1233,10 @@ function AdminCatalogue() {
             <p className="admin-kicker">Real Supabase catalogue</p>
             <h2>Catalogue Administration</h2>
           </div>
-          <button className="admin-gold-button" type="button">+ Add Catalogue Item</button>
+          <div className="admin-panel-actions">
+            <button type="button" onClick={() => setChecklistOpen(true)}>Import set checklist</button>
+            <button className="admin-gold-button" type="button">+ Add Catalogue Item</button>
+          </div>
         </div>
         <div className="admin-filters">
           <label className="admin-search">
@@ -1261,6 +1270,7 @@ function AdminCatalogue() {
       </section>
 
       {selectedId ? <CatalogueItemRecord itemId={selectedId} onClose={() => setSelectedId('')} /> : null}
+      {checklistOpen ? <ChecklistImportDialog onClose={() => { setChecklistOpen(false); setReloadToken((token) => token + 1) }} /> : null}
       {deleting ? (
         <BulkDeleteDialog
           itemIds={[...checked]}
@@ -3782,6 +3792,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   const [tierFilter, setTierFilter] = useState('all')
   const [bulkAdd, setBulkAdd] = useState(null)
   const [setSetup, setSetSetup] = useState(null)
+  const [checklistOpen, setChecklistOpen] = useState(false)
 
   const copiesByCard = new Map()
   ;(drafts || []).filter((draft) => draft.recognition?.result && draft.status !== 'Rejected').forEach((draft) => {
@@ -3919,6 +3930,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
             attached = upload.attached
             warnings = upload.warnings || []
           }
+          await completePlaceholderFromDraft(match.item, draft)
         }
         await onUpdateDraft(draft.id, {
           status: 'Matched',
@@ -3953,6 +3965,12 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
         const found = await findSpecDuplicates({ category, values })
         if (found.length) {
           const itemId = found[0].item.item_id
+          // A checklist placeholder for this card: fill it and give it the scans.
+          if (isChecklistPlaceholder(found[0].item)) {
+            await fillChecklistPlaceholder({ item: found[0].item, category, values })
+            const images = await loadScanImageBlobs(draft)
+            if (images.length) await attachScanImagesToItem(itemId, images)
+          }
           await onUpdateDraft(draft.id, {
             category,
             status: 'Matched',
@@ -4036,6 +4054,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
       ) : null}
       {aiRows.length || orientationTargets.length || setGroups.length ? (
         <div className="review-bulk-bar">
+          <button type="button" onClick={() => setChecklistOpen(true)} title="Create placeholders for every card in a set, filled in as you scan them">Import set checklist</button>
           {perfectRows.length ? (
             <button className="admin-gold-button review-approve-perfect" type="button" onClick={() => setBulkAdd({ ids: perfectRows.map((draft) => draft.id), mode: 'approve' })} disabled={bulkRunning} title={perfectWaitingForSet ? `${perfectWaitingForSet} more 100% card${perfectWaitingForSet === 1 ? '' : 's'} need their set set up first` : 'Link exact matches and add new cards, after a quick look at the thumbnails'}>
               Approve all 100% ({perfectRows.length})
@@ -4207,6 +4226,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           onApply={async (choice) => { const group = setSetup; setSetSetup(null); await applySetToGroup(group, choice) }}
         />
       ) : null}
+      {checklistOpen ? <ChecklistImportDialog onClose={() => setChecklistOpen(false)} /> : null}
       {reviewDraft ? <ScanReviewEditor key={reviewDraft.id} draft={reviewDraft} onUpdateDraft={onUpdateDraft} onClose={() => setReviewDraftId('')} /> : null}
       {openItemId ? (
         <div className="register-modal existing-item-modal" role="dialog" aria-modal="true">
@@ -4430,6 +4450,183 @@ const CONFIDENCE_READINESS_TEXT = {
   check: 'Compare with a similar item',
 }
 
+// Set checklist import: choose a set, paste its checklist, preview against
+// what the catalogue already has, and create placeholders for the rest.
+function ChecklistImportDialog({ onClose }) {
+  const [categories, setCategories] = useState([])
+  const [category, setCategory] = useState('Sports Cards')
+  const [chosen, setChosen] = useState({ subcategory_id: '', franchise_id: '', subset_id: '', property_id: '', item_type_id: '', publisher_id: '' })
+  const [options, setOptions] = useState({})
+  const [releaseYear, setReleaseYear] = useState('')
+  const [text, setText] = useState('')
+  const [existing, setExisting] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const [result, setResult] = useState(null)
+  const categoryRow = categories.find((row) => row.name === category)
+  const trading = category === 'Trading Cards'
+  const rows = useMemo(() => parseChecklist(text, { teams: !trading }), [text, trading])
+  const good = rows.filter((row) => !row.error)
+  const bad = rows.filter((row) => row.error)
+
+  useEffect(() => {
+    loadAdminCategories().then((list) => setCategories(list.filter((row) => ['Sports Cards', 'Trading Cards'].includes(row.name)))).catch(() => setCategories([]))
+  }, [])
+
+  useEffect(() => {
+    if (!categoryRow) return undefined
+    let cancelled = false
+    loadCatalogueTaxonomyOptions({ categoryId: categoryRow.category_id, subcategoryId: chosen.subcategory_id, franchiseId: chosen.franchise_id, subsetId: chosen.subset_id })
+      .then((next) => {
+        if (cancelled) return
+        setOptions(next)
+        // Item type defaults to "Card".
+        if (!chosen.item_type_id) {
+          const card = (next.item_type || []).find((option) => option.name.toLowerCase() === 'card')
+          if (card) setChosen((current) => (current.item_type_id ? current : { ...current, item_type_id: card.id }))
+        }
+      })
+      .catch((loadError) => { if (!cancelled) setError(loadError.message || 'Could not load the catalogue taxonomy.') })
+    return () => { cancelled = true }
+  }, [categoryRow?.category_id, chosen.subcategory_id, chosen.franchise_id, chosen.subset_id])
+
+  function choose(key, value) {
+    const children = { subcategory_id: ['franchise_id', 'subset_id', 'property_id', 'item_type_id'], franchise_id: ['subset_id', 'property_id'], subset_id: ['property_id'] }[key] || []
+    setChosen((current) => {
+      const next = { ...current, [key]: value }
+      children.forEach((child) => { next[child] = '' })
+      return next
+    })
+    setExisting(null)
+    setResult(null)
+    if (key === 'property_id') {
+      const name = (options.property || []).find((option) => option.id === value)?.name || ''
+      const year = name.match(/\b(19|20)\d{2}\b/)?.[0]
+      if (year) setReleaseYear(year)
+    }
+  }
+
+  const setChosenEnough = Boolean(chosen.subcategory_id && chosen.franchise_id && (chosen.subset_id || chosen.property_id))
+
+  async function checkSet() {
+    setBusy('check')
+    setError('')
+    try {
+      setExisting(await loadSetItems({ categoryId: categoryRow.category_id, subcategoryId: chosen.subcategory_id, franchiseId: chosen.franchise_id, subsetId: chosen.subset_id, propertyId: chosen.property_id, releaseYear }))
+    } catch (checkError) {
+      setError(checkError.message || 'Could not load the set.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function create() {
+    setBusy('create')
+    setError('')
+    try {
+      const outcome = await createChecklistPlaceholders({ category, ids: chosen, releaseYear, rows: good, existing: existing || [] })
+      setResult(outcome)
+      await checkSet()
+    } catch (createError) {
+      setError(createError.message || 'Could not create the placeholders.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const byNumber = new Map((existing || []).map((item) => [String(item.card_number || '').toLowerCase().replace(/^(no\.?|#)\s*/, ''), item]))
+  const status = (row) => {
+    const item = byNumber.get(String(row.number).toLowerCase())
+    if (!item) return 'new'
+    return isChecklistPlaceholder(item) ? 'placeholder' : 'scanned'
+  }
+  const counts = { new: 0, placeholder: 0, scanned: 0 }
+  good.forEach((row) => { if (existing) counts[status(row)] += 1 })
+  const scannedInSet = (existing || []).filter((item) => !isChecklistPlaceholder(item)).length
+  const missingNumbers = existing ? good.filter((row) => status(row) !== 'scanned').map((row) => row.number) : []
+  const select = (key, label, list, disabled) => (
+    <label>{label}
+      <select value={chosen[key]} onChange={(event) => choose(key, event.target.value)} disabled={disabled || busy}>
+        <option value="">—</option>
+        {(list || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+      </select>
+    </label>
+  )
+
+  return (
+    <div className="register-modal checklist-modal" role="dialog" aria-modal="true" aria-labelledby="checklist-title">
+      <section>
+        <div className="checklist-head">
+          <div>
+            <p className="admin-kicker">Set checklist</p>
+            <h2 id="checklist-title">Import a set checklist</h2>
+            <small>Creates a placeholder for every card in the set that isn't in the catalogue yet (shown on the website). Scanning a card later fills its placeholder in when you approve it.</small>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} disabled={Boolean(busy)} aria-label="Close"><X size={18} /></button>
+        </div>
+        <div className="checklist-grid">
+          <label>Category
+            <select value={category} onChange={(event) => { setCategory(event.target.value); setChosen({ subcategory_id: '', franchise_id: '', subset_id: '', property_id: '', item_type_id: '', publisher_id: '' }); setExisting(null) }} disabled={Boolean(busy)}>
+              {categories.map((row) => <option key={row.category_id}>{row.name}</option>)}
+            </select>
+          </label>
+          {select('subcategory_id', trading ? 'Subcategory (brand)' : 'Subcategory (sport)', options.subcategory, false)}
+          {select('franchise_id', trading ? 'Franchise' : 'Franchise (league)', options.franchise, !chosen.subcategory_id)}
+          {select('subset_id', trading ? 'Subfranchise (set / era)' : 'Subfranchise (product line)', options.subset, !chosen.franchise_id)}
+          {select('property_id', trading ? 'Property (release)' : 'Property (set)', options.property, !chosen.franchise_id)}
+          <label>Release year
+            <input type="number" value={releaseYear} onChange={(event) => { setReleaseYear(event.target.value); setExisting(null) }} placeholder="e.g. 2025" disabled={Boolean(busy)} />
+          </label>
+          {select('item_type_id', 'Item type', options.item_type, !chosen.subcategory_id)}
+          {select('publisher_id', 'Publisher', options.publisher, false)}
+        </div>
+        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie)
+          <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
+        </label>
+        <div className="checklist-summary">
+          <span>{good.length} card{good.length === 1 ? '' : 's'} read{bad.length ? ` · ${bad.length} line${bad.length === 1 ? '' : 's'} skipped` : ''}</span>
+          <button type="button" onClick={checkSet} disabled={!setChosenEnough || !good.length || Boolean(busy)}>{busy === 'check' ? 'Checking…' : 'Check against the catalogue'}</button>
+          {existing ? <span><strong>{scannedInSet}</strong> scanned in this set · {counts.placeholder} placeholder{counts.placeholder === 1 ? '' : 's'} · <strong>{counts.new}</strong> to create</span> : null}
+        </div>
+        {existing && missingNumbers.length ? <p className="scan-mode-note">Not scanned yet: {missingNumbers.slice(0, 60).join(', ')}{missingNumbers.length > 60 ? ` and ${missingNumbers.length - 60} more` : ''}</p> : null}
+        {bad.length ? <p className="scan-mode-note">Skipped: {bad.slice(0, 5).map((row) => `"${row.raw}" (${row.error})`).join('; ')}</p> : null}
+        {good.length ? (
+          <div className="checklist-preview">
+            <table className="admin-table">
+              <thead><tr><th>#</th><th>{trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
+              <tbody>
+                {good.slice(0, 400).map((row) => (
+                  <tr key={row.number}>
+                    <td>{row.number}</td>
+                    <td>{row.name}</td>
+                    {trading ? null : <td>{row.team || '—'}</td>}
+                    <td>{[row.rookie ? 'RC' : '', row.shortPrint ? 'SP' : ''].filter(Boolean).join(' ') || ''}</td>
+                    {existing ? <td className={`checklist-status ${status(row)}`}>{{ new: 'Will be created', placeholder: 'Placeholder', scanned: 'Scanned' }[status(row)]}</td> : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {result ? <p className="admin-success">Created {result.created.length} placeholder{result.created.length === 1 ? '' : 's'}{result.skipped ? ` (${result.skipped} already in the catalogue)` : ''}.</p> : null}
+        {error ? <p className="admin-error">{error}</p> : null}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose} disabled={Boolean(busy)}>Close</button>
+          <button className="update-prompt-primary" type="button" onClick={create} disabled={!existing || !counts.new || Boolean(busy) || !chosen.item_type_id}>{busy === 'create' ? 'Creating…' : `Create ${counts.new} placeholder${counts.new === 1 ? '' : 's'}`}</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// A scan approved against a set-checklist placeholder fills its blank fields
+// from the card's reviewed values and marks it scanned.
+async function completePlaceholderFromDraft(item, draft) {
+  if (!isChecklistPlaceholder(item)) return
+  const category = draft.recognition?.taxonomy?.category || draft.category
+  try { await fillChecklistPlaceholder({ item, category, values: bulkReviewValues(draft, category) }) } catch {}
+}
+
 const AI_MATCH_TEXT = {
   exact: ['Exact match found', 'Approve links this scan to the existing catalogue item (no duplicate is created) and makes the scans its catalogue photos.'],
   likely: ['Likely match', 'Approve opens the catalogue form so you can confirm the match.'],
@@ -4516,6 +4713,7 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
       // A copy of a card added from this queue keeps the photos of the first
       // copy; any other exact match gets these scans as its photos.
       const images = match.fromSibling ? { attached: 0, existing: null, warnings: [] } : await attachScans(itemId)
+      if (!match.fromSibling) await completePlaceholderFromDraft(match.item, draft)
       await onUpdateDraft(draft.id, {
         status: 'Matched',
         matchedItemId: itemId,
@@ -5106,6 +5304,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     return run('update', async () => {
       const images = attachImages ? await loadScanImageBlobs(draft) : []
       const result = await updateCatalogueItemFromReview({ item: reviewItem, category, values, images })
+      if (isChecklistPlaceholder(reviewItem)) await fillChecklistPlaceholder({ item: reviewItem, category, values })
       const updated = result.changed.length || images.length
       await onUpdateDraft(draft.id, {
         category,
@@ -5121,6 +5320,11 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
 
   function linkToItem(item) {
     return run('link', async () => {
+      if (isChecklistPlaceholder(item)) {
+        await fillChecklistPlaceholder({ item, category, values })
+        const images = attachImages ? await loadScanImageBlobs(draft) : []
+        if (images.length) await attachScanImagesToItem(item.item_id, images)
+      }
       await onUpdateDraft(draft.id, {
         category,
         status: 'Matched',
