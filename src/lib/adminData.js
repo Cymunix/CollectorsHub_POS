@@ -2404,9 +2404,39 @@ function serialDenominator(value) {
   return match ? match[1] : ''
 }
 
+// Print finish in the catalogue's terms. Trading card games list foil and
+// non-foil printings as separate items (Magic data says Foil / Nonfoil; the AI
+// may say Holo / None).
+function finishKey(value) {
+  const text = matchText(value)
+  if (!text) return ''
+  if (/reverse/.test(text)) return 'reverse'
+  if (/^(none|nonfoil|non-foil|non foil|normal|regular|standard|matte)$/.test(text)) return 'nonfoil'
+  if (/foil|holo|etched|refractor|shiny/.test(text)) return 'foil'
+  return text
+}
+
+// Set names compared loosely (punctuation, case and maker names aside).
+function looseSetName(value) {
+  return matchText(value).replace(/[^a-z0-9]+/g, ' ').split(' ').filter((word) => word && !['the', 'panini', 'topps', 'set'].includes(word)).join(' ')
+}
+
 // Refinement fields that separate variants of the same player/number/release.
 // Each returns 'match', 'mismatch' or 'unknown'.
 const REFINE_FIELDS = [
+  {
+    key: 'finish',
+    weight: 8,
+    // Trading cards only (foil and non-foil are different catalogue items);
+    // unknown when either side doesn't say.
+    compare: (card, item) => {
+      if (!card._trading) return 'unknown'
+      const cardFinish = finishKey(card.finish)
+      const itemFinish = finishKey(item.dynamic_fields?.finish)
+      if (!cardFinish || !itemFinish) return 'unknown'
+      return cardFinish === itemFinish ? 'match' : 'mismatch'
+    },
+  },
   { key: 'collection', weight: 10, compare: (card, item) => collectionKey(card.collection) === collectionKey(item.dynamic_fields?.collection) ? 'match' : 'mismatch' },
   // No parallel read from the card means a base card: it matches items with no parallel.
   { key: 'parallel', weight: 10, compare: (card, item) => matchText(card.parallel) === matchText(item.dynamic_fields?.parallel) ? 'match' : 'mismatch' },
@@ -2464,10 +2494,21 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
   const rows = data || []
 
   const propertyByItem = new Map()
+  const subsetNames = new Map()
   if (rows.length) {
-    const { data: links } = await supabase.from('item_properties').select('item_id, property_id').in('item_id', rows.map((row) => row.item_id))
+    const subsetIds = [...new Set(rows.map((row) => row.subset_id).filter(Boolean))]
+    const [{ data: links }, { data: subsets }] = await Promise.all([
+      supabase.from('item_properties').select('item_id, property_id').in('item_id', rows.map((row) => row.item_id)),
+      subsetIds.length ? supabase.from('subsets').select('subset_id, name').in('subset_id', subsetIds) : Promise.resolve({ data: [] }),
+    ])
     ;(links || []).forEach((link) => { if (!propertyByItem.has(link.item_id)) propertyByItem.set(link.item_id, link.property_id) })
+    ;(subsets || []).forEach((subset) => subsetNames.set(subset.subset_id, subset.name))
   }
+  // The set as the AI read it (trading card games keep the set on the
+  // subfranchise, e.g. each Magic or Yu-Gi-Oh! set is one).
+  const setTexts = [card.property, card.subfranchise].map(looseSetName).filter(Boolean)
+  const trading = /trading/i.test(String(card.category || ''))
+  const cardForRefine = { ...card, _trading: trading }
 
   const uncertain = new Set((card.uncertain_fields || []).map((field) => String(field).toLowerCase()))
   const candidates = rows.map((row) => {
@@ -2487,27 +2528,43 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
     const numberMatch = Boolean(number) && cardNumberText(item.card_number) === number
     if (numberMatch) { score += 25; reasons.push('Same card number') }
 
-    // Release: the resolved Property is strongest, then the Subfranchise, then the year.
+    // Release: the resolved Property is strongest, then the Subfranchise, then
+    // the set name as read, then the year. Each is used only when the
+    // catalogue item has it (trading cards have no Property links, and keep
+    // the set on the Subfranchise).
     let releaseMatch = true
-    if (ids.property_id) {
+    // A Property, or a trading-card set, is one specific release; a sports
+    // Subfranchise is a product line spanning years, so the year still counts.
+    let specificRelease = false
+    const itemSetName = looseSetName(subsetNames.get(item.subset_id))
+    if (ids.property_id && item._property_id) {
       possible += 20
+      specificRelease = true
       releaseMatch = item._property_id === ids.property_id
       if (releaseMatch) { score += 20; reasons.push('Same release/set') } else differences.push('release/set')
-    } else if (ids.subset_id) {
+    } else if (ids.subset_id && item.subset_id && (!trading || ids.subset_id === item.subset_id || !setTexts.length)) {
       possible += 15
+      specificRelease = trading
       releaseMatch = item.subset_id === ids.subset_id
-      if (releaseMatch) { score += 15; reasons.push('Same product line') } else differences.push('product line')
+      if (releaseMatch) { score += 15; reasons.push(trading ? 'Same set' : 'Same product line') } else differences.push(trading ? 'set' : 'product line')
+    } else if (setTexts.length && itemSetName) {
+      possible += 15
+      specificRelease = trading
+      releaseMatch = setTexts.some((text) => text === itemSetName || text.includes(itemSetName) || itemSetName.includes(text))
+      if (releaseMatch) { score += 15; reasons.push('Same set') } else differences.push('set')
     }
     if (card.release_year) {
       possible += 5
       const sameYear = String(item.release_year || '') === String(card.release_year)
-      if (sameYear) { score += 5; reasons.push('Same year') } else if (!ids.property_id) { releaseMatch = false; differences.push('year') }
+      // A confirmed specific release outranks the year (copyright years can
+      // differ from the catalogue's release year); otherwise it must agree.
+      if (sameYear) { score += 5; reasons.push('Same year') } else if (!(specificRelease && releaseMatch)) { releaseMatch = false; differences.push('year') }
     }
 
     const identity = subjectMatch && numberMatch && releaseMatch
     let refineAllMatch = true
     REFINE_FIELDS.forEach((field) => {
-      const outcome = field.compare(card, item)
+      const outcome = field.compare(cardForRefine, item)
       if (outcome !== 'unknown') possible += field.weight
       if (outcome === 'match') { score += field.weight; if (['collection', 'parallel'].includes(field.key)) reasons.push(`Same ${field.key}`) }
       if (outcome === 'mismatch') { refineAllMatch = false; differences.push(field.key.replace('_', ' ')) }
@@ -2599,6 +2656,8 @@ export async function findSpecDuplicates({ category, values = {} }) {
     categoryId,
     ids: { property_id: values.property_id || '', subset_id: values.subset_id || '' },
     card: {
+      category,
+      finish: values.finish,
       subject: values.subject,
       id_number: values.card_number,
       release_year: values.release_year,
