@@ -204,7 +204,8 @@ Star Wars and similar) are NOT sports cards. For them the fields above mean:
 - id_number: the card's own collector number as printed, without the set size (213/191 -> 213).
 - publisher_manufacturer: e.g. The Pokémon Company, Wizards of the Coast, Konami, Bandai.
 - release_year: the year printed on the card (copyright line) for that release.
-- description: flavour / description text printed on the card, if any.
+- description: ONLY the flavour text: the small italic Pokédex entry or flavour line (on Magic, the italic flavour
+  text under the rules). Never put abilities, attacks, rules or effect text here. null if the card has none.
 - finish: print treatment such as Holo, Reverse Holo, Full Art, or None.
 - team, rookie, parallel, variation, serial_numbering, autograph, autograph_type, memorabilia_relic, card_type:
   null / false (sports-card fields).
@@ -216,8 +217,17 @@ Card metadata for trading card games (null when the card doesn't show it):
 - damage: a printed damage value or modifier, only if the game has a single one.
 - shields: a defensive resource / protection value, only if printed.
 - tcg_type: the card's primary game classification, e.g. Water (Pokémon type), Red (Magic colour), Effect Monster.
-- traits: what the card is associated with (e.g. creature types, tags) as a list.
-- abilities: the card's named abilities (e.g. Deep Submergence) as a list.
+- traits: one entry each.
+  Pokémon: each box labelled "Ability" (red banner), written as "Name: effect",
+  e.g. "Deep Submergence: Once during your turn, ...". An Ability has no energy cost and no damage.
+  Other games: what the card is associated with (e.g. Magic creature types such as Goblin, Wizard; tags).
+- abilities: one entry each.
+  Pokémon: each ATTACK (move), written as "Name (Cost) Damage: effect", where Cost is the energy symbols to its
+  left in order and Damage is the number to its right exactly as printed; leave out parts the attack doesn't have,
+  e.g. "Hydro Pump (Water Water Colorless) 160+: This attack does 20 more damage for each Water Energy..."
+  or "Bite (Colorless) 30". Anything with an energy cost or damage is an attack and goes HERE, never in traits.
+  Magic: each rules-text paragraph. Yu-Gi-Oh!: the card's effect text.
+- On Pokémon cards, leave damage null (each attack carries its own damage).
 - weakness: e.g. Lightning / Electric. resistance: likewise.
 - artist: the illustrator credited on the card (e.g. "Illus. Acorviart" -> Acorviart).
 - language: the printing language, e.g. English, Japanese.
