@@ -1579,6 +1579,26 @@ function RegisterView({
     const duplicateCount = duplicateCountForScanItem(session.items || [], { sku, name, catalogItemId: candidate?.catalogItemId || seed.catalogItemId })
     const confidenceState = seed.confidenceState || (candidate ? 'high' : 'low')
     const reviewState = seed.reviewState || (confidenceState === 'high' ? 'accepted' : 'needs_review')
+    // Another copy of a card already in the session, in the same condition:
+    // one row, counted by quantity.
+    const stackWith = (session.items || []).find((existing) => stacksWith(existing, {
+      catalogItemId: seed.catalogItemId || candidate?.catalogItemId || '',
+      condition: seed.condition || 'Near Mint',
+      graded: !!seed.graded,
+    }))
+    if (stackWith) {
+      const stacked = { ...stackWith, quantity: Number(stackWith.quantity || 1) + 1, updatedAt: now }
+      await persistScanSession({
+        ...session,
+        items: (session.items || []).map((existing) => (existing.id === stackWith.id ? stacked : existing)),
+        events: seed.event ? [seed.event, ...(session.events || [])] : (session.events || []),
+        updatedAt: now,
+        savedState: 'saved_locally',
+      })
+      setScanIntakeQuery('')
+      setNotice(`${stacked.name} ×${stacked.quantity} (another copy, same condition).`)
+      return stacked
+    }
     const item = {
       id: createId('scan_item'),
       eventId: seed.eventId || '',
@@ -1846,11 +1866,20 @@ function RegisterView({
 
   async function updateScanItem(itemId, patch) {
     if (!activeScanSession) return
-    await patchScanSession({
-      items: scanSessionItems.map((item) => (
-        item.id === itemId ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item
-      )),
-    })
+    let items = scanSessionItems.map((item) => (
+      item.id === itemId ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item
+    ))
+    // A change that makes it the same card in the same condition as another
+    // row (linked in Review, or its condition changed) joins that row.
+    const updated = items.find((item) => item.id === itemId)
+    const twin = updated && items.find((item) => item.id !== itemId && stacksWith(item, updated))
+    if (twin) {
+      items = items
+        .filter((item) => item.id !== itemId)
+        .map((item) => (item.id === twin.id ? { ...item, quantity: Number(item.quantity || 1) + Number(updated.quantity || 1), updatedAt: new Date().toISOString() } : item))
+      setNotice(`${twin.name}: copies combined into one row (×${Number(twin.quantity || 1) + Number(updated.quantity || 1)}).`)
+    }
+    await patchScanSession({ items })
   }
 
   async function removeScanItem(itemId) {
@@ -3324,11 +3353,56 @@ function ScanStat({ label, value }) {
   )
 }
 
+// Same identified card in the same condition, neither graded: they share a
+// row and count by quantity.
+function stacksWith(a, b) {
+  return Boolean(a?.catalogItemId) && a.catalogItemId === b?.catalogItemId && !a.graded && !b.graded
+    && (a.condition || 'Near Mint') === (b.condition || 'Near Mint')
+}
+
+// Quantity typed freely (cleared while typing), saved on Enter or leaving
+// the box; − and + step it.
+function QuantityInput({ value, onChange }) {
+  const [draft, setDraft] = useState(String(value || 1))
+  useEffect(() => { setDraft(String(value || 1)) }, [value])
+  const commit = (next) => {
+    const quantity = Math.max(1, parseInt(next, 10) || 1)
+    setDraft(String(quantity))
+    if (quantity !== Number(value || 1)) onChange(quantity)
+  }
+  return (
+    <span className="scan-qty-input">
+      <button type="button" onClick={() => commit(Number(value || 1) - 1)} disabled={Number(value || 1) <= 1} aria-label="One fewer">−</button>
+      <input value={draft} onChange={(event) => setDraft(event.target.value.replace(/[^0-9]/g, ''))} onBlur={() => commit(draft)} onKeyDown={(event) => { if (event.key === 'Enter') commit(draft) }} inputMode="numeric" aria-label="Quantity" />
+      <button type="button" onClick={() => commit(Number(value || 1) + 1)} aria-label="One more">+</button>
+    </span>
+  )
+}
+
 function ScannedItemRow({ item, onRemove, onUpdate }) {
   const [reviewing, setReviewing] = useState(false)
+  const [zoomed, setZoomed] = useState(false)
+  useEffect(() => {
+    if (!zoomed) return undefined
+    const close = (event) => { if (event.key === 'Escape') setZoomed(false) }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [zoomed])
   return (
     <article className={`scanned-item-row ${item.reviewState}`}>
       {reviewing ? <ScanItemReviewDialog item={item} onUpdate={onUpdate} onClose={() => setReviewing(false)} /> : null}
+      {zoomed ? (
+        <div className="scan-zoom" role="dialog" aria-modal="true" aria-label="Scanned card, full size" onClick={() => setZoomed(false)}>
+          {item.scanImageUrl ? <img src={item.scanImageUrl} alt="Front, full size" /> : null}
+          {item.backImageUrl ? <img src={item.backImageUrl} alt="Back, full size" /> : null}
+          <span className="scan-zoom-hint">Click anywhere or press Esc to close</span>
+        </div>
+      ) : null}
+      {item.scanImageUrl ? (
+        <button type="button" className="scanned-item-thumb" onClick={() => setZoomed(true)} title="Click to see the scan full size">
+          <img src={item.scanImageUrl} alt="Scanned card" loading="lazy" decoding="async" />
+        </button>
+      ) : <span className="scanned-item-thumb empty" />}
       <div className="scan-confidence-mark">{confidenceSymbol(item)}</div>
       <div className="scanned-item-main">
         <strong>{item.name || 'Unidentified item'}</strong>
@@ -3344,7 +3418,7 @@ function ScannedItemRow({ item, onRemove, onUpdate }) {
       </label>
       <label>
         Qty
-        <input value={item.quantity || 1} onChange={(event) => onUpdate({ quantity: Math.max(1, Number(event.target.value || 1)) })} inputMode="numeric" />
+        <QuantityInput value={item.quantity || 1} onChange={(quantity) => onUpdate({ quantity })} />
       </label>
       <label>
         Market

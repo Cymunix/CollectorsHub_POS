@@ -8328,3 +8328,57 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Scanned item rows: scan thumbnail (click to enlarge) and a quantity box
+   with − / + */
+.scanned-item-row {
+  grid-template-columns: 52px 32px minmax(160px, 1.5fr) 150px 112px 110px 110px 74px auto;
+}
+
+.scanned-item-thumb {
+  background: #f4f6f9;
+  border: 1px solid #dce5ef;
+  border-radius: 6px;
+  cursor: zoom-in;
+  display: block;
+  height: 70px;
+  overflow: hidden;
+  padding: 0;
+  width: 52px;
+}
+
+.scanned-item-thumb.empty {
+  cursor: default;
+}
+
+.scanned-item-thumb img {
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  width: 100%;
+}
+
+.scan-qty-input {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+}
+
+.scan-qty-input button {
+  background: #fff;
+  border: 1px solid #d5dfeb;
+  border-radius: 7px;
+  cursor: pointer;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 0;
+}
+
+.scan-qty-input button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.scan-qty-input input {
+  text-align: center;
+}
