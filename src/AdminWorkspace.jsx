@@ -4729,6 +4729,14 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
   const result = recognition.result || {}
   const taxonomy = recognition.taxonomy || { names: {}, unresolved: {} }
   const uncertain = new Set((result.uncertain_fields || []).map((field) => String(field).toLowerCase()))
+  // Both scans full size, for reading names and small print.
+  const [zoomed, setZoomed] = useState(false)
+  useEffect(() => {
+    if (!zoomed) return undefined
+    const close = (event) => { if (event.key === 'Escape') setZoomed(false) }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [zoomed])
   const declined = recognition.status === 'declined'
   const matchStatus = draft.scanAnalysis?.matchStatus || 'none'
   const [matchTitle, matchHelp] = AI_MATCH_TEXT[matchStatus] || AI_MATCH_TEXT.none
@@ -4862,10 +4870,17 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
   return (
     <div className={`review-draft-card ai-review-card${declined ? ' declined' : ''}`}>
       <div className="ai-review-media">
-        <div className="review-draft-images">
-          {draft.frontImage?.url ? <img src={thumbUrl(draft.frontImage.url)} alt="Front" loading="lazy" decoding="async" /> : <span>Front</span>}
-          {draft.backImage?.url ? <img src={thumbUrl(draft.backImage.url)} alt="Back" loading="lazy" decoding="async" /> : <span>Back</span>}
+        <div className="review-draft-images ai-review-images" title="Click to see the scans full size">
+          {draft.frontImage?.url ? <img src={thumbUrl(draft.frontImage.url, 640)} alt="Front" loading="lazy" decoding="async" onClick={() => setZoomed(true)} /> : <span>Front</span>}
+          {draft.backImage?.url ? <img src={thumbUrl(draft.backImage.url, 640)} alt="Back" loading="lazy" decoding="async" onClick={() => setZoomed(true)} /> : <span>Back</span>}
         </div>
+        {zoomed ? (
+          <div className="scan-zoom" role="dialog" aria-modal="true" aria-label="Full-size scans" onClick={() => setZoomed(false)}>
+            {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="Front, full size" /> : null}
+            {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back, full size" /> : null}
+            <span className="scan-zoom-hint">Click anywhere or press Esc to close</span>
+          </div>
+        ) : null}
         {hasScans && typeof adminDesktopApi().rotateScanImage === 'function' ? (
           <div className="ai-review-orient">
             {draft.feed?.checkRotation ? <span className="ai-review-orient-flag">Check rotation</span> : null}

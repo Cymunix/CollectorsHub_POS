@@ -8044,3 +8044,60 @@ button:disabled {
   color: #5b6677;
   font-size: 13px;
 }
+
+/* Review cards: big scans to read names and numbers before approving */
+.review-draft-card.ai-review-card {
+  grid-template-columns: minmax(360px, 440px) minmax(0, 1fr) auto;
+}
+
+.ai-review-images img,
+.ai-review-images span {
+  height: 300px;
+}
+
+.ai-review-images img {
+  cursor: zoom-in;
+}
+
+@media (max-width: 1280px) {
+  .review-draft-card.ai-review-card {
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) auto;
+  }
+
+  .ai-review-images img,
+  .ai-review-images span {
+    height: 230px;
+  }
+}
+
+/* Full-size scans */
+.scan-zoom {
+  align-items: center;
+  background: rgba(8, 13, 22, 0.88);
+  cursor: zoom-out;
+  display: flex;
+  gap: 16px;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 1000;
+}
+
+.scan-zoom img {
+  background: #fff;
+  border-radius: 8px;
+  max-height: calc(100vh - 80px);
+  max-width: calc(50vw - 36px);
+  object-fit: contain;
+}
+
+.scan-zoom-hint {
+  bottom: 12px;
+  color: #cbd5e1;
+  font-size: 12px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  text-align: center;
+}
