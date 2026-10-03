@@ -2393,6 +2393,22 @@ function cardNumberText(value) {
   return matchText(value).replace(/^(no\.?|#)\s*/, '')
 }
 
+// The digits of a card number, for numbers printed with a set prefix,
+// leading zeros or a set size ("os050", "D25", "02/60" -> "50", "25", "2").
+function cardNumberCore(value) {
+  const match = cardNumberText(value).split('/')[0].match(/(\d+)\D*$/)
+  return match ? String(Number(match[1])) : ''
+}
+
+// A name's words without punctuation or quotes ("Orbital-Mine", '"Clankers!"').
+function looseNameWords(value) {
+  return matchText(value).split(/[^a-z0-9]+/).filter(Boolean)
+}
+
+// Rarity words the AI sometimes reads into Parallel on trading cards; a
+// rarity is not a parallel printing.
+const RARITY_WORDS = /^(common|uncommon|rare|super rare|ultra rare|secret rare|mythic|mythic rare|holo rare|rare holo|very rare)$/
+
 function yesNo(value) {
   if (value === true || /^(yes|true)$/i.test(String(value ?? ''))) return 'yes'
   if (value === false || /^(no|false)$/i.test(String(value ?? ''))) return 'no'
@@ -2439,7 +2455,14 @@ const REFINE_FIELDS = [
   },
   { key: 'collection', weight: 10, compare: (card, item) => collectionKey(card.collection) === collectionKey(item.dynamic_fields?.collection) ? 'match' : 'mismatch' },
   // No parallel read from the card means a base card: it matches items with no parallel.
-  { key: 'parallel', weight: 10, compare: (card, item) => matchText(card.parallel) === matchText(item.dynamic_fields?.parallel) ? 'match' : 'mismatch' },
+  {
+    key: 'parallel',
+    weight: 10,
+    compare: (card, item) => {
+      const cardParallel = card._trading && RARITY_WORDS.test(matchText(card.parallel)) ? '' : matchText(card.parallel)
+      return cardParallel === matchText(item.dynamic_fields?.parallel) ? 'match' : 'mismatch'
+    },
+  },
   { key: 'variation', weight: 4, compare: (card, item) => matchText(card.variation) === matchText(item.dynamic_fields?.variation) ? 'match' : 'mismatch' },
   {
     key: 'serial_numbering',
@@ -2479,35 +2502,58 @@ const REFINE_FIELDS = [
 //           serial_numbering, autograph, memorabilia_relic, uncertain_fields }
 //   ids:  resolved taxonomy ids { subset_id, property_id, ... }
 // Returns { status: 'exact' | 'likely' | 'multiple' | 'none', best, candidates }.
-export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
+export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard = {} }) {
+  const trading = /trading/i.test(String(readCard.category || ''))
+  // Trading cards print their place in the set as "33/120"; the AI often
+  // files that under serial numbering, but it is the card number.
+  // A number with nothing before the slash ("/120") is no number.
+  const cardIn = /^\s*\//.test(String(readCard.id_number || '')) ? { ...readCard, id_number: null } : readCard
+  const setPosition = trading && !cardIn.id_number && String(cardIn.serial_numbering || '').match(/^\s*#?\s*([a-z]*\d+)\s*\/\s*\d+\s*$/i)
+  const card = setPosition ? { ...cardIn, id_number: setPosition[1], serial_numbering: null } : cardIn
   const subject = String(card.subject || '').trim()
   const number = cardNumberText(card.id_number)
   if (!categoryId || (!subject && !number)) return { status: 'none', best: null, candidates: [] }
 
-  let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId)
+  const numberCore = cardNumberCore(card.id_number)
   // Search for each player on multi-player cards ('A/B'), in any order.
   const players = splitPlayers(subject)
-  if (players.length) query = query.or(players.flatMap((player) => [orContains('name', player), orContains('subject', player)]).join(','))
-  if (number) query = query.in('card_number', [number, `#${number}`, number.toUpperCase()])
-  const { data, error } = await query.limit(300)
+  // Trading card names with punctuation are searched word by word, so
+  // "Orbital-Mine" finds "Orbital Mine" and quotes don't matter.
+  const wordSearch = (column, player) => `${column}.ilike.${orValue(`%${looseNameWords(player).map((word) => word.replace(/[\\%_]/g, '\\$&')).join('%')}%`)}`
+  const byWords = trading && players.some((player) => /[^a-z0-9 ]/i.test(player) && looseNameWords(player).length)
+  const runQuery = (words) => {
+    let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId)
+    if (players.length) query = query.or(players.flatMap((player) => [words ? wordSearch('name', player) : orContains('name', player), words ? wordSearch('subject', player) : orContains('subject', player)]).join(','))
+    // Trading card numbers are often printed differently from the catalogue's
+    // ("os050" for 50), so with a name to search by they are compared below.
+    if (number && !(trading && players.length)) query = query.in('card_number', [...new Set([number, `#${number}`, number.toUpperCase(), numberCore].filter(Boolean))])
+    return query.limit(300)
+  }
+  let { data, error } = await runQuery(byWords)
+  // A word-by-word search can be slow on very short words; fall back to the
+  // plain search.
+  if (error && byWords) ({ data, error } = await runQuery(false))
   if (error) throw error
   const rows = data || []
 
   const propertyByItem = new Map()
   const subsetNames = new Map()
+  const franchiseNames = new Map()
   if (rows.length) {
     const subsetIds = [...new Set(rows.map((row) => row.subset_id).filter(Boolean))]
-    const [{ data: links }, { data: subsets }] = await Promise.all([
+    const franchiseIds = trading ? [...new Set(rows.map((row) => row.franchise_id).filter(Boolean))] : []
+    const [{ data: links }, { data: subsets }, { data: franchises }] = await Promise.all([
       supabase.from('item_properties').select('item_id, property_id').in('item_id', rows.map((row) => row.item_id)),
       subsetIds.length ? supabase.from('subsets').select('subset_id, name').in('subset_id', subsetIds) : Promise.resolve({ data: [] }),
+      franchiseIds.length ? supabase.from('franchises').select('franchise_id, name').in('franchise_id', franchiseIds) : Promise.resolve({ data: [] }),
     ])
     ;(links || []).forEach((link) => { if (!propertyByItem.has(link.item_id)) propertyByItem.set(link.item_id, link.property_id) })
     ;(subsets || []).forEach((subset) => subsetNames.set(subset.subset_id, subset.name))
+    ;(franchises || []).forEach((franchise) => franchiseNames.set(franchise.franchise_id, franchise.name))
   }
   // The set as the AI read it (trading card games keep the set on the
   // subfranchise, e.g. each Magic or Yu-Gi-Oh! set is one).
   const setTexts = [card.property, card.subfranchise].map(looseSetName).filter(Boolean)
-  const trading = /trading/i.test(String(card.category || ''))
   const cardForRefine = { ...card, _trading: trading }
 
   const uncertain = new Set((card.uncertain_fields || []).map((field) => String(field).toLowerCase()))
@@ -2518,14 +2564,18 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
     // Score = share of comparable evidence that agrees, so a card matching on
     // collection AND parallel outranks one matching on collection alone.
     let score = 0
-    let possible = 55
+    // A trading card with no number read is judged on name and set alone.
+    let possible = trading && !number ? 30 : 55
 
     // Same set of players, in any order; a card that only shares one player
     // of a dual card (or a solo card of one of them) is a different card.
     const wanted = playerSetKey(subject)
-    const subjectMatch = Boolean(wanted) && (playerSetKey(item.subject) === wanted || playerSetKey(item.name) === wanted)
+    const looseWanted = trading ? looseNameWords(subject).join('') : ''
+    const subjectMatch = Boolean(wanted) && (playerSetKey(item.subject) === wanted || playerSetKey(item.name) === wanted
+      || (Boolean(looseWanted) && (looseNameWords(item.name).join('') === looseWanted || looseNameWords(item.subject).join('') === looseWanted)))
     if (subjectMatch) { score += 30; reasons.push('Same player/subject') }
-    const numberMatch = Boolean(number) && cardNumberText(item.card_number) === number
+    const numberMatch = Boolean(number) && (cardNumberText(item.card_number) === number
+      || (trading && Boolean(numberCore) && cardNumberCore(item.card_number) === numberCore))
     if (numberMatch) { score += 25; reasons.push('Same card number') }
 
     // Release: the resolved Property is strongest, then the Subfranchise, then
@@ -2548,10 +2598,17 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
       releaseMatch = item.subset_id === ids.subset_id
       if (releaseMatch) { score += 15; reasons.push(trading ? 'Same set' : 'Same product line') } else differences.push(trading ? 'set' : 'product line')
     } else if (setTexts.length && itemSetName) {
-      possible += 15
-      specificRelease = trading
-      releaseMatch = setTexts.some((text) => text === itemSetName || text.includes(itemSetName) || itemSetName.includes(text))
-      if (releaseMatch) { score += 15; reasons.push('Same set') } else differences.push('set')
+      const sameSet = setTexts.some((text) => text === itemSetName || text.includes(itemSetName) || itemSetName.includes(text))
+      // The AI often reads the game's name ("PocketModel TCG") where the set
+      // goes; that says nothing about which of the game's sets it is.
+      const gameName = looseSetName(franchiseNames.get(item.franchise_id))
+      const onlyGameName = trading && !sameSet && Boolean(gameName) && setTexts.every((text) => gameName.includes(text) || text.includes(gameName))
+      if (!onlyGameName) {
+        possible += 15
+        specificRelease = trading
+        releaseMatch = sameSet
+        if (releaseMatch) { score += 15; reasons.push('Same set') } else differences.push('set')
+      }
     }
     if (card.release_year) {
       possible += 5
@@ -2561,7 +2618,9 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
       if (sameYear) { score += 5; reasons.push('Same year') } else if (!(specificRelease && releaseMatch)) { releaseMatch = false; differences.push('year') }
     }
 
-    const identity = subjectMatch && numberMatch && releaseMatch
+    // Trading cards often show no number (or the AI can't read it): the name
+    // and set/year decide, and several same-named cards go to the picker.
+    const identity = subjectMatch && releaseMatch && (numberMatch || (trading && !number))
     let refineAllMatch = true
     REFINE_FIELDS.forEach((field) => {
       const outcome = field.compare(cardForRefine, item)
@@ -2579,6 +2638,9 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
       identity,
       exact: identity && refineAllMatch,
       likelyDuplicate: identity && refineAllMatch,
+      // Same name and set/year but another number (trading card numbers are
+      // often misread, or listed differently by the checklist source).
+      nameAndRelease: trading && subjectMatch && releaseMatch,
     }
   })
     .filter((candidate) => candidate.score > 0)
@@ -2588,7 +2650,14 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card = {} }) {
   if (exact.length === 1) return { status: 'exact', best: exact[0], candidates }
   if (exact.length > 1) return { status: 'multiple', best: null, candidates }
   const identities = candidates.filter((candidate) => candidate.identity)
-  if (!identities.length) return { status: 'none', best: null, candidates }
+  if (!identities.length) {
+    // A trading card that agrees on everything but the number needs a person
+    // to pick, never a new catalogue item.
+    const sameName = candidates.filter((candidate) => candidate.nameAndRelease)
+    if (sameName.length === 1) return { status: 'likely', best: sameName[0], candidates }
+    if (sameName.length > 1) return { status: 'multiple', best: null, candidates }
+    return { status: 'none', best: null, candidates }
+  }
   if (identities.length === 1 || identities[0].score > identities[1].score) return { status: 'likely', best: identities[0], candidates }
   return { status: 'multiple', best: null, candidates }
 }
@@ -2630,7 +2699,7 @@ export function recognizedCardKey(card = {}, ids = {}) {
 
 export async function analyseRecognizedCard(result, fallbackCategory) {
   const taxonomy = await resolveRecognizedTaxonomy(result, fallbackCategory)
-  const match = await matchRecognizedCard({ categoryId: taxonomy.categoryId, ids: taxonomy.ids, card: result })
+  const match = await matchRecognizedCard({ categoryId: taxonomy.categoryId, ids: taxonomy.ids, card: { ...result, category: taxonomy.category || result.category } })
   const [route, status] = MATCH_STATUS_ROUTE[match.status]
   return {
     taxonomy,
@@ -2715,8 +2784,10 @@ export function parseChecklist(text, { teams = true } = {}) {
       else flags.shortPrint = true
       return ''
     }).trim()
-    name = stripFlags(stripFlags(name))
-    team = stripFlags(stripFlags(team))
+    // Wiki lists often quote card names ("Laser Beak").
+    const unquote = (value) => String(value || '').replace(/^["“”'‘’]+|["“”'‘’]+$/g, '').trim()
+    name = unquote(stripFlags(stripFlags(name)))
+    team = unquote(stripFlags(stripFlags(team)))
     if (!number || !name) { rows.push({ raw: line, error: 'Needs a card number and a name' }); continue }
     const key = number.toLowerCase()
     if (seen.has(key)) { rows.push({ raw: line, error: `Card ${number} is listed twice` }); continue }
