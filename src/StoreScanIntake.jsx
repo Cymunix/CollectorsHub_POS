@@ -3,6 +3,7 @@ import { ScanLine, Search, X } from 'lucide-react'
 import { analyseRecognizedCard } from './lib/adminData'
 import { searchDesktopTradeCatalogue } from './lib/registerBackend'
 import { addScannedCardToStock, CARD_CONDITIONS } from './lib/storeScan'
+import ConditionHint from './ConditionHint'
 import { readScannerPref, writeScannerPref } from './AdminWorkspace'
 
 // Store scan intake (store staff): scan cards on the FastFoto or flatbed, the
@@ -149,6 +150,13 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             item: best?.item ? pickItem(best.item) : scanAnalysis.matchStatus === 'likely' && scanAnalysis.bestMatch?.item ? pickItem(scanAnalysis.bestMatch.item) : null,
             status: best ? 'ready' : candidates.length ? 'choose' : 'unmatched',
           })
+          // The AI's suggested condition, unless staff already chose one.
+          const suggested = response.result?.suggested_condition
+          if (suggested) {
+            save((list) => list.map((entry) => (entry.id === card.id
+              ? { ...entry, conditionSuggestion: { condition: suggested, notes: response.result.condition_notes || [] }, ...(entry.conditionTouched ? {} : { condition: suggested }) }
+              : entry)))
+          }
         } catch (matchError) {
           patch(card.id, { ...fixed, result: response.result, status: 'unmatched', error: `Catalogue lookup failed: ${matchError.message}` })
         }
@@ -221,7 +229,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
 
   function applyDefaultsToWaiting(changes) {
     setDefaults((current) => ({ ...current, ...changes }))
-    save((list) => list.map((card) => (['added', 'adding', 'skipped'].includes(card.status) ? card : { ...card, ...changes })))
+    // A condition chosen for the batch is staff's call: the AI's suggestion
+    // no longer replaces it.
+    const touched = 'condition' in changes ? { conditionTouched: true } : {}
+    save((list) => list.map((card) => (['added', 'adding', 'skipped'].includes(card.status) ? card : { ...card, ...changes, ...touched })))
   }
 
   const counts = cards.reduce((acc, card) => ({ ...acc, [card.status]: (acc[card.status] || 0) + 1 }), {})
@@ -311,9 +322,12 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             </div>
             {['ready', 'choose', 'unmatched'].includes(card.status) ? (
               <div className="store-scan-card-fields">
-                <select value={card.condition} onChange={(event) => patch(card.id, { condition: event.target.value })}>
-                  {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
-                </select>
+                <span className="store-scan-condition">
+                  <select value={card.condition} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true })}>
+                    {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+                  </select>
+                  <ConditionHint suggestion={card.conditionSuggestion} current={card.condition} />
+                </span>
                 <input type="number" min="1" value={card.quantity} onChange={(event) => patch(card.id, { quantity: event.target.value })} title="Quantity" />
                 <input inputMode="decimal" value={card.sellPrice} onChange={(event) => patch(card.id, { sellPrice: event.target.value })} placeholder="Price" title="Sell price" />
               </div>

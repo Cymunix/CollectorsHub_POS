@@ -39,6 +39,7 @@ import {
 import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
 import StoreScanIntake from './StoreScanIntake'
+import ConditionHint from './ConditionHint'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
@@ -1607,6 +1608,8 @@ function RegisterView({
       sourceDevice: seed.sourceDevice || 'Register scanner',
       scanImageUrl: seed.scanImageUrl || '',
       scanImagePath: seed.scanImagePath || '',
+      // The AI's suggested condition and what it saw (shown behind the ? icon).
+      conditionSuggestion: seed.conditionSuggestion || null,
       // Back of the card (FastFoto stacks scan both sides).
       backImageUrl: seed.backImageUrl || seed.event?.backImage?.url || '',
       barcode: seed.barcode || '',
@@ -1784,6 +1787,7 @@ function RegisterView({
         await addScanSessionItem({
           event,
           eventId: event.scanId,
+          ...conditionSeed(recognition.result),
           sourceDevice: event.sourceDevice,
           scanImageUrl: event.image?.url || '',
           scanImagePath: event.image?.path || '',
@@ -1799,6 +1803,7 @@ function RegisterView({
         await addScanSessionItem({
           event,
           eventId: event.scanId,
+          ...conditionSeed(recognition.result),
           sourceDevice: event.sourceDevice,
           scanImageUrl: event.image?.url || '',
           scanImagePath: event.image?.path || '',
@@ -3353,6 +3358,12 @@ function ScanStat({ label, value }) {
   )
 }
 
+// The AI's suggested condition for a scanned card, as item fields.
+function conditionSeed(result) {
+  if (!result?.suggested_condition) return {}
+  return { condition: result.suggested_condition, conditionSuggestion: { condition: result.suggested_condition, notes: result.condition_notes || [] } }
+}
+
 // Same identified card in the same condition, neither graded: they share a
 // row and count by quantity.
 function stacksWith(a, b) {
@@ -3411,7 +3422,7 @@ function ScannedItemRow({ item, onRemove, onUpdate }) {
         {item.duplicateWarning ? <em>Possible duplicate: verify this is another physical copy.</em> : null}
       </div>
       <label>
-        Condition
+        <span className="condition-label">Condition <ConditionHint suggestion={item.conditionSuggestion} current={item.condition} /></span>
         <select value={item.condition || 'Near Mint'} onChange={(event) => onUpdate({ condition: event.target.value })}>
           {conditionOptions('buy', item.category).map((option) => <option key={option}>{option}</option>)}
         </select>
@@ -4077,6 +4088,8 @@ function conditionOptions(mode, category) {
   if (!isCollectibleCategory(category)) {
     return ['New', 'Open Box', 'Used - Like New', 'Used - Good', 'Used - Fair', 'Damaged', 'N/A']
   }
+  // Single cards (sports and trading cards) use the card grading scale only.
+  if (categoryText.includes('card')) return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged']
 
   return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged', 'New/Sealed', 'Used/Complete']
 }

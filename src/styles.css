@@ -8382,3 +8382,38 @@ button:disabled {
 .scan-qty-input input {
   text-align: center;
 }
+
+/* "Why this condition?" icon next to suggested conditions */
+.condition-label {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.condition-hint {
+  align-items: center;
+  background: #e8eef7;
+  border-radius: 999px;
+  color: #33415a;
+  cursor: help;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 900;
+  height: 15px;
+  justify-content: center;
+  text-transform: none;
+  width: 15px;
+}
+
+.condition-hint:hover,
+.condition-hint:focus {
+  background: #d6a632;
+  color: #0b111b;
+  outline: none;
+}
+
+.store-scan-condition {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}

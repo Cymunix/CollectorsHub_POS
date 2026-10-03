@@ -566,10 +566,17 @@ const IDENTIFY_FIELDS = [
   'id_number', 'release_year', 'season', 'team', 'parallel', 'variation', 'serial_numbering', 'autograph',
   'memorabilia_relic', 'finish', 'uncertain_fields',
 ]
+// Store intake also gets a suggested condition (the store's card scale) and
+// the observations behind it, shown to staff as the reason.
+const CARD_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged']
 const IDENTIFY_SCHEMA = {
   type: 'object',
-  properties: Object.fromEntries(IDENTIFY_FIELDS.map((key) => [key, CARD_SCHEMA.properties[key]])),
-  required: IDENTIFY_FIELDS,
+  properties: {
+    ...Object.fromEntries(IDENTIFY_FIELDS.map((key) => [key, CARD_SCHEMA.properties[key]])),
+    suggested_condition: { type: ['string', 'null'], enum: [...CARD_CONDITIONS, null] },
+    condition_notes: { type: 'array', items: { type: 'string' } },
+  },
+  required: [...IDENTIFY_FIELDS, 'suggested_condition', 'condition_notes'],
   additionalProperties: false,
 }
 // Smaller images than a full reading (fewer image tokens), still enough for
@@ -594,7 +601,17 @@ Read only what identifies the card. Use only what is printed on the card; never 
 - serial_numbering: hand/stamped numbering such as 14/99 (NOT the card number of a trading card game).
 - autograph, memorabilia_relic: true only if the physical card has one.
 - finish: trading card games only: Foil / Nonfoil (Magic, Yu-Gi-Oh!) or Holo / Reverse Holo / None (Pokémon).
-- uncertain_fields: the fields you could not read clearly.`
+- uncertain_fields: the fields you could not read clearly.
+- suggested_condition: the card's physical condition from what you can see on BOTH sides:
+  Near Mint: sharp corners, clean edges, no creases, at most a tiny flaw.
+  Lightly Played: slight corner rounding or edge whitening, small scuffs.
+  Moderately Played: clear corner/edge wear, scuffing or a minor crease.
+  Heavily Played: heavy wear, creases or bends.
+  Damaged: tears, water damage, writing, large creases or missing pieces.
+  When unsure between two, choose the better one. null only if the card can't be seen.
+- condition_notes: 1 to 4 short observations behind that condition, naming where (e.g. "top-left corner slightly
+  rounded", "white wear along the back edges", "no creases or scratches visible"). Mention clearly off-centre
+  printing if you see it.`
 
 OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCard({ frontPath, backPath, category = '' }, signal) {
   if (!frontPath) throw new CardRecognitionError('IMAGE_MISSING', 'The front scan is missing.')
@@ -635,7 +652,10 @@ OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCa
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new CardRecognitionError('INVALID_JSON', 'The local AI returned an unexpected result. Retry the card.')
   }
-  return { result: normaliseResult(parsed), model: this.model, durationMs: Date.now() - started, mode: 'identify' }
+  const result = normaliseResult(parsed)
+  result.suggested_condition = CARD_CONDITIONS.includes(parsed.suggested_condition) ? parsed.suggested_condition : null
+  result.condition_notes = Array.isArray(parsed.condition_notes) ? parsed.condition_notes.map((note) => String(note).trim()).filter(Boolean).slice(0, 4) : []
+  return { result, model: this.model, durationMs: Date.now() - started, mode: 'identify' }
 }
 
 module.exports = { OllamaCardRecognitionProvider, CardRecognitionError, QWEN_MODEL, normaliseResult }
