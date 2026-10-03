@@ -2912,7 +2912,8 @@ export async function createChecklistPlaceholders({ category, ids, releaseYear =
     const payload = todo.slice(index, index + 100).map((row) => {
       const dynamic = { [CHECKLIST_PLACEHOLDER_KEY]: true, source: 'Set checklist' }
       if (row.team) dynamic.team = row.team
-      if (row.collection) dynamic.collection = row.collection
+      // A card with no collection named is the base card.
+      dynamic.collection = row.collection || 'Base'
       if (row.parallel) dynamic.parallel = row.parallel
       if (row.serial) dynamic.serial_numbering = row.serial
       if (row.rookie) dynamic.rookie = 'Yes'

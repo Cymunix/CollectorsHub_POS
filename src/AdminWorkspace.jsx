@@ -4688,7 +4688,7 @@ function ChecklistImportDialog({ onClose }) {
             <input type="number" value={releaseYear} onChange={(event) => { setReleaseYear(event.target.value); setExisting(null) }} placeholder="e.g. 2025" disabled={Boolean(busy)} />
           </label>
           <label>Collection
-            <input value={collection} onChange={(event) => setCollection(event.target.value)} placeholder="Base (leave blank), or e.g. Moments" disabled={Boolean(busy)} />
+            <input value={collection} onChange={(event) => setCollection(event.target.value)} placeholder="Base (leave blank for Base), or e.g. Moments" disabled={Boolean(busy)} />
           </label>
           {select('item_type_id', 'Item type', options.item_type, !chosen.subcategory_id)}
           {select('publisher_id', 'Publisher', options.publisher, false)}
