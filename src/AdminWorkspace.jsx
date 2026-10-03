@@ -4586,12 +4586,39 @@ function ChecklistImportDialog({ onClose }) {
   good.forEach((row) => { if (existing) counts[status(row)] += 1 })
   const scannedInSet = (existing || []).filter((item) => !isChecklistPlaceholder(item)).length
   const missingNumbers = existing ? good.filter((row) => status(row) !== 'scanned').map((row) => row.number) : []
+  // "+ New …" on each level: type the name, Add creates it under the levels
+  // chosen above and selects it.
+  const NEW = '__new__'
+  const [adding, setAdding] = useState(null)
+  async function addOption() {
+    const level = adding.key.replace(/_id$/, '')
+    setBusy('add')
+    setError('')
+    try {
+      const created = await createTaxonomyOption(level, adding.name, { category, subcategoryId: chosen.subcategory_id, franchiseId: chosen.franchise_id, subsetId: chosen.subset_id })
+      setOptions((current) => ({ ...current, [level]: [...(current[level] || []).filter((option) => option.id !== created.id), created].sort((a, b) => a.name.localeCompare(b.name)) }))
+      choose(adding.key, created.id)
+      setAdding(null)
+    } catch (addError) {
+      setError(addError.message || 'Could not add it.')
+    } finally {
+      setBusy('')
+    }
+  }
   const select = (key, label, list, disabled) => (
     <label>{label}
-      <select value={chosen[key]} onChange={(event) => choose(key, event.target.value)} disabled={disabled || busy}>
+      <select value={adding?.key === key ? NEW : chosen[key]} onChange={(event) => { if (event.target.value === NEW) setAdding({ key, name: '' }); else { if (adding?.key === key) setAdding(null); choose(key, event.target.value) } }} disabled={disabled || Boolean(busy)}>
         <option value="">—</option>
         {(list || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+        <option value={NEW}>+ New {label.split(' (')[0].toLowerCase()}…</option>
       </select>
+      {adding?.key === key ? (
+        <span className="checklist-add-new">
+          <input autoFocus value={adding.name} onChange={(event) => setAdding({ key, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter' && adding.name.trim()) { event.preventDefault(); addOption() } }} placeholder={`New ${label.split(' (')[0].toLowerCase()} name`} disabled={Boolean(busy)} />
+          <button type="button" onClick={addOption} disabled={!adding.name.trim() || Boolean(busy)}>{busy === 'add' ? 'Adding…' : 'Add'}</button>
+          <button type="button" onClick={() => setAdding(null)} disabled={Boolean(busy)}>Cancel</button>
+        </span>
+      ) : null}
     </label>
   )
 

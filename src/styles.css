@@ -8018,3 +8018,15 @@ button:disabled {
 .store-scan-search-results { display: grid; gap: 6px; }
 .store-scan-search-results button { display: grid; justify-items: start; text-align: left; }
 @media (max-width: 900px) { .store-scan-card { grid-template-columns: 64px minmax(0, 1fr); } }
+
+/* Checklist import: adding a new taxonomy level inline */
+.checklist-add-new {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.checklist-add-new input {
+  flex: 1;
+  min-width: 0;
+}
