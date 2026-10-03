@@ -151,8 +151,35 @@ public static class CollectorsHubWiaFeed
         public int Dpi;
         public int Pages;
         public List<string> DeviceMessages = new List<string>();
+        public System.Diagnostics.Stopwatch Watch;
         ComIStream current;
         string currentPath;
+
+        // Pages are cropped and saved on a worker thread: the driver waits for
+        // this callback to return before feeding the next card, so doing the
+        // work here held the FastFoto up after its buffer (the first card or
+        // two) filled. At most MaxWaiting pages wait, so a slow computer
+        // can't fill the disk with raw page files.
+        const int MaxWaiting = 6;
+        readonly System.Collections.Concurrent.BlockingCollection<string[]> waiting = new System.Collections.Concurrent.BlockingCollection<string[]>(MaxWaiting);
+        System.Threading.Thread worker;
+
+        public void StartWorker()
+        {
+            worker = new System.Threading.Thread(() =>
+            {
+                foreach (var job in waiting.GetConsumingEnumerable()) ProcessPage(job[0], int.Parse(job[1]), job[2]);
+            });
+            worker.IsBackground = true;
+            worker.Start();
+        }
+
+        // After the last page: waits for the worker to finish the rest.
+        public void FinishWorker()
+        {
+            waiting.CompleteAdding();
+            if (worker != null) worker.Join();
+        }
 
         public int TransferCallback(int lFlags, IntPtr p)
         {
@@ -174,7 +201,7 @@ public static class CollectorsHubWiaFeed
             return 0;
         }
 
-        // Closes the finished page's stream, crops it and reports it. The
+        // Closes the finished page's stream and hands it to the worker. The
         // driver ends the stack with an empty stream, which is discarded.
         public void FinishPage()
         {
@@ -186,13 +213,21 @@ public static class CollectorsHubWiaFeed
             if (!File.Exists(bmp)) return;
             if (new FileInfo(bmp).Length < 4096) { File.Delete(bmp); return; }
             Pages++;
+            string receivedMs = Watch == null ? "0" : Watch.ElapsedMilliseconds.ToString();
+            waiting.Add(new[] { bmp, Pages.ToString(), receivedMs });
+        }
+
+        // Crops a page and reports it (on the worker thread, in page order).
+        void ProcessPage(string bmp, int page, string receivedMs)
+        {
             string stem = bmp.Substring(0, bmp.Length - 4);
             string master = stem + ".png", raw = stem + ".raw.jpg";
             string json;
             try { json = CollectorsHubScanCrop.ProcessFeedPage(bmp, raw, master, Dpi); }
             catch (Exception error) { json = "{\"status\":\"error\",\"error\":" + Quote(error.Message) + "}"; }
             try { File.Delete(bmp); } catch { }
-            Emit("{\"id\":" + Quote(RequestId) + ",\"event\":\"page\",\"page\":" + Pages + ",\"path\":" + Quote(master) + ",\"rawPath\":" + Quote(raw) + ",\"crop\":" + json + "}");
+            string doneMs = Watch == null ? "0" : Watch.ElapsedMilliseconds.ToString();
+            Emit("{\"id\":" + Quote(RequestId) + ",\"event\":\"page\",\"page\":" + page + ",\"path\":" + Quote(master) + ",\"rawPath\":" + Quote(raw) + ",\"receivedMs\":" + receivedMs + ",\"doneMs\":" + doneMs + ",\"crop\":" + json + "}");
         }
     }
 
@@ -229,9 +264,18 @@ public static class CollectorsHubWiaFeed
         set("yextent", WIA_IPS_YEXTENT, h);
 
         Directory.CreateDirectory(outDir);
-        var callback = new Callback { RequestId = requestId, OutDir = outDir, CancelPath = cancelPath, Dpi = dpi };
-        int result = ((IWiaTransfer)feeder).Download(0, callback);
-        callback.FinishPage();
+        var callback = new Callback { RequestId = requestId, OutDir = outDir, CancelPath = cancelPath, Dpi = dpi, Watch = watch };
+        callback.StartWorker();
+        int result;
+        try
+        {
+            result = ((IWiaTransfer)feeder).Download(0, callback);
+            callback.FinishPage();
+        }
+        finally
+        {
+            callback.FinishWorker();
+        }
         bool cancelled = cancelPath != null && File.Exists(cancelPath);
         return "{\"ok\":" + (result == 0 || result == 1 ? "true" : "false")
             + ",\"hresult\":\"0x" + result.ToString("X8") + "\""

@@ -1656,6 +1656,9 @@ ipcMain.handle('scanner:feed-stack', async (event, options = {}) => {
         event: 'feed-card',
         index,
         crop: [first, second].filter(Boolean).map((side) => side.crop),
+        // When each side came off the scanner, and when its crop finished (ms into the feed).
+        receivedMs: [first, second].filter(Boolean).map((side) => side.receivedMs),
+        doneMs: [first, second].filter(Boolean).map((side) => side.doneMs),
         rotation: oriented.turns,
         orientationScores: oriented.orientation.map((entry) => entry.scores),
         frontBackBy: oriented.frontBackBy,
@@ -1673,7 +1676,7 @@ ipcMain.handle('scanner:feed-stack', async (event, options = {}) => {
     heightIn: FEED_STRIP_IN.height,
     outDir: getScanDir(),
     onPage: (message) => {
-      pages.push({ path: message.path, rawPath: message.rawPath, crop: message.crop })
+      pages.push({ path: message.path, rawPath: message.rawPath, crop: message.crop, receivedMs: message.receivedMs, doneMs: message.doneMs })
       send('scanner:feed-progress', { pages: pages.length, cards: Math.floor(pages.length / 2) })
       if (pages.length % 2 === 0) deliver(pages[pages.length - 2], pages[pages.length - 1])
     },
