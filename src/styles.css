@@ -8164,3 +8164,27 @@ button:disabled {
   color: #2d4a36;
   font-size: 13px;
 }
+
+/* Long Sale / Buy / Trade-In lists scroll inside their panel (a later rule
+   had turned scrolling off); the totals footer stays visible. */
+.sale-items-panel .transaction-table-wrap {
+  overflow-y: auto;
+}
+
+.sale-items-panel .transaction-footer {
+  background: #ffffff;
+  bottom: 0;
+  position: sticky;
+  z-index: 1;
+}
+
+/* Scan intake: the panel scrolls, and the queue always has room to read
+   the scanned cards (it was squeezed to a one-row strip). */
+.scan-intake-register-panel {
+  overflow-y: auto;
+}
+
+.scan-queue-panel {
+  max-height: calc(100vh - 140px);
+  min-height: 460px;
+}
