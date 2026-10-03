@@ -1825,7 +1825,10 @@ ipcMain.handle('ai:cancel-install', () => {
 
 // Returns { ok, result, model, durationMs } or { ok: false, code, message } so
 // one failed card never throws across the batch loop in the renderer.
-ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false, checkUpright = null, category = '' } = {}) => {
+// mode 'identify' (store intake, the Register): a quick reading of what finds
+// the card in the catalogue, without the side/orientation checks a catalogue
+// item's photos need.
+ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false, checkUpright = null, category = '', mode = 'full' } = {}) => {
   const controller = new AbortController()
   if (jobId) recognitionJobs.set(jobId, controller)
   try {
@@ -1841,6 +1844,10 @@ ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSi
     // weak, the AI checks it first, so the card is identified (and later
     // saved) the right way round and the right way up.
     let orientation = null
+    if (mode === 'identify') {
+      const output = await cardRecognition.identifyCard({ frontPath, backPath, category }, controller.signal)
+      return { ok: true, ...output, sidesSwapped: false, orientation: null, provider: cardRecognition.id, providerLabel: cardRecognition.label }
+    }
     if (checkSides || checkUpright?.front || checkUpright?.back) {
       orientation = await checkCardImages({ front, back, checkSides, checkUpright: checkUpright || {}, trading: /trading/i.test(String(category)) }, controller.signal)
       frontPath = orientation.images.front ? resolveScanImagePath(orientation.images.front) : ''

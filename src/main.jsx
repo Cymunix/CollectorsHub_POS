@@ -1709,6 +1709,8 @@ function RegisterView({
       jobId: createId('register_ai_job'),
       front: { path: imagePath },
       back: event?.backImage?.path ? { path: event.backImage.path } : null,
+      // Quick identify: only what finds the card in the catalogue.
+      mode: 'identify',
     })
     if (!response?.ok) throw new Error(response?.message || 'Local AI could not identify this card.')
     const analysis = await analyseRecognizedCard(response.result, response.result?.category || fallbackCategory)

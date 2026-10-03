@@ -3,7 +3,7 @@ import { ScanLine, Search, X } from 'lucide-react'
 import { analyseRecognizedCard } from './lib/adminData'
 import { searchDesktopTradeCatalogue } from './lib/registerBackend'
 import { addScannedCardToStock, CARD_CONDITIONS } from './lib/storeScan'
-import { needsSideCheck, needsUprightCheck, readScannerPref, writeScannerPref } from './AdminWorkspace'
+import { readScannerPref, writeScannerPref } from './AdminWorkspace'
 
 // Store scan intake (store staff): scan cards on the FastFoto or flatbed, the
 // local AI identifies them, each is matched to the catalogue, and matched
@@ -125,8 +125,9 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
           jobId: card.id,
           front: card.frontImage || null,
           back: card.backImage || null,
-          checkSides: needsSideCheck(card),
-          checkUpright: needsUprightCheck(card),
+          // Quick identify: name, number, set and year to find the card in
+          // the catalogue (stores never create catalogue items).
+          mode: 'identify',
           category: card.category,
         }).catch((recognizeError) => ({ ok: false, message: recognizeError.message }))
         if (!response?.ok) {

@@ -539,4 +539,85 @@ class OllamaCardRecognitionProvider {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Quick identify (stores): only what finds the card in the catalogue (name,
+// number, set, year, parallel), not the full description, stats and game
+// text that creating a catalogue item needs. Much less to write, so faster.
+
+const IDENTIFY_FIELDS = [
+  'category', 'subcategory', 'franchise', 'subfranchise', 'property', 'collection', 'subject', 'subjects',
+  'id_number', 'release_year', 'team', 'parallel', 'variation', 'serial_numbering', 'autograph',
+  'memorabilia_relic', 'finish', 'uncertain_fields',
+]
+const IDENTIFY_SCHEMA = {
+  type: 'object',
+  properties: Object.fromEntries(IDENTIFY_FIELDS.map((key) => [key, CARD_SCHEMA.properties[key]])),
+  required: IDENTIFY_FIELDS,
+  additionalProperties: false,
+}
+// Smaller images than a full reading (fewer image tokens), still enough for
+// card numbers and copyright lines.
+const IDENTIFY_IMAGE_EDGE = 1280
+
+const IDENTIFY_PROMPT = `You are identifying ONE collectable card so a store can find it in its catalogue.
+Read only what identifies the card. Use only what is printed on the card; never guess. Use null when a field is not visible.
+
+- category: Sports Cards or Trading Cards.
+- subcategory: the sport (e.g. Football, Hockey, Baseball) or, for trading card games, the game (e.g. Pokémon, Magic: The Gathering, Star Wars).
+- franchise: the league (e.g. NFL, NHL) or the trading card game's product family. null if unsure.
+- subfranchise: the product line (e.g. Panini Contenders, Upper Deck) or the trading card game's era / set series.
+- property: the specific set / release, e.g. "2024 Panini Contenders Football" or a game's expansion name.
+- collection: a named insert or parallel line printed on the card (e.g. Rookie Ticket, Cracked Ice Ticket); null for a base card.
+- subject: the player(s) or the card's name. Several players: join them with "/". subjects: each one.
+- id_number: the card's own number as printed, without the set size: "64" for #64, "33" for 33/120, "EC-20" for EC-20.
+- release_year: the set's year (copyright line or set name).
+- team: the team on a sports card.
+- parallel, variation: only if clearly printed or obvious (e.g. a foil colour named on the card).
+- serial_numbering: hand/stamped numbering such as 14/99 (NOT the card number of a trading card game).
+- autograph, memorabilia_relic: true only if the physical card has one.
+- finish: trading card games only: Foil / Nonfoil (Magic, Yu-Gi-Oh!) or Holo / Reverse Holo / None (Pokémon).
+- uncertain_fields: the fields you could not read clearly.`
+
+OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCard({ frontPath, backPath, category = '' }, signal) {
+  if (!frontPath) throw new CardRecognitionError('IMAGE_MISSING', 'The front scan is missing.')
+  const images = await Promise.all([prepareAiImage(frontPath, 'front', IDENTIFY_IMAGE_EDGE), ...(backPath ? [prepareAiImage(backPath, 'back', IDENTIFY_IMAGE_EDGE)] : [])])
+  const started = Date.now()
+  const response = await ollamaFetch('/api/chat', {
+    method: 'POST',
+    timeoutMs: RECOGNITION_TIMEOUT_MS,
+    signal,
+    body: {
+      model: this.model,
+      stream: false,
+      format: IDENTIFY_SCHEMA,
+      keep_alive: '10m',
+      // Same context size as a full reading: a different one makes Ollama
+      // reload the model, which would stall a scan queue running alongside.
+      options: { num_ctx: 16384, temperature: 0 },
+      messages: [
+        { role: 'system', content: IDENTIFY_PROMPT },
+        {
+          role: 'user',
+          content: (images.length === 2 ? 'Image 1 is the FRONT of the card, image 2 the BACK. Identify the card.' : 'This is the FRONT of the card. Identify the card.')
+            + (/trading/i.test(category) ? ' It is a trading card GAME card (category: Trading Cards), not a sports card.'
+              : /sports/i.test(category) ? ' It is a sports card (category: Sports Cards).' : ''),
+          images,
+        },
+      ],
+    },
+  })
+  if (!response.ok) throw classifyOllamaError(response.status, await response.text().catch(() => ''))
+  const data = await response.json().catch(() => null)
+  let parsed
+  try {
+    parsed = JSON.parse(data?.message?.content)
+  } catch (error) {
+    throw new CardRecognitionError('INVALID_JSON', 'The local AI returned an unreadable result. Retry the card.', error)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new CardRecognitionError('INVALID_JSON', 'The local AI returned an unexpected result. Retry the card.')
+  }
+  return { result: normaliseResult(parsed), model: this.model, durationMs: Date.now() - started, mode: 'identify' }
+}
+
 module.exports = { OllamaCardRecognitionProvider, CardRecognitionError, QWEN_MODEL, normaliseResult }
