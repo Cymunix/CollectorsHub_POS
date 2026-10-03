@@ -71,7 +71,11 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     const desktop = api()
     desktop.getAiStatus?.().then((status) => setAiState(status?.state || 'error')).catch(() => setAiState('error'))
     const offStatus = desktop.onScannerStatus?.((status) => setScanner(status))
-    desktop.openScannerSession?.().then((status) => { if (status?.state) setScanner(status) }).catch(() => setScanner({ state: 'unavailable' }))
+    desktop.openScannerSession?.()
+      .then((status) => { if (status?.state) setScanner(status) })
+      .catch(() => setScanner({ state: 'unavailable' }))
+      // The FastFoto is looked for separately (it may be the only scanner).
+      .finally(() => checkFeeder())
     const offCard = desktop.onFeedCard?.((card) => {
       addCard({ frontImage: card.frontImage, backImage: card.backImage, feed: card.feed })
       setFeed((current) => (current ? { ...current, cards: (current.cards || 0) + 1 } : current))
@@ -83,6 +87,12 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   }, [])
 
   useEffect(() => { if (aiState === 'ready') analyseQueued() }, [aiState])
+
+  async function checkFeeder() {
+    const status = await api().refreshFeeder?.().catch(() => null)
+    if (status) setScanner((current) => ({ ...current, ...status }))
+    return status
+  }
 
   function addCard({ frontImage, backImage = null, feed: feedInfo = null }) {
     const card = {
@@ -216,6 +226,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   const visible = cards.filter((card) => card.status !== 'added' && card.status !== 'skipped')
   const done = cards.filter((card) => card.status === 'added')
   const feederName = scanner.feederName || ''
+  const flatbedReady = Boolean(scanner.scannerName) && ['ready', 'scanning', 'processing'].includes(scanner.state)
   const busy = Boolean(feed?.running)
 
   return (
@@ -255,8 +266,17 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             ? <button type="button" onClick={() => api().cancelFeed?.()}>Stop after this card ({Math.floor((feed?.pages || 0) / 2)} scanned)</button>
             : <button type="button" className="primary" onClick={scanStack}><ScanLine size={16} /> Scan stack ({feederName})</button>
         ) : null}
-        <button type="button" onClick={() => scanCanon(canonSide ? 'back' : 'front')} disabled={busy}>{canonSide ? 'Scan back (flatbed)' : 'Scan front (flatbed)'}</button>
+        {/* The flatbed only when one is connected; the FastFoto is the main scanner. */}
+        {flatbedReady ? (
+          <button type="button" className={feederName ? '' : 'primary'} onClick={() => scanCanon(canonSide ? 'back' : 'front')} disabled={busy}>{canonSide ? 'Scan back (flatbed)' : `Scan front (${scanner.scannerName || 'flatbed'})`}</button>
+        ) : null}
         {canonSide ? <button type="button" onClick={() => setCanonSide(null)}>Cancel card</button> : null}
+        {!feederName && !flatbedReady ? (
+          <>
+            <span className="store-scan-error">{scanner.state === 'connecting' ? 'Looking for the scanner…' : 'No scanner found. Connect and turn on the FastFoto.'}</span>
+            <button type="button" onClick={checkFeeder} disabled={scanner.state === 'connecting'}>Check again</button>
+          </>
+        ) : null}
         <span className="store-scan-counts">
           {counts.queued || counts.analysing ? `${(counts.queued || 0) + (counts.analysing || 0)} identifying · ` : ''}
           {counts.ready || 0} ready · {(counts.choose || 0) + (counts.unmatched || 0) + (counts.failed || 0)} need a look · {done.length} added

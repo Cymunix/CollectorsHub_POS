@@ -1298,6 +1298,14 @@ function RegisterView({
   const activeScanSession = (scanSessions || []).find((session) => session.id === activeScanSessionId)
     || (scanSessions || []).find((session) => session.status === 'active' || session.status === 'paused')
     || null
+  // Latest sessions for scans that add several cards in one go (FastFoto stacks).
+  // Taken from state only when it changes, so a render in between doesn't
+  // undo a save made a moment ago.
+  const scanSessionsRef = useRef(scanSessions)
+  const activeScanSessionIdRef = useRef(activeScanSessionId)
+  const seenScanStateRef = useRef({ sessions: scanSessions, activeId: activeScanSessionId })
+  if (seenScanStateRef.current.sessions !== scanSessions) { seenScanStateRef.current.sessions = scanSessions; scanSessionsRef.current = scanSessions }
+  if (seenScanStateRef.current.activeId !== activeScanSessionId) { seenScanStateRef.current.activeId = activeScanSessionId; activeScanSessionIdRef.current = activeScanSessionId }
   const scanSessionItems = activeScanSession?.items || []
   const scanStats = useMemo(() => buildScanStats(scanSessionItems), [scanSessionItems])
   const scanReviewItems = useMemo(() => (
@@ -1509,17 +1517,19 @@ function RegisterView({
   }, [mode, query])
 
   async function persistScanSession(nextSession) {
-    const existing = scanSessions || []
+    const existing = scanSessionsRef.current || []
     const nextSessions = existing.some((session) => session.id === nextSession.id)
       ? existing.map((session) => (session.id === nextSession.id ? nextSession : session))
       : [nextSession, ...existing]
+    scanSessionsRef.current = nextSessions
+    activeScanSessionIdRef.current = nextSession.id
     await onSaveScanSessions(nextSessions)
     setActiveScanSessionId(nextSession.id)
     return nextSession
   }
 
   async function startScanIntakeSession() {
-    const sessionNumber = nextScanSessionNumber(scanSessions || [])
+    const sessionNumber = nextScanSessionNumber(scanSessionsRef.current || [])
     const now = new Date().toISOString()
     const session = {
       id: createId('scan_session'),
@@ -1557,7 +1567,10 @@ function RegisterView({
   }
 
   async function addScanSessionItem(seed = {}) {
-    const session = activeScanSession || await startScanIntakeSession()
+    const latest = scanSessionsRef.current || []
+    const session = latest.find((entry) => entry.id === activeScanSessionIdRef.current)
+      || latest.find((entry) => entry.status === 'active' || entry.status === 'paused')
+      || await startScanIntakeSession()
     const now = new Date().toISOString()
     const candidate = seed.catalogueItem || null
     const name = seed.name || candidate?.name || candidate?.title || scanIntakeQuery.trim() || 'Unidentified item'
@@ -1613,7 +1626,52 @@ function RegisterView({
     return item
   }
 
+  // Scans with the FastFoto when one is connected: every card loaded in the
+  // feeder comes back as its own scan event (front and back). Returns null
+  // when no FastFoto is connected.
+  async function captureFeederScanEvents(workflow) {
+    const api = desktopApi()
+    if (typeof api.feedStack !== 'function') return null
+    const status = await api.refreshFeeder?.().catch(() => null)
+    if (!status?.feederName) return null
+    setScanStatus('Scanning')
+    const events = []
+    const offCard = api.onFeedCard?.((card) => {
+      const event = normaliseScanEvent(card.frontImage, workflow)
+      events.push({ ...event, sourceDevice: card.frontImage?.scannerName || status.feederName, backImage: card.backImage ? { path: card.backImage.path || '', url: card.backImage.url || '' } : null })
+    })
+    try {
+      const result = await api.feedStack({ loadFaceDown: true })
+      if (!events.length) {
+        setScanStatus(result?.ok === false ? 'Error' : 'Paused')
+        setNotice(result?.message || 'No cards came through the FastFoto. Load the cards and scan again.')
+        return []
+      }
+      if (result?.code) setNotice(`${events.length} card${events.length === 1 ? '' : 's'} scanned, then: ${result.message}`)
+      setScanStatus('Processing')
+      return events
+    } catch (error) {
+      setScanStatus('Error')
+      setNotice(error?.message || 'The FastFoto scan failed.')
+      return events
+    } finally {
+      offCard?.()
+    }
+  }
+
   async function captureScanImageEvent(workflow) {
+    const events = await captureScanImageEvents(workflow)
+    return events[0] || null
+  }
+
+  async function captureScanImageEvents(workflow) {
+    const fed = await captureFeederScanEvents(workflow)
+    if (fed) return fed
+    const event = await captureFlatbedScanEvent(workflow)
+    return event ? [event] : []
+  }
+
+  async function captureFlatbedScanEvent(workflow) {
     setScanStatus('Detecting')
     const waitingTimer = window.setTimeout(() => {
       setScanStatus('Scanning')
@@ -1650,7 +1708,7 @@ function RegisterView({
     const response = await desktopApi().recognizeCard({
       jobId: createId('register_ai_job'),
       front: { path: imagePath },
-      back: null,
+      back: event?.backImage?.path ? { path: event.backImage.path } : null,
     })
     if (!response?.ok) throw new Error(response?.message || 'Local AI could not identify this card.')
     const analysis = await analyseRecognizedCard(response.result, response.result?.category || fallbackCategory)
@@ -1663,8 +1721,11 @@ function RegisterView({
   }
 
   async function scanIntakeFromDevice() {
-    const event = await captureScanImageEvent('scan_intake')
-    if (!event) return
+    const events = await captureScanImageEvents('scan_intake')
+    for (const event of events) await identifyScanIntakeEvent(event)
+  }
+
+  async function identifyScanIntakeEvent(event) {
     try {
       setScanStatus('Identifying')
       const recognition = await recognizeScanEvent(event, 'Sports Cards')
