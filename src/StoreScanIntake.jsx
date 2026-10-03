@@ -127,6 +127,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
           back: card.backImage || null,
           checkSides: needsSideCheck(card),
           checkUpright: needsUprightCheck(card),
+          category: card.category,
         }).catch((recognizeError) => ({ ok: false, message: recognizeError.message }))
         if (!response?.ok) {
           patch(card.id, { status: 'failed', error: response?.message || 'The local AI could not read this card.' })
@@ -167,7 +168,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     setFeed({ running: true, pages: 0, cards: 0 })
     if (aiState === 'ready') api().warmUpAi?.()
     try {
-      const result = await api().feedStack({ loadFaceDown: readScannerPref('feedFaceDown', true) })
+      const result = await api().feedStack({ loadFaceDown: readScannerPref('feedFaceDown', true), category: categoryRef.current })
       setFeed((current) => ({ ...current, running: false }))
       if (!result.ok) setError(result.message || 'The FastFoto scan failed.')
       else if (result.code) setError(`${result.cards} card${result.cards === 1 ? '' : 's'} scanned, then: ${result.message}`)

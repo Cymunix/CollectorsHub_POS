@@ -419,7 +419,7 @@ class OllamaCardRecognitionProvider {
   // Which of two images is the card's back (1 or 2). A focused question on
   // small images: asked inside the full identification the model nearly
   // always kept the given order, but on its own it was right 20/20 (~2 s).
-  async backSideIndex({ firstPath, secondPath }, signal) {
+  async backSideIndex({ firstPath, secondPath, trading = false }, signal) {
     const [first, second] = await Promise.all([prepareAiImage(firstPath, 'first', SIDE_CHECK_EDGE), prepareAiImage(secondPath, 'second', SIDE_CHECK_EDGE)])
     const response = await ollamaFetch('/api/chat', {
       method: 'POST',
@@ -433,7 +433,11 @@ class OllamaCardRecognitionProvider {
         format: { type: 'object', properties: { back_image: { type: 'integer', enum: [1, 2] } }, required: ['back_image'] },
         messages: [{
           role: 'user',
-          content: 'Image 1 and image 2 are the two sides of one trading card. The FRONT shows the main player photo or artwork. The BACK shows the biography paragraph, statistics table, card number and copyright lines. Which image is the BACK? Answer 1 or 2.',
+          // Trading card games print the card number, rules and copyright on the
+          // front; the back is the same design on every card of the game.
+          content: trading
+            ? 'Image 1 and image 2 are the two sides of one trading card game card (e.g. Pokémon, Magic: The Gathering, Yu-Gi-Oh!). The FRONT shows the card name, artwork, rules or attack text, card number and copyright. The BACK is the same design on every card of the game: the game logo or a pattern, with no card name or rules text. Which image is the BACK? Answer 1 or 2.'
+            : 'Image 1 and image 2 are the two sides of one trading card. The FRONT shows the main player photo or artwork. The BACK shows the biography paragraph, statistics table, card number and copyright lines. Which image is the BACK? Answer 1 or 2.',
           images: [first, second],
         }],
       },

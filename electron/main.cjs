@@ -1568,7 +1568,7 @@ async function scoreSideOrientation(filePath) {
 // (bio, stats) nearly always carries far more text than the front; when the
 // text doesn't say, the feed order decides (cards loaded face down feed the
 // back first).
-async function orientFeedPair(first, second, { backFirst = true } = {}) {
+async function orientFeedPair(first, second, { backFirst = true, trading = false } = {}) {
   const sides = [first, second].filter(Boolean)
   const orientation = []
   for (const side of sides) orientation.push(await scoreSideOrientation(side.path))
@@ -1592,8 +1592,10 @@ async function orientFeedPair(first, second, { backFirst = true } = {}) {
   let frontBackBy = 'feed-order'
   if (sides.length === 2) {
     const [a, b] = orientation.map((entry) => entry.words)
-    if (a >= b * 1.5 + 3) { backIndex = 0; frontBackBy = 'text' }
-    else if (b >= a * 1.5 + 3) { backIndex = 1; frontBackBy = 'text' }
+    // Sports cards carry their text (stats, biography) on the back; trading
+    // card games carry it on the front (rules, attacks) with a logo back.
+    const moreText = a >= b * 1.5 + 3 ? 0 : b >= a * 1.5 + 3 ? 1 : -1
+    if (moreText !== -1) { backIndex = trading ? 1 - moreText : moreText; frontBackBy = 'text' }
   } else {
     backIndex = -1
   }
@@ -1635,7 +1637,7 @@ ipcMain.handle('scanner:feed-stack', async (event, options = {}) => {
     const index = cards + 1
     cards += 1
     chain = chain.then(async () => {
-      const oriented = await orientFeedPair(first, second, { backFirst })
+      const oriented = await orientFeedPair(first, second, { backFirst, trading: /trading/i.test(String(options.category || '')) })
       const card = {
         index,
         frontImage: feedImageResult(oriented.front, feederName),
@@ -1737,13 +1739,13 @@ ipcMain.handle('scanner:rotate-image', (_event, image, degrees) => rotateScanIma
 // Orientation of a stack-scanned pair, checked by the local AI where the
 // text-based check was weak: which side is the back (sides), and which way up
 // each side goes (upright). Returns the (possibly swapped/rotated) images.
-async function checkCardImages({ front, back, checkSides = false, checkUpright = {} }, signal) {
+async function checkCardImages({ front, back, checkSides = false, checkUpright = {}, trading = false }, signal) {
   let images = { front, back }
   let flags = { front: Boolean(checkUpright.front), back: Boolean(checkUpright.back) }
   let sidesSwapped = false
   const turns = { front: 0, back: 0 }
   if (checkSides && front && back) {
-    const backIndex = await cardRecognition.backSideIndex({ firstPath: resolveScanImagePath(front), secondPath: resolveScanImagePath(back) }, signal).catch(() => null)
+    const backIndex = await cardRecognition.backSideIndex({ firstPath: resolveScanImagePath(front), secondPath: resolveScanImagePath(back), trading }, signal).catch(() => null)
     if (backIndex === 1) {
       sidesSwapped = true
       images = { front: back, back: front }
@@ -1823,7 +1825,7 @@ ipcMain.handle('ai:cancel-install', () => {
 
 // Returns { ok, result, model, durationMs } or { ok: false, code, message } so
 // one failed card never throws across the batch loop in the renderer.
-ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false, checkUpright = null } = {}) => {
+ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false, checkUpright = null, category = '' } = {}) => {
   const controller = new AbortController()
   if (jobId) recognitionJobs.set(jobId, controller)
   try {
@@ -1840,7 +1842,7 @@ ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSi
     // saved) the right way round and the right way up.
     let orientation = null
     if (checkSides || checkUpright?.front || checkUpright?.back) {
-      orientation = await checkCardImages({ front, back, checkSides, checkUpright: checkUpright || {} }, controller.signal)
+      orientation = await checkCardImages({ front, back, checkSides, checkUpright: checkUpright || {}, trading: /trading/i.test(String(category)) }, controller.signal)
       frontPath = orientation.images.front ? resolveScanImagePath(orientation.images.front) : ''
       backPath = orientation.images.back ? resolveScanImagePath(orientation.images.back) : ''
     }

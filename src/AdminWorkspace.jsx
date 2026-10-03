@@ -266,6 +266,9 @@ function thumbUrl(url, width = 360) {
 export function needsSideCheck(draft) {
   const feed = draft.feed
   if (!feed || feed.singleSided || feed.adjusted || !draft.frontImage || !draft.backImage) return false
+  // Trading cards: always checked (text amount says less about which side
+  // is the back than it does for sports cards).
+  if (/trading/i.test(String(draft.category || ''))) return true
   if (feed.frontBackBy !== 'text' || !feed.words) return true
   return feed.words.back < feed.words.front * 2 + 5
 }
@@ -688,7 +691,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
       await patchRecognition(draft.id, { status: 'analysing', error: '', code: '' })
       const jobId = createLocalId('ai_job')
       aiRunRef.current.jobId = jobId
-      const response = await api.recognizeCard({ jobId, front: draft.frontImage || null, back: draft.backImage || null, checkSides: needsSideCheck(draft), checkUpright: needsUprightCheck(draft) })
+      const response = await api.recognizeCard({ jobId, front: draft.frontImage || null, back: draft.backImage || null, checkSides: needsSideCheck(draft), checkUpright: needsUprightCheck(draft), category: draft.category })
         .catch((error) => ({ ok: false, code: 'AI_ERROR', message: error.message }))
 
       if (!response.ok) {
@@ -788,7 +791,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     if (options.autoAnalyse && aiStatusRef.current.state === 'ready') api.warmUpAi?.()
     let result
     try {
-      result = await api.feedStack({ loadFaceDown: options.loadFaceDown })
+      result = await api.feedStack({ loadFaceDown: options.loadFaceDown, category: options.category })
     } catch (error) {
       result = { ok: false, code: 'FEED_FAILED', message: error.message || 'The FastFoto scan failed.' }
     }
