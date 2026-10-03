@@ -9,6 +9,7 @@ const { promisify } = require('node:util')
 const { autoUpdater } = require('electron-updater')
 const { createWorker } = require('tesseract.js')
 const { OllamaCardRecognitionProvider } = require('./cardRecognition.cjs')
+const { cardSignature, compareSignatures } = require('./imageCompare.cjs')
 const { ScannerSession } = require('./scannerSession.cjs')
 const { rotateNativeImage } = require('./imageRotate.cjs')
 const { CatalogueBackup } = require('./catalogueBackup.cjs')
@@ -1735,6 +1736,30 @@ async function rotateScanImageObject(image, degrees) {
 
 // Manual orientation fix from review.
 ipcMain.handle('scanner:rotate-image', (_event, image, degrees) => rotateScanImageObject(image, degrees))
+
+// Does a scan look like a catalogue item's photo? (Colour parallels the AI
+// reads as Base differ from the Base item's photo, mostly in the frame.)
+// Thresholds from 140 matching pairs (frame at most 28.6, overall 23.6) and
+// 7 parallel/base pairs (frame at least 100.9, overall 58.9).
+const PHOTO_SIGNATURES = new Map()
+ipcMain.handle('scanner:compare-with-photo', async (_event, image, photoUrl) => {
+  try {
+    const scan = nativeImage.createFromPath(resolveScanImagePath(image))
+    if (scan.isEmpty()) return { ok: false, message: 'The scan could not be read.' }
+    if (!PHOTO_SIGNATURES.has(photoUrl)) {
+      const response = await net.fetch(photoUrl)
+      if (!response.ok) return { ok: false, message: 'The catalogue photo could not be loaded.' }
+      const photo = nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()))
+      if (photo.isEmpty()) return { ok: false, message: 'The catalogue photo could not be read.' }
+      if (PHOTO_SIGNATURES.size > 500) PHOTO_SIGNATURES.clear()
+      PHOTO_SIGNATURES.set(photoUrl, cardSignature(photo))
+    }
+    const { overall, frame } = compareSignatures(cardSignature(scan), PHOTO_SIGNATURES.get(photoUrl))
+    return { ok: true, overall: Math.round(overall * 10) / 10, frame: Math.round(frame * 10) / 10, similar: frame <= 45 && overall <= 35 }
+  } catch (error) {
+    return { ok: false, message: error.message }
+  }
+})
 
 // Orientation of a stack-scanned pair, checked by the local AI where the
 // text-based check was weak: which side is the back (sides), and which way up

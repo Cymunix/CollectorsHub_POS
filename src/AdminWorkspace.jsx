@@ -49,6 +49,8 @@ import {
   loadSetItems,
   createChecklistPlaceholders,
   isChecklistPlaceholder,
+  alreadyInCatalogueMatch,
+  catalogueFrontPhotoUrl,
   fillChecklistPlaceholder,
   CATALOGUE_EDIT_CHILDREN,
   CATALOGUE_EDIT_GROUPS,
@@ -3743,6 +3745,55 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   const recheckable = aiRows.filter((draft) => draft.scanAnalysis?.matchStatus !== 'exact' && !catalogedSiblingOf(draft))
   const bulkRunning = Boolean(bulkWork && !bulkWork.finished)
 
+  // ---- Already in catalogue: scans of cards the catalogue already has (with
+  // photos) that also look like the item's photo are set aside from review,
+  // into their own list to glance over and link in one go. See
+  // alreadyInCatalogueMatch for the rule.
+  const [reviewView, setReviewView] = useState('review')
+  const photoCheckRef = useRef(false)
+  const [photoCheckTick, setPhotoCheckTick] = useState(0)
+  const setAsideMatch = (draft) => {
+    const match = alreadyInCatalogueMatch(draft)
+    return match && draft.catalogueCheck?.itemId === match.item.item_id && draft.catalogueCheck.similar ? match : null
+  }
+  const cataloguedRows = rows.filter((draft) => !catalogedSiblingOf(draft) && setAsideMatch(draft))
+  const cataloguedIds = new Set(cataloguedRows.map((draft) => draft.id))
+  const needsPhotoCheck = rows.filter((draft) => {
+    const match = alreadyInCatalogueMatch(draft)
+    return match && draft.catalogueCheck?.itemId !== match.item.item_id
+  })
+  useEffect(() => {
+    if (photoCheckRef.current || !needsPhotoCheck.length) return
+    const api = adminDesktopApi()
+    if (typeof api.compareScanWithPhoto !== 'function') return
+    photoCheckRef.current = true
+    ;(async () => {
+      try {
+        // A few at a time; each finished check re-renders and the next batch follows.
+        for (const draft of needsPhotoCheck.slice(0, 10)) {
+          const match = alreadyInCatalogueMatch(draft)
+          if (!match || !draft.frontImage) continue
+          // No photo yet: it can't be compared, so it stays in review.
+          const photoUrl = await catalogueFrontPhotoUrl(match.item.item_id).catch(() => '')
+          const check = photoUrl ? await api.compareScanWithPhoto(draft.frontImage, photoUrl).catch(() => null) : { ok: false, message: 'The catalogue item has no photo yet' }
+          await onUpdateDraft(draft.id, {
+            catalogueCheck: { itemId: match.item.item_id, similar: Boolean(check?.ok && check.similar), overall: check?.overall ?? null, frame: check?.frame ?? null, error: check?.ok ? '' : check?.message || 'Could not compare', checkedAt: new Date().toISOString() },
+          })
+        }
+      } finally {
+        photoCheckRef.current = false
+        setPhotoCheckTick((tick) => tick + 1)
+      }
+    })()
+  }, [needsPhotoCheck.map((draft) => draft.id).join(','), photoCheckTick])
+
+  async function linkCatalogued() {
+    const targets = [...cataloguedRows]
+    const outcome = await linkHighConfidence(targets, { quiet: true, attachImages: false })
+    setBulkWork({ label: `Linked ${outcome.linked} card${outcome.linked === 1 ? '' : 's'} to the catalogue items they already match${outcome.failed ? `; ${outcome.failed} could not be linked` : ''}.`, finished: true })
+    setReviewView('review')
+  }
+
   // Links every waiting copy of an already-added card to that item. The
   // item's photos stay as they are (they came from the first copy).
   async function linkAllCopies() {
@@ -3875,7 +3926,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   const tierCounts = { high: 0, medium: 0, low: 0 }
   confidenceById.forEach((entry) => { tierCounts[entry.tier] += 1 })
 
-  const sortedRows = rows
+  const sortedRows = (reviewView === 'catalogued' ? cataloguedRows : rows.filter((draft) => !cataloguedIds.has(draft.id)))
     .filter((draft) => (tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter) && matchesSearch(draft))
     .sort((a, b) => {
       if (sortBy === 'newest') return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
@@ -3977,7 +4028,8 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
 
   // Links the confident exact matches. A copy of a card added from this
   // queue keeps the first copy's photos; other matches get these scans.
-  async function linkHighConfidence(chosen = null, { quiet = false } = {}) {
+  // attachImages: false for cards the catalogue already has photos of.
+  async function linkHighConfidence(chosen = null, { quiet = false, attachImages = true } = {}) {
     const targets = [...(chosen || highLinks)]
     let done = 0
     let failed = 0
@@ -3991,7 +4043,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
         let attached = 0
         let warnings = []
         if (!sibling) {
-          const images = await loadScanImageBlobs(draft)
+          const images = attachImages ? await loadScanImageBlobs(draft) : []
           if (images.length) {
             const upload = await attachScanImagesToItem(itemId, images)
             attached = upload.attached
@@ -4145,6 +4197,18 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
         </div>
       ) : null}
       {!rows.length ? <EmptyAdminState text="No scanned drafts yet. Import front/back scanner images from Scan Intake to create review drafts." /> : null}
+      {cataloguedRows.length || reviewView === 'catalogued' ? (
+        <div className="review-view-tabs" role="tablist" aria-label="Review lists">
+          <button type="button" role="tab" aria-selected={reviewView === 'review'} className={reviewView === 'review' ? 'active' : ''} onClick={() => setReviewView('review')}>To review ({rows.length - cataloguedRows.length})</button>
+          <button type="button" role="tab" aria-selected={reviewView === 'catalogued'} className={reviewView === 'catalogued' ? 'active' : ''} onClick={() => setReviewView('catalogued')}>Already in catalogue ({cataloguedRows.length})</button>
+        </div>
+      ) : null}
+      {reviewView === 'catalogued' ? (
+        <div className="review-catalogued-bar">
+          <span>These scans exactly match a catalogue item that already has photos, and look the same as its photo. Linking records them against that item without adding more photos. Anything that looks off: open it and edit, and it goes back to the review list.</span>
+          <button className="admin-gold-button" type="button" onClick={linkCatalogued} disabled={!cataloguedRows.length || bulkRunning}>Link all {cataloguedRows.length}</button>
+        </div>
+      ) : null}
       {confidenceById.size ? (
         <div className="review-confidence-bar">
           <div className="review-tier-filter" role="radiogroup" aria-label="Confidence">

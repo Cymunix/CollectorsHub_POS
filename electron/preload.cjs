@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   cancelFeed: () => ipcRenderer.invoke('scanner:cancel-feed'),
   refreshFeeder: () => ipcRenderer.invoke('scanner:refresh-feeder'),
   rotateScanImage: (image, degrees) => ipcRenderer.invoke('scanner:rotate-image', image, degrees),
+  compareScanWithPhoto: (image, photoUrl) => ipcRenderer.invoke('scanner:compare-with-photo', image, photoUrl),
   onFeedCard: (callback) => {
     const listener = (_event, card) => callback(card)
     ipcRenderer.on('scanner:feed-card', listener)
