@@ -2334,8 +2334,10 @@ function reverseCategoryLabel(catalogueName) {
 export async function resolveRecognizedTaxonomy(result = {}, fallbackCategory = '') {
   const { data: categoryRows } = await supabase.from('categories').select('category_id, name').order('name')
   const categories = optionRows(categoryRows, 'category_id')
-  const categoryOptionId = matchTaxonomyOption(categories, result.category || '')
-    || (fallbackCategory ? matchTaxonomyOption(categories, catalogueCategoryName(fallbackCategory)) : '')
+  // The category the card was scanned under wins: the AI sometimes calls a
+  // trading card a sports card (and then searches the wrong category).
+  const categoryOptionId = (fallbackCategory ? matchTaxonomyOption(categories, catalogueCategoryName(fallbackCategory)) : '')
+    || matchTaxonomyOption(categories, result.category || '')
   const categoryRow = categories.find((row) => row.id === categoryOptionId)
   const category = categoryRow ? reverseCategoryLabel(categoryRow.name) : fallbackCategory
   const resolution = {
@@ -2389,8 +2391,9 @@ function playerSetKey(value) {
   return splitPlayers(value).map(matchText).sort().join('|')
 }
 
+// Spaces in card numbers are ignored ("EC - 20" is "EC-20").
 function cardNumberText(value) {
-  return matchText(value).replace(/^(no\.?|#)\s*/, '')
+  return matchText(value).replace(/^(no\.?|#)\s*/, '').replace(/\s+/g, '')
 }
 
 // The digits of a card number, for numbers printed with a set prefix,
@@ -2526,7 +2529,8 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
     if (players.length) query = query.or(players.flatMap((player) => [words ? wordSearch('name', player) : orContains('name', player), words ? wordSearch('subject', player) : orContains('subject', player)]).join(','))
     // Trading card numbers are often printed differently from the catalogue's
     // ("os050" for 50), so with a name to search by they are compared below.
-    if (number && !(trading && players.length)) query = query.in('card_number', [...new Set([number, `#${number}`, number.toUpperCase(), numberCore].filter(Boolean))])
+    // The stored number may have spaces ("EC - 20") or not ("EC-20").
+    if (number && !(trading && players.length)) query = query.in('card_number', [...new Set([number, `#${number}`, number.toUpperCase(), number.toUpperCase().replace(/-/g, ' - '), String(card.id_number || '').trim(), numberCore].filter(Boolean))])
     return query.limit(300)
   }
   let { data, error } = await runQuery(byWords)

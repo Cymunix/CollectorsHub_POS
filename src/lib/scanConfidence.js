@@ -15,11 +15,12 @@ const FIELD_LABELS = {
 }
 
 function text(value) {
-  return String(value ?? '').trim().toLowerCase()
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+// Spaces in card numbers are ignored ("EC - 20" is "EC-20").
 function cardNumber(value) {
-  return text(value).replace(/^(no\.?|#)\s*/, '')
+  return text(value).replace(/^(no\.?|#)\s*/, '').replace(/\s+/g, '')
 }
 
 function escapeRegex(value) {

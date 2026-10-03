@@ -494,7 +494,7 @@ class OllamaCardRecognitionProvider {
     }
   }
 
-  async recognizeCard({ frontPath, backPath }, signal) {
+  async recognizeCard({ frontPath, backPath, category = '' }, signal) {
     if (!frontPath || !backPath) {
       throw new CardRecognitionError('IMAGE_MISSING', !frontPath ? 'The front scan is missing.' : 'The back scan is missing.')
     }
@@ -514,7 +514,10 @@ class OllamaCardRecognitionProvider {
           { role: 'system', content: SYSTEM_PROMPT },
           {
             role: 'user',
-            content: 'These two images are ONE card. Image 1 is the FRONT of the card. Image 2 is the BACK of the same card. Identify the card.',
+            // The category the card was scanned under (the person scanning knows it).
+            content: 'These two images are ONE card. Image 1 is the FRONT of the card. Image 2 is the BACK of the same card. Identify the card.'
+              + (/trading/i.test(category) ? ' It is a trading card GAME card (category: Trading Cards), not a sports card: follow the TRADING CARD GAMES rules.'
+                : /sports/i.test(category) ? ' It is a sports card (category: Sports Cards).' : ''),
             images: [front, back],
           },
         ],

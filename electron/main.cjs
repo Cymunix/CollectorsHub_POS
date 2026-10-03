@@ -1846,7 +1846,7 @@ ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSi
       frontPath = orientation.images.front ? resolveScanImagePath(orientation.images.front) : ''
       backPath = orientation.images.back ? resolveScanImagePath(orientation.images.back) : ''
     }
-    const output = await cardRecognition.recognizeCard({ frontPath, backPath }, controller.signal)
+    const output = await cardRecognition.recognizeCard({ frontPath, backPath, category }, controller.signal)
     return {
       ok: true,
       ...output,
