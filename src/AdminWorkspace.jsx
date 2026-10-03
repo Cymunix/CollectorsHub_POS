@@ -4615,7 +4615,7 @@ function ChecklistImportDialog({ onClose }) {
   }
 
   // Same card = same number in the same collection.
-  const byNumber = new Map((existing || []).map((item) => [checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection }), item]))
+  const byNumber = new Map((existing || []).map((item) => [checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel }), item]))
   const status = (row) => {
     const item = byNumber.get(checklistItemKey(row))
     if (!item) return 'new'
@@ -4626,6 +4626,7 @@ function ChecklistImportDialog({ onClose }) {
   const scannedInSet = (existing || []).filter((item) => !isChecklistPlaceholder(item)).length
   const missingNumbers = existing ? good.filter((row) => status(row) !== 'scanned').map((row) => (row.collection ? `${row.number} (${row.collection})` : row.number)) : []
   const showCollection = good.some((row) => row.collection)
+  const showSerial = good.some((row) => row.serial)
   // "+ New …" on each level: type the name, Add creates it under the levels
   // chosen above and selects it.
   const NEW = '__new__'
@@ -4692,7 +4693,7 @@ function ChecklistImportDialog({ onClose }) {
           {select('item_type_id', 'Item type', options.item_type, !chosen.subcategory_id)}
           {select('publisher_id', 'Publisher', options.publisher, false)}
         </div>
-        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection in [brackets] at the end overrides the Collection box, so one list can hold several collections that each start at 1)
+        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection or parallel in [brackets] overrides the Collection box and /99 sets the print run, so one card can be listed once per parallel. Lists copied from a price guide ("Aaron Jones [Cracked Ice Ticket] #64 /25") work too)
           <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
         </label>
         <div className="checklist-summary">
@@ -4705,7 +4706,7 @@ function ChecklistImportDialog({ onClose }) {
         {good.length ? (
           <div className="checklist-preview">
             <table className="admin-table">
-              <thead><tr><th>#</th><th>{trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
+              <thead><tr><th>#</th><th>{trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}{showSerial ? <th>Numbered</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
               <tbody>
                 {good.slice(0, 400).map((row, index) => (
                   <tr key={`${index}-${row.number}`}>
@@ -4713,6 +4714,7 @@ function ChecklistImportDialog({ onClose }) {
                     <td>{row.name}</td>
                     {trading ? null : <td>{row.team || '—'}</td>}
                     {showCollection ? <td>{row.collection || 'Base'}</td> : null}
+                    {showSerial ? <td>{row.serial || ''}</td> : null}
                     <td>{[row.rookie ? 'RC' : '', row.shortPrint ? 'SP' : ''].filter(Boolean).join(' ') || ''}</td>
                     {existing ? <td className={`checklist-status ${status(row)}`}>{{ new: 'Will be created', placeholder: 'Placeholder', scanned: 'Scanned' }[status(row)]}</td> : null}
                   </tr>

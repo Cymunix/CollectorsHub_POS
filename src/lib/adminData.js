@@ -2440,6 +2440,25 @@ function looseSetName(value) {
   return matchText(value).replace(/[^a-z0-9]+/g, ' ').split(' ').filter((word) => word && !['the', 'panini', 'topps', 'set'].includes(word)).join(' ')
 }
 
+// The parallel as read (a rarity read as a parallel on a trading card is none).
+function cardParallelText(card) {
+  return card._trading && RARITY_WORDS.test(matchText(card.parallel)) ? '' : matchText(card.parallel)
+}
+
+// Two variant names for the same thing, wording aside ("Cracked Ice" and
+// "Cracked Ice Ticket"; "Gold" and "Game Ticket Gold" are not enough alone).
+function sameVariantName(a, b) {
+  const wordsA = looseNameWords(a)
+  const wordsB = looseNameWords(b)
+  if (!wordsA.length || !wordsB.length) return false
+  const [shorter, longer] = wordsA.length <= wordsB.length ? [wordsA, wordsB] : [wordsB, wordsA]
+  if (shorter.join(' ') === longer.join(' ')) return true
+  // The longer name is the shorter plus a generic word ("Cracked Ice" +
+  // "Ticket"); "Gold" and "Gold Vinyl" stay different parallels.
+  return longer.length === shorter.length + 1 && ['ticket', 'parallel', 'version', 'variant'].includes(longer[longer.length - 1])
+    && shorter.every((word, index) => longer[index] === word)
+}
+
 // Refinement fields that separate variants of the same player/number/release.
 // Each returns 'match', 'mismatch' or 'unknown'.
 const REFINE_FIELDS = [
@@ -2456,14 +2475,27 @@ const REFINE_FIELDS = [
       return cardFinish === itemFinish ? 'match' : 'mismatch'
     },
   },
-  { key: 'collection', weight: 10, compare: (card, item) => collectionKey(card.collection) === collectionKey(item.dynamic_fields?.collection) ? 'match' : 'mismatch' },
+  // The catalogue often keeps parallels in Collection ("Cracked Ice Ticket"),
+  // while the AI reads them as a parallel ("Cracked Ice"): a parallel that
+  // names the item's collection counts for both.
+  {
+    key: 'collection',
+    weight: 10,
+    compare: (card, item) => {
+      const itemCollection = collectionKey(item.dynamic_fields?.collection)
+      if (collectionKey(card.collection) === itemCollection) return 'match'
+      return itemCollection && !item.dynamic_fields?.parallel && sameVariantName(cardParallelText(card), itemCollection) ? 'match' : 'mismatch'
+    },
+  },
   // No parallel read from the card means a base card: it matches items with no parallel.
   {
     key: 'parallel',
     weight: 10,
     compare: (card, item) => {
-      const cardParallel = card._trading && RARITY_WORDS.test(matchText(card.parallel)) ? '' : matchText(card.parallel)
-      return cardParallel === matchText(item.dynamic_fields?.parallel) ? 'match' : 'mismatch'
+      const cardParallel = cardParallelText(card)
+      const itemParallel = matchText(item.dynamic_fields?.parallel)
+      if (cardParallel === itemParallel) return 'match'
+      return !itemParallel && sameVariantName(cardParallel, collectionKey(item.dynamic_fields?.collection)) ? 'match' : 'mismatch'
     },
   },
   { key: 'variation', weight: 4, compare: (card, item) => matchText(card.variation) === matchText(item.dynamic_fields?.variation) ? 'match' : 'mismatch' },
@@ -2760,47 +2792,69 @@ export function isChecklistPlaceholder(item) {
 //   1 Josh Allen - Buffalo Bills        #1 Josh Allen, Bills
 //   1. Josh Allen | Buffalo Bills RC    BLLR-EN033 Sadion, the Timelord
 //   1<TAB>Josh Allen<TAB>Buffalo Bills  (pasted from a spreadsheet)
-// A trailing RC / Rookie marks a rookie card; SP / SSP marks a short print.
+//   64<TAB>Aaron Jones [Cracked Ice Ticket] /25
+//   Aaron Jones [Cracked Ice Ticket] #64 /25   (copied from a price guide)
+// RC / Rookie marks a rookie card; SP / SSP a short print. Text in
+// [brackets] is the card's variant: its collection (where the catalogue keeps
+// parallels; or its parallel when brackets is 'parallel'). A trailing /25 is its print run (serial
+// numbering). A spreadsheet's last column is the collection (number, name,
+// team, collection; trading cards: number, name, collection). A number may
+// repeat for each parallel or collection. Lines that aren't cards (prices,
+// "+ Collection", "+ Wishlist") are ignored.
 // teams: whether lines carry a team after the name (sports cards). Trading
 // card names often contain commas ("Sadion, the Timelord"), so for them the
 // rest of the line is the name.
-// A collection goes in square brackets at the end of a line
-// ("1 Wayne Gretzky - Edmonton Oilers [Moments]") or in the last column of a
-// pasted spreadsheet (number, name, team, collection; trading cards: number,
-// name, collection). Sets that number each collection from 1 repeat card
-// numbers: a number may repeat with a different collection or name.
+
 // One card of a set: its number within its collection ("Base" and blank are
-// the same), plus the name for checklists that repeat a number.
-export function checklistRowKey({ number, collection = '', name = '' }) {
-  return [cardNumberText(number), collectionKey(collection), matchText(name)].join('|')
+// the same) and parallel, plus the name for checklists that repeat a number.
+export function checklistRowKey({ number, collection = '', parallel = '', name = '' }) {
+  return [cardNumberText(number), collectionKey(collection), matchText(parallel), matchText(name)].join('|')
 }
 
-// The same card in the catalogue (number and collection; names on scanned
-// items may be written differently from the checklist's).
-export function checklistItemKey({ number, collection = '' }) {
-  return [cardNumberText(number), collectionKey(collection)].join('|')
+// The same card in the catalogue (number, collection and parallel; names on
+// scanned items may be written differently from the checklist's).
+export function checklistItemKey({ number, collection = '', parallel = '' }) {
+  return [cardNumberText(number), collectionKey(collection), matchText(parallel)].join('|')
 }
 
-export function parseChecklist(text, { teams = true } = {}) {
+const CHECKLIST_NOISE = /^(\*\s*)?(\+\s*(collection|wishlist)\b|(un)?graded\b|price\b|\$)/i
+const CHECKLIST_LEADING_NUMBER = /^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)[.):]?\s+(.+)$/
+
+export function parseChecklist(text, { teams = true, brackets = 'collection' } = {}) {
   const rows = []
   const seen = new Set()
   for (const rawLine of String(text || '').split(/\r?\n/)) {
     let line = rawLine.replace(/ /g, ' ').trim()
-    if (!line) continue
+    if (!line || CHECKLIST_NOISE.test(line)) continue
+    // A link copied from a web page: [text](address) -> text.
+    line = line.replace(/^\[(.+)\]\((?:https?:)?[^)]*\)/, '$1').trim()
+    let variant = ''
+    line = line.replace(/\s*\[([^\]]+)\]/, (all, value) => { variant = value.trim(); return '' })
+    let serial = ''
+    line = line.replace(/\s+\/\s*(\d+)\s*$/, (all, run) => { serial = `/${run}`; return '' }).trim()
+    // "Aaron Jones #64" (price guides list the number after the name).
+    if (!line.includes('\t') && !CHECKLIST_LEADING_NUMBER.test(line)) {
+      const trailing = line.match(/^(.*\S)\s+#\s*([A-Za-z0-9-]+)$/)
+      if (trailing) line = `${trailing[2]} ${trailing[1]}`
+    }
     let collection = ''
-    line = line.replace(/\s*\[([^\]]+)\]\s*$/, (all, name) => { collection = name.trim(); return '' })
     let parts
     if (line.includes('\t')) {
       parts = line.split('\t').map((part) => part.trim()).filter(Boolean)
       const collectionColumn = teams ? 3 : 2
-      if (!collection && parts[collectionColumn]) collection = parts[collectionColumn]
+      if (parts[collectionColumn]) collection = parts[collectionColumn]
       parts = parts.slice(0, collectionColumn)
     } else {
-      const match = line.match(/^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)[.):]?\s+(.+)$/)
-      if (!match) { rows.push({ raw: line, error: 'No card number at the start of the line' }); continue }
+      const match = line.match(CHECKLIST_LEADING_NUMBER)
+      if (!match) { rows.push({ raw: rawLine.trim(), error: 'No card number' }); continue }
       parts = teams
         ? [match[1], ...match[2].split(/\s+[-–—|]\s+|\s*,\s+(?=[^,]+$)/).map((part) => part.trim()).filter(Boolean)]
         : [match[1], match[2].trim()]
+    }
+    let parallel = ''
+    if (variant) {
+      if (brackets === 'collection' && !collection) collection = variant
+      else parallel = variant
     }
     let [number, name = '', team = ''] = parts
     number = String(number || '').replace(/^#/, '').trim()
@@ -2814,11 +2868,11 @@ export function parseChecklist(text, { teams = true } = {}) {
     const unquote = (value) => String(value || '').replace(/^["“”'‘’]+|["“”'‘’]+$/g, '').trim()
     name = unquote(stripFlags(stripFlags(name)))
     team = unquote(stripFlags(stripFlags(team)))
-    if (!number || !name) { rows.push({ raw: line, error: 'Needs a card number and a name' }); continue }
-    const key = checklistRowKey({ number, collection, name })
-    if (seen.has(key)) { rows.push({ raw: line, error: `Card ${number} is listed twice` }); continue }
+    if (!number || !name) { rows.push({ raw: rawLine.trim(), error: 'Needs a card number and a name' }); continue }
+    const key = checklistRowKey({ number, collection, parallel, name })
+    if (seen.has(key)) { rows.push({ raw: rawLine.trim(), error: `Card ${number} is listed twice` }); continue }
     seen.add(key)
-    rows.push({ raw: line, number, name, team, collection, rookie: flags.rookie, shortPrint: flags.shortPrint })
+    rows.push({ raw: rawLine.trim(), number, name, team, collection, parallel, serial, rookie: flags.rookie, shortPrint: flags.shortPrint })
   }
   return rows
 }
@@ -2851,7 +2905,7 @@ export async function createChecklistPlaceholders({ category, ids, releaseYear =
   const categoryId = await categoryIdForName(category)
   if (!categoryId || !ids?.subcategory_id) throw new Error('Choose the set (at least the category and subcategory) first.')
   // Already in the catalogue: same number in the same collection.
-  const have = new Set(existing.map((item) => checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection })))
+  const have = new Set(existing.map((item) => checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel })))
   const todo = rows.filter((row) => !row.error && !have.has(checklistItemKey(row)))
   const created = []
   for (let index = 0; index < todo.length; index += 100) {
@@ -2859,6 +2913,8 @@ export async function createChecklistPlaceholders({ category, ids, releaseYear =
       const dynamic = { [CHECKLIST_PLACEHOLDER_KEY]: true, source: 'Set checklist' }
       if (row.team) dynamic.team = row.team
       if (row.collection) dynamic.collection = row.collection
+      if (row.parallel) dynamic.parallel = row.parallel
+      if (row.serial) dynamic.serial_numbering = row.serial
       if (row.rookie) dynamic.rookie = 'Yes'
       if (row.shortPrint) dynamic.variation = 'Short Print'
       return {
