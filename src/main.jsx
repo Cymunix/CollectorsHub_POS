@@ -1587,6 +1587,8 @@ function RegisterView({
       sourceDevice: seed.sourceDevice || 'Register scanner',
       scanImageUrl: seed.scanImageUrl || '',
       scanImagePath: seed.scanImagePath || '',
+      // Back of the card (FastFoto stacks scan both sides).
+      backImageUrl: seed.backImageUrl || seed.event?.backImage?.url || '',
       barcode: seed.barcode || '',
       catalogItemId: seed.catalogItemId || candidate?.catalogItemId || '',
       name,
@@ -3323,8 +3325,10 @@ function ScanStat({ label, value }) {
 }
 
 function ScannedItemRow({ item, onRemove, onUpdate }) {
+  const [reviewing, setReviewing] = useState(false)
   return (
     <article className={`scanned-item-row ${item.reviewState}`}>
+      {reviewing ? <ScanItemReviewDialog item={item} onUpdate={onUpdate} onClose={() => setReviewing(false)} /> : null}
       <div className="scan-confidence-mark">{confidenceSymbol(item)}</div>
       <div className="scanned-item-main">
         <strong>{item.name || 'Unidentified item'}</strong>
@@ -3363,11 +3367,111 @@ function ScannedItemRow({ item, onRemove, onUpdate }) {
       ) : null}
       <div className="scan-row-actions">
         <button type="button" onClick={() => onUpdate({ reviewState: 'accepted', confidenceState: item.confidenceState === 'low' ? 'medium' : item.confidenceState })}>Accept</button>
-        <button type="button" onClick={() => onUpdate({ reviewState: 'needs_review' })}>Review</button>
+        <button type="button" onClick={() => setReviewing(true)}>Review</button>
         <button type="button" onClick={() => onUpdate({ reviewState: 'unable_to_identify', confidenceState: 'low', reviewReason: 'Unable to identify' })}>Unable</button>
         <button className="delete" type="button" onClick={onRemove}>Remove</button>
       </div>
     </article>
+  )
+}
+
+// One scanned card, up close: both sides of the scan, what the AI read, and a
+// catalogue search to link it to the right item (stores never create items).
+function ScanItemReviewDialog({ item, onUpdate, onClose }) {
+  const [query, setQuery] = useState(item.name && item.name !== 'Unidentified item' ? `${item.name}${item.sku ? ` ${item.sku}` : ''}` : '')
+  const [results, setResults] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function search(term = query) {
+    if (term.trim().length < 2) return
+    setBusy(true)
+    setError('')
+    try {
+      let found = await searchDesktopTradeCatalogue(term)
+      // Name + number finds nothing: try the name alone.
+      if (!found.length && item.sku && term.includes(item.sku)) found = await searchDesktopTradeCatalogue(term.replace(item.sku, '').trim())
+      setResults(found)
+    } catch (searchError) {
+      setError(searchError?.message || 'The catalogue search failed.')
+      setResults([])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    search()
+    const close = (event) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [])
+
+  function pick(candidate) {
+    const marketValue = Number(candidate.marketValue ?? candidate.price ?? 0)
+    onUpdate({
+      catalogItemId: candidate.catalogItemId || candidate.catalogueItemId || '',
+      name: candidate.name || item.name,
+      sku: candidate.sku || item.sku,
+      category: candidate.category || item.category,
+      marketValue,
+      cashOffer: suggestedCashOffer(marketValue),
+      storeCreditOffer: suggestedStoreCreditOffer(marketValue),
+      pricingSource: candidate.marketValueSource || '',
+      marketStats: candidate.marketStats || null,
+      reviewState: 'accepted',
+      confidenceState: 'high',
+      reviewReason: '',
+      notes: `Matched by staff to ${candidate.name || 'a catalogue item'}${candidate.sku ? ` #${candidate.sku}` : ''}.`,
+    })
+    onClose()
+  }
+
+  return (
+    <div className="register-modal scan-item-review" role="dialog" aria-modal="true" aria-label="Review scanned card" onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section>
+        <div className="scan-item-review-head">
+          <div>
+            <p className="register-kicker">Review scanned card</p>
+            <h2>{item.name || 'Unidentified item'}</h2>
+            <small>{[item.category, item.sku ? `#${item.sku}` : '', item.reviewReason].filter(Boolean).join(' · ')}</small>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
+        </div>
+        <div className="scan-item-review-body">
+          <div className="scan-item-review-images">
+            {item.scanImageUrl ? <img src={item.scanImageUrl} alt="Front of the scanned card" /> : <span>No scan image</span>}
+            {item.backImageUrl ? <img src={item.backImageUrl} alt="Back of the scanned card" /> : null}
+          </div>
+          <div className="scan-item-review-match">
+            {item.notes ? <p className="scan-item-review-notes">{item.notes}</p> : null}
+            <form onSubmit={(event) => { event.preventDefault(); search() }} className="scan-item-review-search">
+              <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search the catalogue: name, card number…" />
+              <button type="submit" disabled={busy || query.trim().length < 2}>{busy ? 'Searching…' : 'Search'}</button>
+            </form>
+            {error ? <p className="register-warning">{error}</p> : null}
+            <div className="scan-item-review-results">
+              {results && !results.length && !busy ? <p>No catalogue items found. Try fewer words, or just the card number. Cards the catalogue doesn't have need adding from admin first.</p> : null}
+              {(results || []).map((candidate) => (
+                <button type="button" key={candidate.id || candidate.catalogItemId} onClick={() => pick(candidate)} className={candidate.catalogItemId === item.catalogItemId ? 'current' : ''}>
+                  {candidate.imageUrl ? <img src={candidate.imageUrl} alt="" /> : <span className="scan-item-review-noimage" />}
+                  <span>
+                    <strong>{candidate.name}</strong>
+                    <small>{[candidate.sku ? `#${candidate.sku}` : '', candidate.releaseYear, candidate.dynamicFields?.collection, candidate.category].filter(Boolean).join(' · ')}</small>
+                  </span>
+                  <em>{candidate.marketValue ? money.format(candidate.marketValue) : ''}</em>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button type="button" onClick={() => { onUpdate({ reviewState: 'unable_to_identify', confidenceState: 'low', reviewReason: 'Unable to identify' }); onClose() }}>Unable to identify</button>
+          <button type="button" onClick={() => { onUpdate({ reviewState: 'accepted', confidenceState: item.confidenceState === 'low' ? 'medium' : item.confidenceState }); onClose() }}>Accept as is</button>
+          <button type="button" onClick={onClose}>Close</button>
+        </div>
+      </section>
+    </div>
   )
 }
 

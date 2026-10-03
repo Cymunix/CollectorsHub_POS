@@ -8193,3 +8193,138 @@ button:disabled {
 .scan-queue-panel {
   min-height: 280px;
 }
+
+/* Register: review one scanned card */
+.scan-item-review section {
+  background: #fff;
+  border-radius: 12px;
+  display: grid;
+  gap: 14px;
+  max-height: 90vh;
+  max-width: 980px;
+  overflow: auto;
+  padding: 20px;
+  width: 100%;
+}
+
+.scan-item-review-head {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.scan-item-review-head h2 {
+  margin: 2px 0 4px;
+}
+
+.scan-item-review-head small {
+  color: #5b6677;
+}
+
+.scan-item-review-body {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(260px, 380px) minmax(0, 1fr);
+}
+
+.scan-item-review-images {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.scan-item-review-images img,
+.scan-item-review-images > span {
+  background: #f4f6f9;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  max-height: 420px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.scan-item-review-match {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.scan-item-review-notes {
+  background: #f4f6f9;
+  border-radius: 8px;
+  color: #33415a;
+  font-size: 13px;
+  margin: 0;
+  padding: 8px 10px;
+}
+
+.scan-item-review-search {
+  display: flex;
+  gap: 8px;
+}
+
+.scan-item-review-search input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  flex: 1;
+  font: inherit;
+  padding: 9px 11px;
+}
+
+.scan-item-review-results {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.scan-item-review-results button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  cursor: pointer;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.scan-item-review-results button:hover,
+.scan-item-review-results button.current {
+  border-color: #d6a632;
+  background: #fffaf0;
+}
+
+.scan-item-review-results img,
+.scan-item-review-noimage {
+  background: #eef1f5;
+  border-radius: 4px;
+  display: block;
+  height: 60px;
+  object-fit: contain;
+  width: 44px;
+}
+
+.scan-item-review-results span {
+  display: grid;
+  gap: 2px;
+}
+
+.scan-item-review-results small {
+  color: #5b6677;
+}
+
+.scan-item-review-results em {
+  color: #1d6b35;
+  font-style: normal;
+  font-weight: 800;
+}
+
+@media (max-width: 860px) {
+  .scan-item-review-body {
+    grid-template-columns: 1fr;
+  }
+}
