@@ -2537,7 +2537,7 @@ function RegisterView({
       </section>
 
       <div className="register-grid register-dashboard-grid">
-        <section className="register-main-panel register-pos-panel">
+        <section className={`register-main-panel register-pos-panel${mode === 'scan_intake' ? ' scan-intake-mode' : ''}`}>
           <div className="mode-tabs" role="tablist" aria-label="Transaction mode">
             {[
               ['sale', 'Sale', ShoppingCart],

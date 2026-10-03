@@ -8178,13 +8178,18 @@ button:disabled {
   z-index: 1;
 }
 
-/* Scan intake: the panel scrolls, and the queue always has room to read
-   the scanned cards (it was squeezed to a one-row strip). */
+/* Scan intake fills the register area: the header, stats and lookup stay
+   put and the queue takes the rest of the height, scrolling inside itself.
+   (In this mode the panel has no item list, so the list row would sit
+   empty as grey space.) */
+.register-pos-panel.scan-intake-mode {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .scan-intake-register-panel {
   overflow-y: auto;
 }
 
 .scan-queue-panel {
-  max-height: calc(100vh - 140px);
-  min-height: 460px;
+  min-height: 280px;
 }
