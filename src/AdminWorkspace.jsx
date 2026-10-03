@@ -54,6 +54,7 @@ import {
   seasonStartYear,
   withoutSeason,
   catalogueFrontPhotoUrl,
+  loadCatalogueItemRow,
   fillChecklistPlaceholder,
   CATALOGUE_EDIT_CHILDREN,
   CATALOGUE_EDIT_GROUPS,
@@ -5148,6 +5149,10 @@ const TAXONOMY_PARENT_READY = {
   publisher: () => true,
 }
 
+// Always shown when approving against a match, so the card's identity (name,
+// number, set, season, year, collection) can be checked at a glance.
+const KEY_REVIEW_FIELDS = new Set(['subject', 'name', 'card_number', 'subset_id', 'property_id', 'season', 'release_year', 'collection'])
+
 function sameReviewValue(a, b) {
   return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
 }
@@ -5222,9 +5227,13 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const autoMatchedRef = useRef(Boolean(saved) || ['done', 'declined'].includes(draft.recognition?.status))
   const uncertainFields = new Set((recognitionResult(draft)?.uncertain_fields || []).map((field) => String(field).toLowerCase()))
   const matchCandidate = candidates.find((candidate) => candidate.item.item_id === matchId) || null
-  const matchItem = matchCandidate?.item || null
+  // The matched item as it is now in the catalogue (the stored match is a copy
+  // from when the scan was analysed).
+  const [freshItem, setFreshItem] = useState(null)
+  const matchItem = matchCandidate?.item ? (freshItem?.item_id === matchCandidate.item.item_id ? { ...matchCandidate.item, ...freshItem } : matchCandidate.item) : null
   const [values, setValues] = useState(() => saved?.values || initialReviewValues(draft, category, matchItem))
-  const [showAll, setShowAll] = useState(!matchItem)
+  // A placeholder is being filled in by this scan: every field is shown.
+  const [showAll, setShowAll] = useState(!matchItem || isChecklistPlaceholder(matchItem))
   const [attachImages, setAttachImages] = useState(saved?.attachImages ?? true)
   // Admin scans replace the catalogue photos by default.
   const [matchImageCount, setMatchImageCount] = useState(null)
@@ -5308,6 +5317,25 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     return () => { cancelled = true }
   }, [matchItem?.item_id])
 
+  // Load the matched item as it is now; fields the reviewer hasn't touched
+  // take its current values (e.g. the season, or a placeholder's set details).
+  useEffect(() => {
+    const itemId = matchCandidate?.item?.item_id
+    if (!itemId) return undefined
+    let cancelled = false
+    loadCatalogueItemRow(itemId).then((row) => {
+      if (cancelled || !row) return
+      setFreshItem(row)
+      const fresh = initialReviewValues(draft, category, { ...matchCandidate.item, ...row })
+      // Untouched fields take the item's current value; an empty one never
+      // overwrites (the set link, for one, is loaded separately).
+      const keep = (key) => touchedRef.current.has(key) || saved?.values || fresh[key] == null || fresh[key] === ''
+      setValues((current) => Object.fromEntries(Object.entries({ ...fresh, ...current }).map(([key, value]) => [key, keep(key) ? value : fresh[key]])))
+      if (isChecklistPlaceholder(row)) setShowAll(true)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [matchCandidate?.item?.item_id])
+
   // The matched item's Property link and taxonomy names.
   useEffect(() => {
     if (!spec || !matchItem) return undefined
@@ -5357,7 +5385,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     setDuplicates(null)
     setMatchId(nextId)
     setValues(initialReviewValues(draft, category, nextItem))
-    setShowAll(!nextItem)
+    setShowAll(!nextItem || isChecklistPlaceholder(nextItem))
     setAttachImages(true)
   }
 
@@ -5435,7 +5463,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
         fills: Boolean(reviewItem && scanIsReading && !current),
         edited: Boolean(reviewItem) && finalValue.trim() !== current,
       }
-    }).filter((row) => showAll || row.conflict || row.fills || row.edited),
+    }).filter((row) => showAll || KEY_REVIEW_FIELDS.has(row.field.key) || row.conflict || row.fills || row.edited),
   })).filter((group) => group.rows.length)
 
   const allRows = rows.flatMap((group) => group.rows)

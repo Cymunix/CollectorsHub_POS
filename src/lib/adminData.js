@@ -2242,6 +2242,15 @@ export async function loadTaxonomyNames(item) {
   return Object.fromEntries(results)
 }
 
+// The catalogue item as it is now (matches stored with a scan are copies from
+// when it was analysed, before later edits or new columns such as season).
+export async function loadCatalogueItemRow(itemId) {
+  if (!itemId) return null
+  const { data, error } = await supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('item_id', itemId).maybeSingle()
+  if (error) throw error
+  return data ? { ...data, imageUrl: publicImageUrl(data.image_path) } : null
+}
+
 export async function loadItemPropertyId(itemId) {
   if (!itemId) return ''
   const { data } = await supabase.from('item_properties').select('property_id').eq('item_id', itemId).limit(1).maybeSingle()
