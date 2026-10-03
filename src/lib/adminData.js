@@ -2764,15 +2764,37 @@ export function isChecklistPlaceholder(item) {
 // teams: whether lines carry a team after the name (sports cards). Trading
 // card names often contain commas ("Sadion, the Timelord"), so for them the
 // rest of the line is the name.
+// A collection goes in square brackets at the end of a line
+// ("1 Wayne Gretzky - Edmonton Oilers [Moments]") or in the last column of a
+// pasted spreadsheet (number, name, team, collection; trading cards: number,
+// name, collection). Sets that number each collection from 1 repeat card
+// numbers: a number may repeat with a different collection or name.
+// One card of a set: its number within its collection ("Base" and blank are
+// the same), plus the name for checklists that repeat a number.
+export function checklistRowKey({ number, collection = '', name = '' }) {
+  return [cardNumberText(number), collectionKey(collection), matchText(name)].join('|')
+}
+
+// The same card in the catalogue (number and collection; names on scanned
+// items may be written differently from the checklist's).
+export function checklistItemKey({ number, collection = '' }) {
+  return [cardNumberText(number), collectionKey(collection)].join('|')
+}
+
 export function parseChecklist(text, { teams = true } = {}) {
   const rows = []
   const seen = new Set()
   for (const rawLine of String(text || '').split(/\r?\n/)) {
-    const line = rawLine.replace(/ /g, ' ').trim()
+    let line = rawLine.replace(/ /g, ' ').trim()
     if (!line) continue
+    let collection = ''
+    line = line.replace(/\s*\[([^\]]+)\]\s*$/, (all, name) => { collection = name.trim(); return '' })
     let parts
     if (line.includes('\t')) {
       parts = line.split('\t').map((part) => part.trim()).filter(Boolean)
+      const collectionColumn = teams ? 3 : 2
+      if (!collection && parts[collectionColumn]) collection = parts[collectionColumn]
+      parts = parts.slice(0, collectionColumn)
     } else {
       const match = line.match(/^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)[.):]?\s+(.+)$/)
       if (!match) { rows.push({ raw: line, error: 'No card number at the start of the line' }); continue }
@@ -2793,10 +2815,10 @@ export function parseChecklist(text, { teams = true } = {}) {
     name = unquote(stripFlags(stripFlags(name)))
     team = unquote(stripFlags(stripFlags(team)))
     if (!number || !name) { rows.push({ raw: line, error: 'Needs a card number and a name' }); continue }
-    const key = number.toLowerCase()
+    const key = checklistRowKey({ number, collection, name })
     if (seen.has(key)) { rows.push({ raw: line, error: `Card ${number} is listed twice` }); continue }
     seen.add(key)
-    rows.push({ raw: line, number, name, team, rookie: flags.rookie, shortPrint: flags.shortPrint })
+    rows.push({ raw: line, number, name, team, collection, rookie: flags.rookie, shortPrint: flags.shortPrint })
   }
   return rows
 }
@@ -2828,13 +2850,15 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
 export async function createChecklistPlaceholders({ category, ids, releaseYear = '', rows = [], existing = [] }) {
   const categoryId = await categoryIdForName(category)
   if (!categoryId || !ids?.subcategory_id) throw new Error('Choose the set (at least the category and subcategory) first.')
-  const have = new Set(existing.map((item) => cardNumberText(item.card_number)))
-  const todo = rows.filter((row) => !row.error && !have.has(cardNumberText(row.number)))
+  // Already in the catalogue: same number in the same collection.
+  const have = new Set(existing.map((item) => checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection })))
+  const todo = rows.filter((row) => !row.error && !have.has(checklistItemKey(row)))
   const created = []
   for (let index = 0; index < todo.length; index += 100) {
     const payload = todo.slice(index, index + 100).map((row) => {
       const dynamic = { [CHECKLIST_PLACEHOLDER_KEY]: true, source: 'Set checklist' }
       if (row.team) dynamic.team = row.team
+      if (row.collection) dynamic.collection = row.collection
       if (row.rookie) dynamic.rookie = 'Yes'
       if (row.shortPrint) dynamic.variation = 'Short Print'
       return {
