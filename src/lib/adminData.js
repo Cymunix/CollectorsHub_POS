@@ -2883,6 +2883,8 @@ export async function fillChecklistPlaceholder({ item, category, values }) {
     if (dynamic[key] == null || dynamic[key] === '') dynamic[key] = value
   })
   delete dynamic[CHECKLIST_PLACEHOLDER_KEY]
+  // Scanned in: the record is now CollectorsHub's own, not the checklist's.
+  dynamic.source = 'CollectorsHub'
   dynamic.scanner_source = 'CollectorsHub Desktop scanner'
   patch.dynamic_fields = dynamic
   return updateCatalogueItemRecord(item.item_id, patch)
