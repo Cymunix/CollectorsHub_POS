@@ -8101,3 +8101,26 @@ button:disabled {
   right: 0;
   text-align: center;
 }
+
+/* Review queue search */
+.review-search {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  color: #6b7a90;
+  display: inline-flex;
+  flex: 1 1 260px;
+  gap: 6px;
+  max-width: 420px;
+  padding: 0 10px;
+}
+
+.review-search input {
+  border: 0;
+  flex: 1;
+  font: inherit;
+  min-width: 0;
+  outline: none;
+  padding: 8px 0;
+}

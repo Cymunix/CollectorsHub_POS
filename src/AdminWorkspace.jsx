@@ -45,6 +45,7 @@ import {
   TRADING_DYNAMIC_KEYS,
   swapItemFrontBack,
   parseChecklist,
+  checklistItemKey,
   loadSetItems,
   createChecklistPlaceholders,
   isChecklistPlaceholder,
@@ -3841,6 +3842,17 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   // the confident ones in bulk.
   const [sortBy, setSortBy] = useState('confidence-desc')
   const [tierFilter, setTierFilter] = useState('all')
+  // Find a card in the queue by name, number or set (every word must appear).
+  const [reviewSearch, setReviewSearch] = useState('')
+  const searchWords = reviewSearch.toLowerCase().split(/\s+/).filter(Boolean)
+  const matchesSearch = (draft) => {
+    if (!searchWords.length) return true
+    const result = draft.recognition?.result || {}
+    const values = draft.review?.values || {}
+    const haystack = [scanDraftTitle(draft), result.subject, result.id_number, result.property, result.subfranchise, result.release_year, values.name, values.subject, values.card_number, values.collection, draft.scanAnalysis?.bestMatch?.item?.name]
+      .filter(Boolean).join(' ').toLowerCase()
+    return searchWords.every((word) => haystack.includes(word))
+  }
   const [bulkAdd, setBulkAdd] = useState(null)
   const [setSetup, setSetSetup] = useState(null)
   const [checklistOpen, setChecklistOpen] = useState(false)
@@ -3864,7 +3876,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   confidenceById.forEach((entry) => { tierCounts[entry.tier] += 1 })
 
   const sortedRows = rows
-    .filter((draft) => tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter)
+    .filter((draft) => (tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter) && matchesSearch(draft))
     .sort((a, b) => {
       if (sortBy === 'newest') return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
       const scoreA = confidenceOf(a)?.score ?? -1
@@ -3881,8 +3893,8 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   // Cards are shown a page at a time (each has two scans to draw).
   const REVIEW_PAGE = 40
   const [shownCount, setShownCount] = useState(REVIEW_PAGE)
-  useEffect(() => { setShownCount(REVIEW_PAGE) }, [sortBy, tierFilter])
-  const orderKey = `${sortBy}|${tierFilter}|${orderTick}`
+  useEffect(() => { setShownCount(REVIEW_PAGE) }, [sortBy, tierFilter, reviewSearch])
+  const orderKey = `${sortBy}|${tierFilter}|${reviewSearch}|${orderTick}`
   const sortedIds = sortedRows.map((draft) => draft.id)
   let displayRows = sortedRows
   let heldCount = 0
@@ -4140,6 +4152,10 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
               <button key={id} type="button" role="radio" aria-checked={tierFilter === id} className={`tier-${id}${tierFilter === id ? ' active' : ''}`} onClick={() => setTierFilter(id)}>{label}</button>
             ))}
           </div>
+          <label className="review-search">
+            <Search size={15} />
+            <input type="search" value={reviewSearch} onChange={(event) => setReviewSearch(event.target.value)} placeholder="Find a card: name, number or set" aria-label="Find a card in the queue" />
+          </label>
           <label className="review-sort">Sort
             <select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
               <option value="confidence-desc">Highest confidence first</option>
@@ -4155,6 +4171,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           <button type="button" onClick={() => setOrderTick((tick) => tick + 1)}>Show {heldCount === 1 ? 'it' : 'them'}</button>
         </div>
       ) : null}
+      {searchWords.length && !displayRows.length ? <p className="scan-mode-note">No cards in the queue match "{reviewSearch}".</p> : null}
       <div className="review-draft-list">
         {displayRows.slice(0, shownCount).map((draft) => {
           const title = scanDraftTitle(draft)
@@ -4519,6 +4536,8 @@ function ChecklistImportDialog({ onClose }) {
   const [chosen, setChosen] = useState({ subcategory_id: '', franchise_id: '', subset_id: '', property_id: '', item_type_id: '', publisher_id: '' })
   const [options, setOptions] = useState({})
   const [releaseYear, setReleaseYear] = useState('')
+  // Collection for lines that don't name their own (e.g. a numbered insert set).
+  const [collection, setCollection] = useState('')
   const [text, setText] = useState('')
   const [existing, setExisting] = useState(null)
   const [busy, setBusy] = useState('')
@@ -4526,7 +4545,7 @@ function ChecklistImportDialog({ onClose }) {
   const [result, setResult] = useState(null)
   const categoryRow = categories.find((row) => row.name === category)
   const trading = category === 'Trading Cards'
-  const rows = useMemo(() => parseChecklist(text, { teams: !trading }), [text, trading])
+  const rows = useMemo(() => parseChecklist(text, { teams: !trading }).map((row) => (row.error || row.collection ? row : { ...row, collection: collection.trim() })), [text, trading, collection])
   const good = rows.filter((row) => !row.error)
   const bad = rows.filter((row) => row.error)
 
@@ -4595,16 +4614,18 @@ function ChecklistImportDialog({ onClose }) {
     }
   }
 
-  const byNumber = new Map((existing || []).map((item) => [String(item.card_number || '').toLowerCase().replace(/^(no\.?|#)\s*/, ''), item]))
+  // Same card = same number in the same collection.
+  const byNumber = new Map((existing || []).map((item) => [checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection }), item]))
   const status = (row) => {
-    const item = byNumber.get(String(row.number).toLowerCase())
+    const item = byNumber.get(checklistItemKey(row))
     if (!item) return 'new'
     return isChecklistPlaceholder(item) ? 'placeholder' : 'scanned'
   }
   const counts = { new: 0, placeholder: 0, scanned: 0 }
   good.forEach((row) => { if (existing) counts[status(row)] += 1 })
   const scannedInSet = (existing || []).filter((item) => !isChecklistPlaceholder(item)).length
-  const missingNumbers = existing ? good.filter((row) => status(row) !== 'scanned').map((row) => row.number) : []
+  const missingNumbers = existing ? good.filter((row) => status(row) !== 'scanned').map((row) => (row.collection ? `${row.number} (${row.collection})` : row.number)) : []
+  const showCollection = good.some((row) => row.collection)
   // "+ New …" on each level: type the name, Add creates it under the levels
   // chosen above and selects it.
   const NEW = '__new__'
@@ -4665,10 +4686,13 @@ function ChecklistImportDialog({ onClose }) {
           <label>Release year
             <input type="number" value={releaseYear} onChange={(event) => { setReleaseYear(event.target.value); setExisting(null) }} placeholder="e.g. 2025" disabled={Boolean(busy)} />
           </label>
+          <label>Collection
+            <input value={collection} onChange={(event) => setCollection(event.target.value)} placeholder="Base (leave blank), or e.g. Moments" disabled={Boolean(busy)} />
+          </label>
           {select('item_type_id', 'Item type', options.item_type, !chosen.subcategory_id)}
           {select('publisher_id', 'Publisher', options.publisher, false)}
         </div>
-        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie)
+        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection in [brackets] at the end overrides the Collection box, so one list can hold several collections that each start at 1)
           <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
         </label>
         <div className="checklist-summary">
@@ -4681,13 +4705,14 @@ function ChecklistImportDialog({ onClose }) {
         {good.length ? (
           <div className="checklist-preview">
             <table className="admin-table">
-              <thead><tr><th>#</th><th>{trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
+              <thead><tr><th>#</th><th>{trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
               <tbody>
-                {good.slice(0, 400).map((row) => (
-                  <tr key={row.number}>
+                {good.slice(0, 400).map((row, index) => (
+                  <tr key={`${index}-${row.number}`}>
                     <td>{row.number}</td>
                     <td>{row.name}</td>
                     {trading ? null : <td>{row.team || '—'}</td>}
+                    {showCollection ? <td>{row.collection || 'Base'}</td> : null}
                     <td>{[row.rookie ? 'RC' : '', row.shortPrint ? 'SP' : ''].filter(Boolean).join(' ') || ''}</td>
                     {existing ? <td className={`checklist-status ${status(row)}`}>{{ new: 'Will be created', placeholder: 'Placeholder', scanned: 'Scanned' }[status(row)]}</td> : null}
                   </tr>
