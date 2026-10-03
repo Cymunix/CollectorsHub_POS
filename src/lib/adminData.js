@@ -72,6 +72,7 @@ const CATALOGUE_SELECT = [
   'catalog_code',
   'upc',
   'release_year',
+  'season',
   'market_price',
   'retail_price',
   'image_path',
@@ -1644,6 +1645,9 @@ const SPORTS_REVIEW_GROUPS = [
     label: 'Item Metadata',
     fields: [
       { key: 'description', label: 'Description', column: 'description', multiline: true, scan: (meta) => meta.description },
+      // Season: "2013-14" (hockey, basketball) or "2024" (football, baseball).
+      // Sets (Properties) are named without it.
+      { key: 'season', label: 'Season', column: 'season', scan: (meta) => meta.season },
       { key: 'release_year', label: 'Release Year', column: 'release_year', type: 'number', scan: (meta) => meta.year || meta.releaseYear },
       { key: 'upc', label: 'Barcodes', column: 'upc', scan: (meta) => meta.barcodes || meta.barcode },
       { key: 'source', label: 'Source (internal provenance)', path: ['source'], scan: () => '' },
@@ -1701,6 +1705,7 @@ export const AI_FIELD_FOR_REVIEW_KEY = {
   manufacturer: 'publisher_manufacturer',
   description: 'description',
   release_year: 'release_year',
+  season: 'season',
   upc: 'barcodes',
   card_type: 'card_type',
   team: 'team',
@@ -1940,6 +1945,15 @@ export async function createCatalogueItemFromReview({ category, values, confiden
   groups.flatMap((group) => group.fields).filter((field) => field.column).forEach((field) => {
     payload[field.column] = reviewColumnValue(field, values[field.key])
   })
+  // A season without a release year: the release year is its first year.
+  if (payload.season && !payload.release_year) payload.release_year = seasonStartYear(payload.season)
+  // No season read (older AI readings): single-year sports use the release
+  // year; hockey and basketball seasons span two years, so they're left for
+  // the reviewer.
+  if (category === 'Sports Cards' && !payload.season && payload.release_year && values.subcategory_id) {
+    const { data: sport } = await supabase.from('subcategories').select('name').eq('subcategory_id', values.subcategory_id).maybeSingle()
+    if (sport && !/hockey|basketball/i.test(sport.name)) payload.season = String(payload.release_year)
+  }
   if (isSpecCategory(category)) {
     // Matches the website's Add Item insert: the display name is the Subject.
     payload.name = name
@@ -2375,8 +2389,35 @@ export async function resolveRecognizedTaxonomy(result = {}, fallbackCategory = 
   const properties = subsetId
     ? (await loadSportsTaxonomyOptions({ category, subcategoryId, franchiseId, subsetId })).property
     : byLeague.property
-  pick('property', properties, result.property, { allowSingle: Boolean(subsetId) })
+  // Sets are named without their season ("SP Authentic Hockey").
+  pick('property', properties, withoutSeason(result.property), { allowSingle: Boolean(subsetId) })
   return resolution
+}
+
+// Seasons: "2013-14", "2013-2014", "2013/14" -> "2013-14"; "2024" -> "2024".
+export function seasonKey(value) {
+  const match = String(value ?? '').match(/((?:19|20)\d{2})(?:\s*[-/]\s*(\d{2,4}))?/)
+  if (!match) return ''
+  return match[2] ? `${match[1]}-${match[2].slice(-2)}` : match[1]
+}
+
+export function seasonStartYear(value) {
+  const key = seasonKey(value)
+  return key ? Number(key.slice(0, 4)) : null
+}
+
+// A set name without a leading season ("2013-14 SP Authentic Hockey").
+export function withoutSeason(value) {
+  return String(value ?? '').replace(/^(19|20)\d{2}(-\d{2,4})?\s+/, '').trim()
+}
+
+// Same season: equal, or one side only knows the start year ("2013" for "2013-14").
+function sameSeason(a, b) {
+  const keyA = seasonKey(a)
+  const keyB = seasonKey(b)
+  if (!keyA || !keyB) return null
+  if (keyA === keyB) return true
+  return (!keyA.includes('-') || !keyB.includes('-')) && keyA.slice(0, 4) === keyB.slice(0, 4)
 }
 
 function matchText(value) {
@@ -2625,7 +2666,10 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
     const itemSetName = looseSetName(subsetNames.get(item.subset_id))
     if (ids.property_id && item._property_id) {
       possible += 20
-      specificRelease = true
+      // Sets are named without their season now, so a Property is one set
+      // across seasons: the season (below) still has to agree. (Items with no
+      // season yet keep the old rule: the Property was the year's release.)
+      specificRelease = !item.season
       releaseMatch = item._property_id === ids.property_id
       if (releaseMatch) { score += 20; reasons.push('Same release/set') } else differences.push('release/set')
     } else if (ids.subset_id && item.subset_id && (!trading || ids.subset_id === item.subset_id || !setTexts.length)) {
@@ -2646,7 +2690,12 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
         if (releaseMatch) { score += 15; reasons.push('Same set') } else differences.push('set')
       }
     }
-    if (card.release_year) {
+    const seasonAgrees = trading ? null : sameSeason(card.season, item.season)
+    if (seasonAgrees !== null) {
+      // Season read and season on the item: it decides (not the copyright year).
+      possible += 5
+      if (seasonAgrees) { score += 5; reasons.push('Same season') } else { releaseMatch = false; differences.push('season') }
+    } else if (card.release_year) {
       possible += 5
       const sameYear = String(item.release_year || '') === String(card.release_year)
       // A confirmed specific release outranks the year (copyright years can
@@ -2911,18 +2960,20 @@ export function parseChecklist(text, { teams = true, brackets = 'collection' } =
 
 // The cards already in the catalogue for a set: by Property when one is
 // chosen, otherwise by Subfranchise (+ year for sports product lines).
-export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId = '', subsetId = '', propertyId = '', releaseYear = '' }) {
+// season: sports sets (Properties) span seasons, so a set is a Property + season.
+export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId = '', subsetId = '', propertyId = '', releaseYear = '', season = '' }) {
   if (!categoryId) return []
   const rows = []
   for (let from = 0; ; from += 1000) {
     let query = supabase.from('items')
-      .select(propertyId ? 'item_id, name, subject, card_number, release_year, image_path, dynamic_fields, item_properties!inner(property_id)' : 'item_id, name, subject, card_number, release_year, image_path, dynamic_fields')
+      .select(propertyId ? 'item_id, name, subject, card_number, release_year, season, image_path, dynamic_fields, item_properties!inner(property_id)' : 'item_id, name, subject, card_number, release_year, season, image_path, dynamic_fields')
       .eq('category_id', categoryId)
     if (subcategoryId) query = query.eq('subcategory_id', subcategoryId)
     if (franchiseId) query = query.eq('franchise_id', franchiseId)
     if (subsetId) query = query.eq('subset_id', subsetId)
     if (propertyId) query = query.eq('item_properties.property_id', propertyId)
-    else if (releaseYear) query = query.eq('release_year', Number(releaseYear))
+    if (seasonKey(season)) query = query.eq('season', seasonKey(season))
+    else if (!propertyId && releaseYear) query = query.eq('release_year', Number(releaseYear))
     const { data, error } = await query.order('item_id').range(from, from + 999)
     if (error) throw error
     rows.push(...(data || []))
@@ -2933,7 +2984,7 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
 
 // Creates a placeholder item for each checklist row that the set doesn't have
 // yet. Returns { created: [ids], skipped: number }.
-export async function createChecklistPlaceholders({ category, ids, releaseYear = '', rows = [], existing = [] }) {
+export async function createChecklistPlaceholders({ category, ids, releaseYear = '', season = '', rows = [], existing = [] }) {
   const categoryId = await categoryIdForName(category)
   if (!categoryId || !ids?.subcategory_id) throw new Error('Choose the set (at least the category and subcategory) first.')
   // Already in the catalogue: same number in the same collection.
@@ -2960,7 +3011,8 @@ export async function createChecklistPlaceholders({ category, ids, releaseYear =
         name: row.name,
         subject: row.name,
         card_number: row.number,
-        release_year: releaseYear ? Number(releaseYear) : null,
+        season: seasonKey(season) || null,
+        release_year: releaseYear ? Number(releaseYear) : seasonStartYear(season),
         completion_eligible: true,
         dynamic_fields: dynamic,
       }

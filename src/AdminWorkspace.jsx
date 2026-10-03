@@ -50,6 +50,9 @@ import {
   createChecklistPlaceholders,
   isChecklistPlaceholder,
   alreadyInCatalogueMatch,
+  seasonKey,
+  seasonStartYear,
+  withoutSeason,
   catalogueFrontPhotoUrl,
   fillChecklistPlaceholder,
   CATALOGUE_EDIT_CHILDREN,
@@ -4479,7 +4482,8 @@ function SetSetupDialog({ group, onClose, onApply }) {
     { level: 'subcategory', label: trading ? 'Subcategory (brand)' : 'Subcategory (sport)', text: unresolved.subcategory || taxonomy.names?.subcategory || '' },
     { level: 'franchise', label: trading ? 'Franchise' : 'Franchise (league)', text: unresolved.franchise || taxonomy.names?.franchise || '' },
     { level: 'subset', label: trading ? 'Subfranchise (era / storyline)' : 'Product line (subfranchise)', text: unresolved.subset || group.subsetText || '' },
-    { level: 'property', label: trading ? 'Property (release)' : 'Set (property)', text: unresolved.property || group.label || '' },
+    // Sports sets are named without their season (it's its own field).
+    { level: 'property', label: trading ? 'Property (release)' : 'Set (property)', text: trading ? unresolved.property || group.label || '' : withoutSeason(unresolved.property || group.label || '') },
   ]
   const [chosen, setChosen] = useState(() => ({
     subcategory: ids.subcategory_id || '',
@@ -4600,6 +4604,8 @@ function ChecklistImportDialog({ onClose }) {
   const [chosen, setChosen] = useState({ subcategory_id: '', franchise_id: '', subset_id: '', property_id: '', item_type_id: '', publisher_id: '' })
   const [options, setOptions] = useState({})
   const [releaseYear, setReleaseYear] = useState('')
+  // Sports cards: the season (2023-24, or 2024), in place of the release year.
+  const [season, setSeason] = useState('')
   // Collection for lines that don't name their own (e.g. a numbered insert set).
   const [collection, setCollection] = useState('')
   const [text, setText] = useState('')
@@ -4644,19 +4650,20 @@ function ChecklistImportDialog({ onClose }) {
     setExisting(null)
     setResult(null)
     if (key === 'property_id') {
+      // Older sets still named with their year/season.
       const name = (options.property || []).find((option) => option.id === value)?.name || ''
-      const year = name.match(/\b(19|20)\d{2}\b/)?.[0]
-      if (year) setReleaseYear(year)
+      if (seasonKey(name)) { setSeason(seasonKey(name)); setReleaseYear(String(seasonStartYear(name))) }
     }
   }
 
-  const setChosenEnough = Boolean(chosen.subcategory_id && chosen.franchise_id && (chosen.subset_id || chosen.property_id))
+  // Sports sets span seasons: the season picks one year's cards.
+  const setChosenEnough = Boolean(chosen.subcategory_id && chosen.franchise_id && (chosen.subset_id || chosen.property_id) && (trading || seasonKey(season)))
 
   async function checkSet() {
     setBusy('check')
     setError('')
     try {
-      setExisting(await loadSetItems({ categoryId: categoryRow.category_id, subcategoryId: chosen.subcategory_id, franchiseId: chosen.franchise_id, subsetId: chosen.subset_id, propertyId: chosen.property_id, releaseYear }))
+      setExisting(await loadSetItems({ categoryId: categoryRow.category_id, subcategoryId: chosen.subcategory_id, franchiseId: chosen.franchise_id, subsetId: chosen.subset_id, propertyId: chosen.property_id, releaseYear: trading ? releaseYear : '', season: trading ? '' : season }))
     } catch (checkError) {
       setError(checkError.message || 'Could not load the set.')
     } finally {
@@ -4668,7 +4675,7 @@ function ChecklistImportDialog({ onClose }) {
     setBusy('create')
     setError('')
     try {
-      const outcome = await createChecklistPlaceholders({ category, ids: chosen, releaseYear, rows: good, existing: existing || [] })
+      const outcome = await createChecklistPlaceholders({ category, ids: chosen, releaseYear: trading ? releaseYear : '', season: trading ? '' : season, rows: good, existing: existing || [] })
       setResult(outcome)
       await checkSet()
     } catch (createError) {
@@ -4748,9 +4755,15 @@ function ChecklistImportDialog({ onClose }) {
           {select('franchise_id', trading ? 'Franchise' : 'Franchise (league)', options.franchise, !chosen.subcategory_id)}
           {select('subset_id', trading ? 'Subfranchise (set / era)' : 'Subfranchise (product line)', options.subset, !chosen.franchise_id)}
           {select('property_id', trading ? 'Property (release)' : 'Property (set)', options.property, !chosen.franchise_id)}
-          <label>Release year
-            <input type="number" value={releaseYear} onChange={(event) => { setReleaseYear(event.target.value); setExisting(null) }} placeholder="e.g. 2025" disabled={Boolean(busy)} />
-          </label>
+          {trading ? (
+            <label>Release year
+              <input type="number" value={releaseYear} onChange={(event) => { setReleaseYear(event.target.value); setExisting(null) }} placeholder="e.g. 2025" disabled={Boolean(busy)} />
+            </label>
+          ) : (
+            <label>Season
+              <input value={season} onChange={(event) => { setSeason(event.target.value); setExisting(null) }} placeholder="2023-24, or 2024" disabled={Boolean(busy)} />
+            </label>
+          )}
           <label>Collection
             <input value={collection} onChange={(event) => setCollection(event.target.value)} placeholder="Base (leave blank for Base), or e.g. Moments" disabled={Boolean(busy)} />
           </label>

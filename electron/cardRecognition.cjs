@@ -52,6 +52,7 @@ const CARD_SCHEMA = {
     publisher_manufacturer: nullable('string'),
     description: nullable('string'),
     release_year: nullable('integer'),
+    season: nullable('string'),
     barcodes: nullable('string'),
     card_type: nullable('string'),
     team: nullable('string'),
@@ -85,7 +86,7 @@ const CARD_SCHEMA = {
   required: [
     'category', 'subcategory', 'franchise', 'subfranchise', 'property', 'item_type',
     'collection', 'subject', 'subjects', 'id_number', 'publisher_manufacturer', 'description',
-    'release_year', 'barcodes', 'card_type', 'team', 'rookie', 'parallel', 'variation',
+    'release_year', 'season', 'barcodes', 'card_type', 'team', 'rookie', 'parallel', 'variation',
     'serial_numbering', 'autograph', 'autograph_type', 'memorabilia_relic', 'finish',
     'evolves_from', 'evolves_to', 'attack', 'health', 'damage', 'shields', 'tcg_type', 'traits',
     'abilities', 'weakness', 'resistance', 'artist', 'language', 'legal', 'cost', 'unit_level',
@@ -119,7 +120,8 @@ SUBFRANCHISE
 This is the product line, such as: Panini Contenders, Panini Prizm, Panini Select, Upper Deck Series 1.
 
 PROPERTY
-This is the specific release/set, such as: 2024 Panini Contenders Football.
+This is the specific set, WITHOUT the year or season (that goes in SEASON), such as: Panini Contenders Football,
+SP Authentic Hockey.
 
 ITEM TYPE
 The kind of item. For any trading or sports card this is: Card.
@@ -148,7 +150,11 @@ Do not generate a new biography.
 Preserve the meaning of the printed card-back text.
 
 RELEASE YEAR
-The release/set year.
+The release/set year. For a season that spans two years (2013-14), the first year (2013).
+
+SEASON
+Sports cards: the season as printed or as the set names it: "2013-14" for hockey and basketball seasons that span
+two years, "2024" for football and baseball. Trading card games: null.
 
 BARCODES
 Only a UPC/EAN barcode number printed under a barcode (8 to 14 digits). Most single cards have none: return null.
@@ -329,6 +335,17 @@ function normaliseResult(raw) {
   // (A sports-card convention; trading card games leave it empty.)
   const tradingCardGame = /trading/i.test(String(result.category || ''))
   if (!tradingCardGame && !result.collection && !/insert|autograph|patch|relic/i.test(String(result.card_type || ''))) result.collection = 'Base'
+  // Sports sets are named without their season: a season left in the set name
+  // ("2013-14 SP Authentic Hockey") moves to season. Trading card games have none.
+  if (tradingCardGame) {
+    result.season = null
+  } else {
+    const seasonInSet = String(result.property || '').match(/^((?:19|20)\d{2}(?:-\d{2,4})?)\s+(.+)$/)
+    if (seasonInSet) {
+      if (!result.season) result.season = seasonInSet[1]
+      result.property = seasonInSet[2].trim()
+    }
+  }
   // App-side guard: a barcode is 8-14 digits; anything else (e.g. "No. 42") is dropped.
   const barcodeDigits = String(result.barcodes || '').replace(/[\s-]/g, '')
   result.barcodes = /^\d{8,14}$/.test(barcodeDigits) ? barcodeDigits : null
@@ -546,7 +563,7 @@ class OllamaCardRecognitionProvider {
 
 const IDENTIFY_FIELDS = [
   'category', 'subcategory', 'franchise', 'subfranchise', 'property', 'collection', 'subject', 'subjects',
-  'id_number', 'release_year', 'team', 'parallel', 'variation', 'serial_numbering', 'autograph',
+  'id_number', 'release_year', 'season', 'team', 'parallel', 'variation', 'serial_numbering', 'autograph',
   'memorabilia_relic', 'finish', 'uncertain_fields',
 ]
 const IDENTIFY_SCHEMA = {
@@ -566,11 +583,12 @@ Read only what identifies the card. Use only what is printed on the card; never 
 - subcategory: the sport (e.g. Football, Hockey, Baseball) or, for trading card games, the game (e.g. Pokémon, Magic: The Gathering, Star Wars).
 - franchise: the league (e.g. NFL, NHL) or the trading card game's product family. null if unsure.
 - subfranchise: the product line (e.g. Panini Contenders, Upper Deck) or the trading card game's era / set series.
-- property: the specific set / release, e.g. "2024 Panini Contenders Football" or a game's expansion name.
+- property: the specific set without its year, e.g. "Panini Contenders Football", or a game's expansion name.
 - collection: a named insert or parallel line printed on the card (e.g. Rookie Ticket, Cracked Ice Ticket); null for a base card.
 - subject: the player(s) or the card's name. Several players: join them with "/". subjects: each one.
 - id_number: the card's own number as printed, without the set size: "64" for #64, "33" for 33/120, "EC-20" for EC-20.
-- release_year: the set's year (copyright line or set name).
+- release_year: the set's year (copyright line or set name); for a two-year season, the first year.
+- season: sports cards only: "2013-14" for hockey/basketball seasons, "2024" for football/baseball.
 - team: the team on a sports card.
 - parallel, variation: only if clearly printed or obvious (e.g. a foil colour named on the card).
 - serial_numbering: hand/stamped numbering such as 14/99 (NOT the card number of a trading card game).
