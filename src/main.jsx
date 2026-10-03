@@ -1629,7 +1629,9 @@ function RegisterView({
   // Scans with the FastFoto when one is connected: every card loaded in the
   // feeder comes back as its own scan event (front and back). Returns null
   // when no FastFoto is connected.
-  async function captureFeederScanEvents(workflow) {
+  // onEvent(event): called for each card as it comes off the scanner, so it
+  // can be identified while the rest of the stack is still feeding.
+  async function captureFeederScanEvents(workflow, onEvent = null) {
     const api = desktopApi()
     if (typeof api.feedStack !== 'function') return null
     const status = await api.refreshFeeder?.().catch(() => null)
@@ -1637,8 +1639,9 @@ function RegisterView({
     setScanStatus('Scanning')
     const events = []
     const offCard = api.onFeedCard?.((card) => {
-      const event = normaliseScanEvent(card.frontImage, workflow)
-      events.push({ ...event, sourceDevice: card.frontImage?.scannerName || status.feederName, backImage: card.backImage ? { path: card.backImage.path || '', url: card.backImage.url || '' } : null })
+      const event = { ...normaliseScanEvent(card.frontImage, workflow), sourceDevice: card.frontImage?.scannerName || status.feederName, backImage: card.backImage ? { path: card.backImage.path || '', url: card.backImage.url || '' } : null }
+      events.push(event)
+      onEvent?.(event)
     })
     try {
       const result = await api.feedStack({ loadFaceDown: true })
@@ -1722,9 +1725,30 @@ function RegisterView({
     }
   }
 
+  // FastFoto stacks: each card is identified as soon as it's scanned (one at
+  // a time), with a running count, instead of after the whole stack feeds.
   async function scanIntakeFromDevice() {
-    const events = await captureScanImageEvents('scan_intake')
-    for (const event of events) await identifyScanIntakeEvent(event)
+    let scanned = 0
+    let identified = 0
+    let feeding = true
+    let chain = Promise.resolve()
+    const progress = () => setNotice(feeding
+      ? `FastFoto: ${scanned} card${scanned === 1 ? '' : 's'} scanned, ${identified} identified…`
+      : `Identifying… ${identified} of ${scanned} card${scanned === 1 ? '' : 's'} done.`)
+    const fed = await captureFeederScanEvents('scan_intake', (event) => {
+      scanned += 1
+      progress()
+      chain = chain.then(() => identifyScanIntakeEvent(event)).then(() => { identified += 1; progress() })
+    })
+    if (fed) {
+      feeding = false
+      if (scanned) progress()
+      await chain
+      if (scanned) setNotice(`${identified} card${identified === 1 ? '' : 's'} scanned and identified.`)
+      return
+    }
+    const event = await captureFlatbedScanEvent('scan_intake')
+    if (event) await identifyScanIntakeEvent(event)
   }
 
   async function identifyScanIntakeEvent(event) {
