@@ -255,6 +255,12 @@ function adminDesktopApi() {
     : fallback
 }
 
+// Lists show small cached copies of scans: thousands of full-size scans on
+// one page run the window out of memory. (File URLs in dev stay full size.)
+function thumbUrl(url, width = 360) {
+  return /^collectorshub-pos:\/\/scan-images\//.test(String(url || '')) ? `${url}?thumb=${width}` : url
+}
+
 // Stack scans decide front/back from how much text each side has. When that
 // was a close call (or fell back to feed order) the AI double-checks it.
 export function needsSideCheck(draft) {
@@ -3415,8 +3421,8 @@ function LocalAiPanel({ ai }) {
               return (
                 <li key={draft.id} className={state}>
                   <div className="local-ai-thumbs">
-                    {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="" /> : <span />}
-                    {draft.backImage?.url ? <img src={draft.backImage.url} alt="" /> : <span />}
+                    {draft.frontImage?.url ? <img src={thumbUrl(draft.frontImage.url)} alt="" loading="lazy" decoding="async" /> : <span />}
+                    {draft.backImage?.url ? <img src={thumbUrl(draft.backImage.url)} alt="" loading="lazy" decoding="async" /> : <span />}
                   </div>
                   <div>
                     <strong>Card {queue.length - index}</strong>
@@ -3869,6 +3875,10 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
   // Changing the sort/filter or pressing Show re-sorts everything.
   const orderRef = useRef({ key: '', ids: [] })
   const [orderTick, setOrderTick] = useState(0)
+  // Cards are shown a page at a time (each has two scans to draw).
+  const REVIEW_PAGE = 40
+  const [shownCount, setShownCount] = useState(REVIEW_PAGE)
+  useEffect(() => { setShownCount(REVIEW_PAGE) }, [sortBy, tierFilter])
   const orderKey = `${sortBy}|${tierFilter}|${orderTick}`
   const sortedIds = sortedRows.map((draft) => draft.id)
   let displayRows = sortedRows
@@ -4143,7 +4153,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
         </div>
       ) : null}
       <div className="review-draft-list">
-        {displayRows.map((draft) => {
+        {displayRows.slice(0, shownCount).map((draft) => {
           const title = scanDraftTitle(draft)
           const metadataRows = meaningfulScanMetadata(draft.metadata)
           const route = scanRouteLabel(draft.scanAnalysis?.route)
@@ -4183,8 +4193,8 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           return (
           <div className="review-draft-card" key={draft.id}>
             <div className="review-draft-images">
-              {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="" /> : <span>Front</span>}
-              {draft.backImage?.url ? <img src={draft.backImage.url} alt="" /> : <span>Back</span>}
+              {draft.frontImage?.url ? <img src={thumbUrl(draft.frontImage.url)} alt="" loading="lazy" decoding="async" /> : <span>Front</span>}
+              {draft.backImage?.url ? <img src={thumbUrl(draft.backImage.url)} alt="" loading="lazy" decoding="async" /> : <span>Back</span>}
             </div>
             <div>
               <strong>{title}</strong>
@@ -4247,6 +4257,12 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           )
         })}
       </div>
+      {displayRows.length > shownCount ? (
+        <div className="review-show-more">
+          <span>Showing {shownCount} of {displayRows.length} cards</span>
+          <button type="button" onClick={() => setShownCount((count) => count + REVIEW_PAGE)}>Show {Math.min(REVIEW_PAGE, displayRows.length - shownCount)} more</button>
+        </div>
+      ) : null}
       {bulkAdd ? (
         <BulkAddDialog
           drafts={rows.filter((draft) => bulkAdd.ids.includes(draft.id))}
@@ -4348,7 +4364,7 @@ function BulkAddDialog({ drafts, confidenceOf, onClose, onConfirm, mode = 'add' 
             return (
               <label key={draft.id} className={`bulk-add-card${on ? '' : ' off'}`}>
                 <input type="checkbox" checked={on} onChange={() => toggle(draft.id)} />
-                {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="" /> : <span className="bulk-add-noimage" />}
+                {draft.frontImage?.url ? <img src={thumbUrl(draft.frontImage.url)} alt="" loading="lazy" decoding="async" /> : <span className="bulk-add-noimage" />}
                 <strong>{result.subject}</strong>
                 <small>#{String(result.id_number || '').replace(/^(no\.?|#)\s*/i, '')} · {result.release_year}</small>
                 <small>{[result.team, result.collection, result.parallel].filter(Boolean).join(' · ')}</small>
@@ -4844,8 +4860,8 @@ function AiReviewCard({ draft, finished, exactMatch, siblingNote, aiBusy, onEdit
     <div className={`review-draft-card ai-review-card${declined ? ' declined' : ''}`}>
       <div className="ai-review-media">
         <div className="review-draft-images">
-          {draft.frontImage?.url ? <img src={draft.frontImage.url} alt="Front" /> : <span>Front</span>}
-          {draft.backImage?.url ? <img src={draft.backImage.url} alt="Back" /> : <span>Back</span>}
+          {draft.frontImage?.url ? <img src={thumbUrl(draft.frontImage.url)} alt="Front" loading="lazy" decoding="async" /> : <span>Front</span>}
+          {draft.backImage?.url ? <img src={thumbUrl(draft.backImage.url)} alt="Back" loading="lazy" decoding="async" /> : <span>Back</span>}
         </div>
         {hasScans && typeof adminDesktopApi().rotateScanImage === 'function' ? (
           <div className="ai-review-orient">

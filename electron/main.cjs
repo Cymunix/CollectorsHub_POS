@@ -795,6 +795,24 @@ function findScanFile(fileName) {
   return ''
 }
 
+// Small JPEG copies of scans for list views, made on first use and kept in
+// local-data/scan-thumbs (remade if the scan changes). Not scans themselves:
+// never counted or cleaned up as scan files.
+async function scanThumbnail(filePath, width) {
+  const size = Math.max(80, Math.min(800, Math.round(width)))
+  const source = await stat(filePath)
+  const dir = path.join(getDataDir(), 'scan-thumbs')
+  const thumbPath = path.join(dir, `${path.basename(filePath, path.extname(filePath))}-${size}.jpg`)
+  try {
+    if ((await stat(thumbPath)).mtimeMs >= source.mtimeMs) return thumbPath
+  } catch {}
+  const image = nativeImage.createFromPath(filePath)
+  if (image.isEmpty()) throw new Error('Scan could not be read.')
+  await mkdir(dir, { recursive: true })
+  await writeFile(thumbPath, image.resize({ width: size, quality: 'good' }).toJPEG(82))
+  return thumbPath
+}
+
 function getScanImageUrl(fileName, filePath) {
   if (isDev) return pathToFileURL(filePath).toString()
   return `collectorshub-pos://scan-images/${encodeURIComponent(fileName)}`
@@ -1874,6 +1892,13 @@ app.whenReady().then(async () => {
         const fileName = path.basename(decodeURIComponent(url.pathname.replace(/^\/+/, '')))
         // Current scan folder first, then earlier ones (scans moved to another drive).
         const filePath = findScanFile(fileName) || path.join(getScanDir(), fileName)
+        // ?thumb=360: a small cached JPEG for lists (full scans are large).
+        const thumbWidth = Number(url.searchParams.get('thumb') || 0)
+        if (thumbWidth > 0) {
+          return scanThumbnail(filePath, thumbWidth)
+            .then((thumbPath) => net.fetch(pathToFileURL(thumbPath).toString()))
+            .catch(() => net.fetch(pathToFileURL(filePath).toString()))
+        }
         return net.fetch(pathToFileURL(filePath).toString())
       }
 
