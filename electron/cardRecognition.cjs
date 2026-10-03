@@ -201,7 +201,8 @@ Star Wars and similar) are NOT sports cards. For them the fields above mean:
 - item_type: Card.
 - collection: only a named collector line printed on the card; otherwise null (never "Base").
 - subject / subjects: what the card depicts (the card name, e.g. Feraligatr). One entry.
-- id_number: the card's own collector number as printed, without the set size (213/191 -> 213).
+- id_number: the card's own collector number as printed, without the set size (213/191 -> 213). A number printed
+  as 33/120 is the collector number 33, never serial numbering.
 - publisher_manufacturer: e.g. The Pokémon Company, Wizards of the Coast, Konami, Bandai.
 - release_year: the year printed on the card (copyright line) for that release.
 - description: ONLY the flavour text: the small italic Pokédex entry or flavour line (on Magic, the italic flavour
