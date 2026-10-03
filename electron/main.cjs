@@ -671,6 +671,15 @@ async function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
 
+  // Renderer errors go to logs/renderer.log, so a blank screen can be traced.
+  // (Newer Electron passes the details on the event; older as arguments.)
+  mainWindow.webContents.on('console-message', (event, oldLevel, oldMessage, oldLine, oldSource) => {
+    const level = event?.level ?? oldLevel
+    if (level !== 'error' && level !== 3) return
+    logRenderer({ event: 'console-error', message: event?.message ?? oldMessage, source: event?.sourceId ?? oldSource, line: event?.lineNumber ?? oldLine })
+  })
+  mainWindow.webContents.on('render-process-gone', (_event, details) => logRenderer({ event: 'render-process-gone', ...details }))
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) {
       shell.openExternal(url)
@@ -1244,6 +1253,16 @@ scannerSession.on('opened', (info) => {
 })
 
 // Development log: one JSON object per line in local-data/logs/scanner.log.
+async function logRenderer(entry) {
+  try {
+    const dir = path.join(getDataDir(), 'logs')
+    await mkdir(dir, { recursive: true })
+    await appendFile(path.join(dir, 'renderer.log'), `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, 'utf8')
+  } catch {}
+}
+
+ipcMain.handle('app:log-error', (_event, entry) => logRenderer({ event: 'ui-error', ...(entry || {}) }))
+
 async function logScanner(entry) {
   const line = JSON.stringify({ at: new Date().toISOString(), ...entry })
   console.log('[Scanner]', line)

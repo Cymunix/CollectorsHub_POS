@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   saveStore: (store) => ipcRenderer.invoke('store:save', store),
   getDataPath: () => ipcRenderer.invoke('app:get-data-path'),
   getVersion: () => ipcRenderer.invoke('app:get-version'),
+  logError: (entry) => ipcRenderer.invoke('app:log-error', entry),
   exitApp: () => ipcRenderer.invoke('app:exit'),
   refocusWindow: () => ipcRenderer.invoke('app:refocus'),
   getPendingUpdate: () => ipcRenderer.invoke('app:get-pending-update'),

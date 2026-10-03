@@ -4618,9 +4618,41 @@ function UpdatePrompt() {
   )
 }
 
+// A screen that crashes shows what went wrong (and logs it) instead of
+// leaving the window blank.
+class ErrorScreen extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  componentDidCatch(error, info) {
+    window.nordvikDesktop?.logError?.({ message: String(error?.message || error), stack: String(error?.stack || ''), componentStack: String(info?.componentStack || '') })
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div style={{ padding: 32, fontFamily: 'system-ui, sans-serif', color: '#1f2a3a' }}>
+        <h2>Something went wrong on this screen</h2>
+        <p>The error has been saved to the app's log. Send this message to support:</p>
+        <pre style={{ whiteSpace: 'pre-wrap', background: '#f4f6f9', padding: 12, borderRadius: 8, maxHeight: '50vh', overflow: 'auto' }}>{String(this.state.error?.stack || this.state.error)}</pre>
+        <button type="button" onClick={() => this.setState({ error: null })}>Try again</button>
+      </div>
+    )
+  }
+}
+
+window.addEventListener('error', (event) => window.nordvikDesktop?.logError?.({ message: String(event.message || ''), stack: String(event.error?.stack || '') }))
+window.addEventListener('unhandledrejection', (event) => window.nordvikDesktop?.logError?.({ message: `Unhandled: ${String(event.reason?.message || event.reason || '')}`, stack: String(event.reason?.stack || '') }))
+
 createRoot(document.getElementById('root')).render(
-  <>
+  <ErrorScreen>
     <App />
     <UpdatePrompt />
-  </>,
+  </ErrorScreen>,
 )
