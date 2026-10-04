@@ -2489,35 +2489,50 @@ function RegisterView({
     window.print()
   }
 
-  function sendReceiptEmail(recipient) {
-    const branding = completedTransaction.receiptBranding || {}
-    const itemLines = (completedTransaction.items || []).map((item) => {
-      const quantity = Number(item.quantity || 1)
-      const lineTotal = Number(item.total || 0)
-      return `${quantity} x ${item.name || item.sku || 'Item'} - ${money.format(lineTotal)}`
-    }).join('\n')
-    const subject = `${branding.storeName || 'Store'} receipt ${completedTransaction.number}`
-    const body = [
-      branding.storeName || 'Store',
-      branding.address,
-      branding.phone,
-      '',
-      completedTransaction.type === 'buy' ? 'Trade Complete' : 'Purchase Complete',
-      `Receipt #: ${completedTransaction.number}`,
-      `Date: ${new Date(completedTransaction.createdAt || Date.now()).toLocaleString('en-CA')}`,
-      '',
-      itemLines || 'No item details available.',
-      '',
-      `Subtotal: ${money.format(Number(completedTransaction.subtotal || 0))}`,
-      `Tax: ${money.format(Number(completedTransaction.tax || 0))}`,
-      `Total: ${money.format(Number(completedTransaction.total || 0))}`,
-      '',
-      `Powered by CollectorsHub`,
-    ].filter((line) => line !== undefined && line !== null).join('\n')
-    window.open(`mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank')
-    setReceiptActionNotice(`Email draft opened for ${recipient}.`)
-    setIsReceiptEmailPromptOpen(false)
+  // Sent by CollectorsHub (the send-receipt Supabase function, through the
+  // CollectorsHub Google Workspace mailbox), not the PC's mail program.
+  async function sendReceiptEmail(recipient) {
+    const transaction = completedTransaction
+    if (!transaction) return
+    setIsResolvingReceiptEmail(true)
+    setReceiptActionNotice(`Sending receipt to ${recipient}…`)
+    try {
+      const { data, error } = await supabase.functions.invoke('send-receipt', {
+        body: {
+          to: recipient,
+          storeId: transaction.storeId || authSession?.storeId || '',
+          receipt: {
+            number: transaction.number,
+            type: transaction.type,
+            createdAt: transaction.createdAt,
+            items: (transaction.items || []).map((item) => ({ name: item.name, sku: item.sku, quantity: item.quantity, total: item.total, direction: item.direction, condition: item.condition })),
+            subtotal: transaction.subtotal,
+            discounts: transaction.discounts,
+            tax: transaction.tax,
+            taxLabel: transaction.taxLabel,
+            total: transaction.total,
+            payments: (transaction.payments || []).map((payment) => ({ method: payment.method, amount: payment.amount })),
+            payout: transaction.payout || null,
+            employeeName: transaction.employeeName,
+            registerName: transaction.registerName,
+            receiptBranding: transaction.receiptBranding || {},
+          },
+        },
+      })
+      if (error || data?.error) {
+        let message = data?.error || error?.message || 'The receipt could not be emailed.'
+        try { const details = await error?.context?.json?.(); if (details?.error) message = details.error } catch {}
+        throw new Error(message)
+      }
+      setReceiptActionNotice(`Receipt emailed to ${recipient}.`)
+      setIsReceiptEmailPromptOpen(false)
+    } catch (sendError) {
+      setReceiptActionNotice(sendError?.message || 'The receipt could not be emailed.')
+    } finally {
+      setIsResolvingReceiptEmail(false)
+    }
   }
+
 
   async function resolveReceiptCustomerEmail(customerRecord) {
     const existing = String(customerRecord?.email || '').trim()
@@ -2557,7 +2572,7 @@ function RegisterView({
     try {
       const recipient = await resolveReceiptCustomerEmail(completedTransaction.customer)
       if (recipient) {
-        sendReceiptEmail(recipient)
+        await sendReceiptEmail(recipient)
         return
       }
 
@@ -3342,7 +3357,7 @@ function RegisterView({
             <div className="completion-actions">
               <button type="button" onClick={printReceipt}><ReceiptText size={16} /> Print / Save PDF</button>
               <button type="button" onClick={emailReceipt} disabled={isResolvingReceiptEmail}>
-                {isResolvingReceiptEmail ? 'Finding Email...' : 'Email Receipt'}
+                {isResolvingReceiptEmail ? 'Emailing…' : 'Email Receipt'}
               </button>
               <button type="button" onClick={newSale}>No Receipt</button>
               <button type="button" onClick={() => { onNavigate('transactions'); setCompletedTransaction(null) }}>View Transaction</button>
