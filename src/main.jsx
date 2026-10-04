@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Archive,
+  ArrowLeft,
   ArrowRight,
   BarChart3,
   Banknote,
@@ -1382,6 +1383,14 @@ function RegisterView({
     : customer
   const cashCoversRemaining = paymentMethod === 'cash' && cashAmount >= cashDue
   const splitCoversRemaining = appliedPayments.length > 0 && remaining <= 0
+  // Two-step register: build the cart, then a checkout screen for the
+  // customer, payment and summary (so nothing has to squeeze beside the cart).
+  const [checkoutOpen, setCheckoutOpen] = useState(false)
+  function openCheckout() {
+    setIsCustomerCollapsed(false)
+    setIsCurrentSaleCollapsed(false)
+    setCheckoutOpen(true)
+  }
   const canComplete = mode !== 'scan_intake' && isOpen && lines.length > 0 && !isSubmitting && hasRecordedGuestName && (
     mode === 'buy'
       ? customer && hasRecordedGuestName && !hasUnpricedTradeItems && (
@@ -2130,6 +2139,7 @@ function RegisterView({
   }
 
   function resetTransactionDraft() {
+    setCheckoutOpen(false)
     setLines([])
     setAppliedPayments([])
     setPaymentMethod('')
@@ -2433,6 +2443,7 @@ function RegisterView({
   }
 
   function newSale() {
+    setCheckoutOpen(false)
     setCompletedTransaction(null)
     setReceiptActionNotice('')
     setReceiptEmailDraft('')
@@ -2584,7 +2595,7 @@ function RegisterView({
         <RegisterMetric icon={Banknote} label="Cash Drawer" value={money.format(Number(registerMetrics?.registerBalance || 0))} gold />
       </section>
 
-      <div className="register-grid register-dashboard-grid">
+      <div className={`register-grid register-dashboard-grid ${mode !== 'scan_intake' && checkoutOpen ? 'checkout-stage' : 'cart-stage'}`}>
         <section className={`register-main-panel register-pos-panel${mode === 'scan_intake' ? ' scan-intake-mode' : ''}`}>
           <div className="mode-tabs" role="tablist" aria-label="Transaction mode">
             {[
@@ -2596,7 +2607,7 @@ function RegisterView({
                 className={mode === key ? 'active-lite' : ''}
                 type="button"
                 key={key}
-                onClick={() => setMode(key === 'customer_buy' ? 'sale' : key)}
+                onClick={() => { setCheckoutOpen(false); setMode(key === 'customer_buy' ? 'sale' : key) }}
               >
                 <Icon size={18} />
                 {label}
@@ -2867,177 +2878,222 @@ function RegisterView({
           </>
           )}
         </section>
-        <aside className="register-side-panel">
-              <section className="customer-card">
-                <div className="side-title">
-                  <User size={20} />
-                  <strong>Customer</strong>
-                  <button type="button" onClick={() => setIsCustomerCollapsed((current) => !current)}>{isCustomerCollapsed ? 'v' : '^'}</button>
-                </div>
-                {!isCustomerCollapsed && customer ? (
-                  <div className="attached-customer">
-                    <span className="customer-avatar">{initials(customer.name || customer.username || 'Guest')}</span>
-                    <span>
-                      <strong>{customer.name || customer.username || 'CollectorsHub Customer'}</strong>
-                      <span>{customer.guest ? 'Guest' : customer.kind === 'profile' ? 'Member' : 'Customer'}</span>
-                      <small>Store Credit <b>{money.format(Number(customer.storeCredit || 0))}</b></small>
-                      {!customer.guest ? <small>Purchase XP <b>+250 XP</b></small> : null}
-                    </span>
-                    {!customer.guest ? <button type="button">View Customer</button> : null}
-                    <button type="button" aria-label="Remove customer" onClick={() => { setCustomer(null); setGuestLegalName('') }}>x</button>
-                  </div>
-                ) : null}
-                {!isCustomerCollapsed && customer?.guest && mode === 'buy' ? (
-                  <label className="guest-legal-name">
-                    <span>Guest legal name</span>
-                    <input
-                      value={guestLegalName}
-                      onChange={(event) => setGuestLegalName(event.target.value)}
-                      placeholder="Required for store buy/trade-in"
-                    />
-                  </label>
-                ) : null}
-                {!isCustomerCollapsed && !customer ? (
-                  <>
-                    <div className="customer-actions">
-                      <button type="button" onClick={() => { setCustomer({ name: 'Guest', guest: true, storeCredit: 0 }); setGuestLegalName('') }}><User size={15} /> Guest</button>
-                      <button type="button"><Keyboard size={17} /> Scan Membership</button>
+        {mode !== 'scan_intake' && !checkoutOpen ? (
+          <section className="register-cart-bar" aria-label="Sale summary">
+            <button className="cart-customer-chip" type="button" onClick={openCheckout} title="Customer details are on the checkout screen">
+              <User size={16} />
+              <span>{customer ? (customer.name || customer.username || 'Customer') : 'No customer'}</span>
+              <small>{customer ? 'Change' : 'Add'}</small>
+            </button>
+            <span className="cart-bar-figures">
+              <span>{lineCount} item{lineCount === 1 ? '' : 's'}</span>
+              <span>Subtotal <b>{money.format(subtotal)}</b></span>
+              <span>{taxLabel} <b>{money.format(tax)}</b></span>
+            </span>
+            <strong className="cart-bar-total">{payoutDue > 0 ? `Payout ${money.format(payoutDue)}` : `Total ${money.format(amountDue)}`}</strong>
+            <button className="gold-button cart-checkout-button" type="button" onClick={openCheckout} disabled={!lines.length}>
+              Checkout <ArrowRight size={18} />
+            </button>
+          </section>
+        ) : null}
+        {mode !== 'scan_intake' && checkoutOpen ? (
+          <section className="register-checkout-screen">
+            <div className="checkout-head">
+              <button type="button" onClick={() => setCheckoutOpen(false)}><ArrowLeft size={16} /> Back to cart</button>
+              <h2>{mode === 'buy' ? 'Checkout · Buy / Trade-In' : 'Checkout · Sale'}</h2>
+            </div>
+            <div className="checkout-columns">
+                  <section className="customer-card">
+                    <div className="side-title">
+                      <User size={20} />
+                      <strong>Customer</strong>
+                      <button type="button" onClick={() => setIsCustomerCollapsed((current) => !current)}>{isCustomerCollapsed ? 'v' : '^'}</button>
                     </div>
-                    <div className="customer-search-popover">
-                      <label className="customer-search compact-customer-search">
-                        <Search size={16} />
-                        <input data-customer-search value={customerQuery} onChange={(event) => setCustomerQuery(event.target.value)} placeholder="Search customer" />
-                      </label>
-                      {customerQuery.trim() ? (
-                        <div className="customer-results-overlay">
-                          {customerMatches.length ? (
-                            <div className="customer-matches">
-                              {customerMatches.map((entry) => (
-                                <button type="button" key={entry.id || entry.email} onClick={() => { setCustomer(entry); setGuestLegalName('') }}>
-                                  <strong>{entry.name || entry.username || entry.email}</strong>
-                                  <small>{entry.username ? `@${entry.username}` : entry.email || entry.phone || 'Customer'}</small>
-                                </button>
-                              ))}
-                            </div>
-                          ) : null}
-                          {isSearchingProfiles ? <p className="customer-search-state">Searching CollectorsHub usernames...</p> : null}
-                          {!isSearchingProfiles && !customerMatches.length && !profileSearchError ? <p className="customer-search-state">No matching CollectorsHub username found.</p> : null}
-                          {profileSearchError ? <p className="customer-search-state error">{profileSearchError}</p> : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
-                ) : null}
-                {!isCustomerCollapsed && mode === 'buy' && !customer ? <p className="register-warning">Attach a customer before completing a trade-in.</p> : null}
-                {!isCustomerCollapsed && requiresRecordedGuestName && !hasRecordedGuestName ? <p className="register-warning">Record the guest's legal name before completing this buy.</p> : null}
-              </section>
-
-              <section className="totals-card">
-                <div className="side-title">
-                  <ShoppingCart size={20} />
-                  <strong>{mode === 'buy' ? 'Trade Summary' : 'Current Sale'}</strong>
-                  <span className="side-title-actions">
-                    <button className="order-discount-button" type="button" onClick={() => { setPendingOrderDiscount(orderDiscount); openModal('orderDiscount') }} title="Add transaction-wide discount">
-                      <Tag size={15} />
-                      <span>Discount</span>
-                    </button>
-                    <button type="button" onClick={() => setIsCurrentSaleCollapsed((current) => !current)} aria-label={isCurrentSaleCollapsed ? 'Expand current sale' : 'Collapse current sale'}>{isCurrentSaleCollapsed ? 'v' : '^'}</button>
-                  </span>
-                </div>
-                {!isCurrentSaleCollapsed ? (
-                  <>
-                    <TotalRow label="Customer purchases" value={grossItemSubtotal} />
-                    <TotalRow label="Trade-in credit" value={-tradeOfferTotal} muted />
-                    <TotalRow label="Discounts" value={-discounts} />
-                    <div className="totals-divider" aria-hidden="true" />
-                    <TotalRow label="Subtotal" value={subtotal} />
-                    <TotalRow label={taxLabel} value={tax} />
-                    <div className="grand-total">
-                      <span>Total</span>
-                      <strong>{money.format(payoutDue > 0 ? payoutDue : amountDue)}</strong>
-                    </div>
-                    {amountDue > 0 || payoutDue > 0 ? (
-                      <div className="current-payment-controls">
-                        <button className={paymentMethod === 'cash' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('cash')}><Banknote size={16} /> Cash</button>
-                        {payoutDue > 0 ? (
-                          <button className={paymentMethod === 'store_credit' ? 'active' : ''} type="button" disabled={!customer || customer.guest} onClick={() => setPaymentMethod('store_credit')}><Gift size={16} /> Store Credit</button>
-                        ) : (
-                          <>
-                            <button className={paymentMethod === 'card' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('card')}><CreditCard size={16} /> Card</button>
-                            <button className={paymentMethod === 'other' ? 'active' : ''} type="button" onClick={() => { setPaymentMethod('other'); openModal('otherPayment') }}><Gift size={16} /> Other</button>
-                          </>
-                        )}
-                        {paymentMethod === 'cash' && amountDue > 0 ? (
-                          <div className="cash-payment-summary">
-                            <span>Total Due <strong>{money.format(cashDue)}</strong></span>
-                            {cashRounding ? <small className="cash-rounding-note">Cash rounding: {cashRounding > 0 ? '+' : ''}{money.format(cashRounding)}</small> : null}
-                            <label>Cash Received<input value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
-                            <span className={cashAmount > 0 ? 'change-due active' : 'change-due'}>Change Due <strong>{money.format(changeDue)}</strong></span>
-                          </div>
-                        ) : null}
-                        {paymentMethod === 'cash' && payoutDue > 0 ? <div className="cash-payment-summary"><span>Cash payout <strong>{money.format(payoutDue)}</strong></span></div> : null}
-                        {appliedPayments.length ? (
-                          <div className="applied-payment-list">
-                            {appliedPayments.map((payment) => <span key={payment.id}>{payment.method.replace('_', ' ')} {money.format(payment.amount)}</span>)}
-                          </div>
-                        ) : null}
+                    {!isCustomerCollapsed && customer ? (
+                      <div className="attached-customer">
+                        <span className="customer-avatar">{initials(customer.name || customer.username || 'Guest')}</span>
+                        <span>
+                          <strong>{customer.name || customer.username || 'CollectorsHub Customer'}</strong>
+                          <span>{customer.guest ? 'Guest' : customer.kind === 'profile' ? 'Member' : 'Customer'}</span>
+                          <small>Store Credit <b>{money.format(Number(customer.storeCredit || 0))}</b></small>
+                          {!customer.guest ? <small>Purchase XP <b>+250 XP</b></small> : null}
+                        </span>
+                        {!customer.guest ? <button type="button">View Customer</button> : null}
+                        <button type="button" aria-label="Remove customer" onClick={() => { setCustomer(null); setGuestLegalName('') }}>x</button>
                       </div>
                     ) : null}
-                    <div className={`transaction-save-state ${transactionSaveState}`}>
-                      {transactionSaveState === 'saving' ? 'Saving transaction...' : transactionSaveState === 'failed' ? 'Save failed. Review before retrying.' : appliedPayments.length ? 'Payments saved locally' : 'Ready'}
-                    </div>
-                    <button className="pay-button" type="button" onClick={completeTransaction} disabled={!canComplete}>
-                      <ReceiptText size={20} />
-                      {mode === 'buy' ? (payoutDue > 0 ? `Complete Buy - ${money.format(payoutDue)}` : `Complete Settlement - ${money.format(amountDue)}`) : `Complete Checkout - ${money.format(amountDue)}`}
-                    </button>
-                    {disabledCheckoutReason ? <p className="checkout-disabled-reason">{disabledCheckoutReason}</p> : null}
-                  </>
-                ) : null}
-              </section>
-
-              <section className="payment-card compact-payment-card">
-                <div className="side-title"><strong>{payoutDue > 0 ? 'Payout Method' : 'Payment Method'}</strong></div>
-                <div className="payment-buttons">
-                  <button className={paymentMethod === 'cash' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('cash')}><Banknote size={16} /> Cash</button>
-                  {payoutDue <= 0 ? <button className={paymentMethod === 'card' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('card')}><CreditCard size={16} /> Card</button> : null}
-                  {payoutDue <= 0 ? <button className={paymentMethod === 'store_credit' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('store_credit')} disabled={!customer || customer.guest}>Store Credit</button> : null}
-                  {payoutDue <= 0 ? <button className={paymentMethod === 'gift_card' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('gift_card')}><Gift size={16} /> Gift Card</button> : null}
-                  {payoutDue <= 0 ? <button className={paymentMethod === 'split' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('split')}>Split</button> : null}
+                    {!isCustomerCollapsed && customer?.guest && mode === 'buy' ? (
+                      <label className="guest-legal-name">
+                        <span>Guest legal name</span>
+                        <input
+                          value={guestLegalName}
+                          onChange={(event) => setGuestLegalName(event.target.value)}
+                          placeholder="Required for store buy/trade-in"
+                        />
+                      </label>
+                    ) : null}
+                    {!isCustomerCollapsed && !customer ? (
+                      <>
+                        <div className="customer-actions">
+                          <button type="button" onClick={() => { setCustomer({ name: 'Guest', guest: true, storeCredit: 0 }); setGuestLegalName('') }}><User size={15} /> Guest</button>
+                          <button type="button"><Keyboard size={17} /> Scan Membership</button>
+                        </div>
+                        <div className="customer-search-popover">
+                          <label className="customer-search compact-customer-search">
+                            <Search size={16} />
+                            <input data-customer-search value={customerQuery} onChange={(event) => setCustomerQuery(event.target.value)} placeholder="Search customer" />
+                          </label>
+                          {customerQuery.trim() ? (
+                            <div className="customer-results-overlay">
+                              {customerMatches.length ? (
+                                <div className="customer-matches">
+                                  {customerMatches.map((entry) => (
+                                    <button type="button" key={entry.id || entry.email} onClick={() => { setCustomer(entry); setGuestLegalName('') }}>
+                                      <strong>{entry.name || entry.username || entry.email}</strong>
+                                      <small>{entry.username ? `@${entry.username}` : entry.email || entry.phone || 'Customer'}</small>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {isSearchingProfiles ? <p className="customer-search-state">Searching CollectorsHub usernames...</p> : null}
+                              {!isSearchingProfiles && !customerMatches.length && !profileSearchError ? <p className="customer-search-state">No matching CollectorsHub username found.</p> : null}
+                              {profileSearchError ? <p className="customer-search-state error">{profileSearchError}</p> : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      </>
+                    ) : null}
+                    {!isCustomerCollapsed && mode === 'buy' && !customer ? <p className="register-warning">Attach a customer before completing a trade-in.</p> : null}
+                    {!isCustomerCollapsed && requiresRecordedGuestName && !hasRecordedGuestName ? <p className="register-warning">Record the guest's legal name before completing this buy.</p> : null}
+                  </section>
+              <section className="checkout-lines">
+                <div className="side-title">
+                  <ReceiptText size={20} />
+                  <strong>{lineCount} item{lineCount === 1 ? '' : 's'}</strong>
+                  <span className="side-title-actions">
+                    <button type="button" onClick={() => openModal('saleNote')}>{saleNote ? 'Edit note' : 'Add note'}</button>
+                  </span>
                 </div>
-
-                {paymentMethod === 'cash' ? (
-                  <div className="cash-pad">
-                    <label>Amount tendered<input value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
-                    <div>
-                      {[cashDue, Math.ceil(cashDue / 5) * 5, Math.ceil(cashDue / 10) * 10, 50].filter((value, index, array) => value > 0 && array.indexOf(value) === index).map((value) => (
-                        <button type="button" key={value} onClick={() => setCashReceived(String(value.toFixed(2)))}>{value === cashDue ? 'Exact' : money.format(value)}</button>
-                      ))}
+                <div className="checkout-lines-list">
+                  {lines.map((line) => (
+                    <div className="checkout-line" key={line.localId}>
+                      <span>
+                        <strong>{line.name}</strong>
+                        <small>{[line.direction === 'incoming' ? 'Trade-in' : '', line.condition, line.sku ? `SKU ${line.sku}` : ''].filter(Boolean).join(' · ')}</small>
+                      </span>
+                      <span>{Number(line.quantity || 1)} × {money.format(Number(line.direction === 'incoming' ? line.storeOffer : line.unitPrice) || 0)}</span>
                     </div>
-                    <strong>Change Due {money.format(changeDue)}</strong>
-                  </div>
-                ) : null}
-
-                {paymentMethod === 'card' ? <p className="payment-state">Card terminal: Ready. The transaction completes after approval.</p> : null}
-                {paymentMethod === 'split' ? (
-                  <div className="split-payment-box">
-                    <span>Remaining: {money.format(remaining)}</span>
-                    <button type="button" onClick={() => applyPayment('cash', Number(cashReceived || 0))}>Apply Cash</button>
-                    <button type="button" onClick={() => applyPayment('card', remaining)}>Apply Card Balance</button>
-                  </div>
-                ) : null}
-                {appliedPayments.length ? (
-                  <div className="applied-payments">
-                    {appliedPayments.map((payment) => <span key={payment.id}>{payment.method.replace('_', ' ')} {money.format(payment.amount)}</span>)}
-                  </div>
-                ) : null}
-                <div className="amount-remaining">Amount Remaining: <strong>{money.format(remaining)}</strong></div>
-
-                <button className="pay-button" type="button" onClick={completeTransaction} disabled={!canComplete}>
-                  <LockKeyhole size={20} />
-                  {mode === 'buy' ? `Complete Buy - ${money.format(payoutDue)}` : `Pay ${money.format(amountDue)}`}
-                </button>
+                  ))}
+                </div>
+                {saleNote ? <p className="checkout-note">Note: {saleNote}</p> : null}
               </section>
-        </aside>
+                  <section className="totals-card">
+                    <div className="side-title">
+                      <ShoppingCart size={20} />
+                      <strong>{mode === 'buy' ? 'Trade Summary' : 'Current Sale'}</strong>
+                      <span className="side-title-actions">
+                        <button className="order-discount-button" type="button" onClick={() => { setPendingOrderDiscount(orderDiscount); openModal('orderDiscount') }} title="Add transaction-wide discount">
+                          <Tag size={15} />
+                          <span>Discount</span>
+                        </button>
+                        <button type="button" onClick={() => setIsCurrentSaleCollapsed((current) => !current)} aria-label={isCurrentSaleCollapsed ? 'Expand current sale' : 'Collapse current sale'}>{isCurrentSaleCollapsed ? 'v' : '^'}</button>
+                      </span>
+                    </div>
+                    {!isCurrentSaleCollapsed ? (
+                      <>
+                        <TotalRow label="Customer purchases" value={grossItemSubtotal} />
+                        <TotalRow label="Trade-in credit" value={-tradeOfferTotal} muted />
+                        <TotalRow label="Discounts" value={-discounts} />
+                        <div className="totals-divider" aria-hidden="true" />
+                        <TotalRow label="Subtotal" value={subtotal} />
+                        <TotalRow label={taxLabel} value={tax} />
+                        <div className="grand-total">
+                          <span>Total</span>
+                          <strong>{money.format(payoutDue > 0 ? payoutDue : amountDue)}</strong>
+                        </div>
+                        {amountDue > 0 || payoutDue > 0 ? (
+                          <div className="current-payment-controls">
+                            <button className={paymentMethod === 'cash' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('cash')}><Banknote size={16} /> Cash</button>
+                            {payoutDue > 0 ? (
+                              <button className={paymentMethod === 'store_credit' ? 'active' : ''} type="button" disabled={!customer || customer.guest} onClick={() => setPaymentMethod('store_credit')}><Gift size={16} /> Store Credit</button>
+                            ) : (
+                              <>
+                                <button className={paymentMethod === 'card' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('card')}><CreditCard size={16} /> Card</button>
+                                <button className={paymentMethod === 'other' ? 'active' : ''} type="button" onClick={() => { setPaymentMethod('other'); openModal('otherPayment') }}><Gift size={16} /> Other</button>
+                              </>
+                            )}
+                            {paymentMethod === 'cash' && amountDue > 0 ? (
+                              <div className="cash-payment-summary">
+                                <span>Total Due <strong>{money.format(cashDue)}</strong></span>
+                                {cashRounding ? <small className="cash-rounding-note">Cash rounding: {cashRounding > 0 ? '+' : ''}{money.format(cashRounding)}</small> : null}
+                                <label>Cash Received<input value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
+                                <span className={cashAmount > 0 ? 'change-due active' : 'change-due'}>Change Due <strong>{money.format(changeDue)}</strong></span>
+                              </div>
+                            ) : null}
+                            {paymentMethod === 'cash' && payoutDue > 0 ? <div className="cash-payment-summary"><span>Cash payout <strong>{money.format(payoutDue)}</strong></span></div> : null}
+                            {appliedPayments.length ? (
+                              <div className="applied-payment-list">
+                                {appliedPayments.map((payment) => <span key={payment.id}>{payment.method.replace('_', ' ')} {money.format(payment.amount)}</span>)}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <div className={`transaction-save-state ${transactionSaveState}`}>
+                          {transactionSaveState === 'saving' ? 'Saving transaction...' : transactionSaveState === 'failed' ? 'Save failed. Review before retrying.' : appliedPayments.length ? 'Payments saved locally' : 'Ready'}
+                        </div>
+                        <button className="pay-button" type="button" onClick={completeTransaction} disabled={!canComplete}>
+                          <ReceiptText size={20} />
+                          {mode === 'buy' ? (payoutDue > 0 ? `Complete Buy - ${money.format(payoutDue)}` : `Complete Settlement - ${money.format(amountDue)}`) : `Complete Checkout - ${money.format(amountDue)}`}
+                        </button>
+                        {disabledCheckoutReason ? <p className="checkout-disabled-reason">{disabledCheckoutReason}</p> : null}
+                      </>
+                    ) : null}
+                  </section>
+                  <section className="payment-card compact-payment-card">
+                    <div className="side-title"><strong>{payoutDue > 0 ? 'Payout Method' : 'Payment Method'}</strong></div>
+                    <div className="payment-buttons">
+                      <button className={paymentMethod === 'cash' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('cash')}><Banknote size={16} /> Cash</button>
+                      {payoutDue <= 0 ? <button className={paymentMethod === 'card' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('card')}><CreditCard size={16} /> Card</button> : null}
+                      {payoutDue <= 0 ? <button className={paymentMethod === 'store_credit' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('store_credit')} disabled={!customer || customer.guest}>Store Credit</button> : null}
+                      {payoutDue <= 0 ? <button className={paymentMethod === 'gift_card' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('gift_card')}><Gift size={16} /> Gift Card</button> : null}
+                      {payoutDue <= 0 ? <button className={paymentMethod === 'split' ? 'active' : ''} type="button" onClick={() => setPaymentMethod('split')}>Split</button> : null}
+                    </div>
+
+                    {paymentMethod === 'cash' ? (
+                      <div className="cash-pad">
+                        <label>Amount tendered<input value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
+                        <div>
+                          {[cashDue, Math.ceil(cashDue / 5) * 5, Math.ceil(cashDue / 10) * 10, 50].filter((value, index, array) => value > 0 && array.indexOf(value) === index).map((value) => (
+                            <button type="button" key={value} onClick={() => setCashReceived(String(value.toFixed(2)))}>{value === cashDue ? 'Exact' : money.format(value)}</button>
+                          ))}
+                        </div>
+                        <strong>Change Due {money.format(changeDue)}</strong>
+                      </div>
+                    ) : null}
+
+                    {paymentMethod === 'card' ? <p className="payment-state">Card terminal: Ready. The transaction completes after approval.</p> : null}
+                    {paymentMethod === 'split' ? (
+                      <div className="split-payment-box">
+                        <span>Remaining: {money.format(remaining)}</span>
+                        <button type="button" onClick={() => applyPayment('cash', Number(cashReceived || 0))}>Apply Cash</button>
+                        <button type="button" onClick={() => applyPayment('card', remaining)}>Apply Card Balance</button>
+                      </div>
+                    ) : null}
+                    {appliedPayments.length ? (
+                      <div className="applied-payments">
+                        {appliedPayments.map((payment) => <span key={payment.id}>{payment.method.replace('_', ' ')} {money.format(payment.amount)}</span>)}
+                      </div>
+                    ) : null}
+                    <div className="amount-remaining">Amount Remaining: <strong>{money.format(remaining)}</strong></div>
+
+                    <button className="pay-button" type="button" onClick={completeTransaction} disabled={!canComplete}>
+                      <LockKeyhole size={20} />
+                      {mode === 'buy' ? `Complete Buy - ${money.format(payoutDue)}` : `Pay ${money.format(amountDue)}`}
+                    </button>
+                  </section>
+            </div>
+          </section>
+        ) : null}
       </div>
 
       {activeModal ? (
