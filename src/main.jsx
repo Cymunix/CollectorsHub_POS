@@ -501,9 +501,12 @@ function App() {
         },
       ])
 
-    const nextScanSessions = draft.scanSessionId
+    // Scan intakes whose cards were bought in this transaction are complete
+    // (their counters start again at 0).
+    const completedSessionIds = new Set([draft.scanSessionId, ...(draft.items || []).map((item) => item.scanSessionId)].filter(Boolean))
+    const nextScanSessions = completedSessionIds.size
       ? (store.scanSessions || []).map((session) => (
-        session.id === draft.scanSessionId
+        completedSessionIds.has(session.id)
           ? { ...session, status: 'complete', linkedTransactionId: transaction.id, updatedAt: transaction.createdAt }
           : session
       ))
@@ -2332,6 +2335,8 @@ function RegisterView({
           discountPercent: Number(line.discount || 0),
           discountTotal: discountAmount(line),
           discountApprovedBy: line.discountApprovedBy || null,
+          // The scan intake the item came from (that intake completes with this transaction).
+          scanSessionId: line.scanSessionId || '',
           marketValue: Number(line.marketValue || 0),
           storeOffer: Number(line.storeOffer || 0),
           total: line.direction === 'incoming'
