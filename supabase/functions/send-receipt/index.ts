@@ -100,9 +100,13 @@ Deno.serve(async (request) => {
   // Linked by the login's id, or by its email (staff sign in with an internal
   // account email that the employee row records).
   const email = String(user.email || '').toLowerCase()
-  const linked = (row: Record<string, unknown>) => ['user_id', 'auth_user_id', 'auth_id', 'profile_id', 'account_id'].some((key) => row?.[key] && row[key] === user.id)
-    || (Boolean(email) && ['internal_email', 'email', 'auth_email', 'login_email'].some((key) => String(row?.[key] || '').toLowerCase() === email))
-  const allowed = store?.owner_user_id === user.id || (staff || []).some((row: Record<string, unknown>) => linked(row) && row.status !== 'inactive' && row.active !== false)
+  // store_employees links a login by employee_user_id / auth_user_id, or by
+  // internal_email (the account staff sign in with).
+  const linked = (row: Record<string, unknown>) => ['employee_user_id', 'auth_user_id'].some((key) => row?.[key] && row[key] === user.id)
+    || (Boolean(email) && ['internal_email', 'email'].some((key) => String(row?.[key] || '').toLowerCase() === email))
+  const active = (row: Record<string, unknown>) => !['inactive', 'disabled', 'suspended', 'terminated', 'removed', 'deleted', 'archived'].includes(String(row?.status || '').toLowerCase())
+  const allowed = store?.owner_user_id === user.id
+    || (staff || []).some((row: Record<string, unknown>) => row?.store_owner_id === user.id || (linked(row) && active(row)))
   if (!allowed) return reply(403, { error: 'Only staff of this store can email its receipts.' })
 
   const branding = receipt.receiptBranding || {}
