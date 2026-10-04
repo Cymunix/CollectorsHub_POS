@@ -43,7 +43,7 @@ import StoreScanIntake from './StoreScanIntake'
 import ConditionHint from './ConditionHint'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
-import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
+import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadDesktopCatalogueItem, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
 import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync'
 import { supabase } from './lib/supabaseClient'
 
@@ -3965,24 +3965,13 @@ function normaliseScanEvent(image, workflow) {
   }
 }
 
-function recognisedCardSearchTerms(result = {}) {
-  return [
-    result.id_number,
-    [result.subject, result.id_number].filter(Boolean).join(' '),
-    [result.subject, result.property].filter(Boolean).join(' '),
-    result.subject,
-    result.property,
-  ]
-    .map((value) => String(value || '').trim())
-    .filter((value, index, list) => value.length > 1 && list.indexOf(value) === index)
-}
-
 async function enrichRecognizedCatalogueItem(candidate, result = {}) {
   const itemId = candidate?.item?.item_id || ''
-  for (const term of recognisedCardSearchTerms(result)) {
-    const results = await searchDesktopTradeCatalogue(term)
-    const match = results.find((item) => item.catalogItemId === itemId || item.catalogueItemId === itemId)
-    if (match) return match
+  // Straight to the matched item (prices and sales by its id); searching the
+  // catalogue for it by text took several seconds a card.
+  if (itemId) {
+    const loaded = await loadDesktopCatalogueItem(itemId).catch(() => null)
+    if (loaded) return loaded
   }
 
   const item = candidate?.item

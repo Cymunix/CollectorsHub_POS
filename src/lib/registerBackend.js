@@ -17,11 +17,24 @@ function catalogueSearchValue(value) {
  * candidate does not need an existing store_inventory row because the item is
  * being offered by the customer for the first time.
  */
+const DESKTOP_CATALOGUE_SELECT = 'item_id, name, subject, description, card_number, lego_set_number, minifig_code, bricklink_id, catalog_code, upc, external_ids, release_year, category_id, market_price, retail_price, image_path, dynamic_fields'
+
+// One catalogue item as a register candidate, looked up by its id (the AI
+// match already knows it; a text search for it was slow).
+export async function loadDesktopCatalogueItem(itemId) {
+  if (!itemId) return null
+  let { data, error } = await supabase.from('items').select(DESKTOP_CATALOGUE_SELECT).eq('item_id', itemId).maybeSingle()
+  // Older databases may lack an optional identifier column: retry with the basics.
+  if (error) ({ data, error } = await supabase.from('items').select('item_id, name, subject, description, card_number, release_year, category_id, market_price, retail_price, image_path, dynamic_fields').eq('item_id', itemId).maybeSingle())
+  if (error) throw error
+  return data ? (await buildDesktopCatalogueCandidates([data]))[0] || null : null
+}
+
 export async function searchDesktopTradeCatalogue(query) {
   const term = catalogueSearchValue(query)
   if (term.length < 2) return []
 
-  const catalogueSelect = 'item_id, name, subject, description, card_number, lego_set_number, minifig_code, bricklink_id, catalog_code, upc, external_ids, release_year, category_id, market_price, retail_price, image_path, dynamic_fields'
+  const catalogueSelect = DESKTOP_CATALOGUE_SELECT
   const results = []
   const seen = new Set()
   const addRows = (rows) => {
@@ -70,7 +83,12 @@ export async function searchDesktopTradeCatalogue(query) {
     }
   }
 
-  const rows = results.slice(0, 15)
+  return buildDesktopCatalogueCandidates(results.slice(0, 15))
+}
+
+// Catalogue rows -> register candidates (category, photo, market value from
+// approved sales by condition).
+async function buildDesktopCatalogueCandidates(rows) {
   if (!rows.length) return []
 
   const categoryIds = [...new Set(rows.map((row) => row.category_id).filter(Boolean))]
