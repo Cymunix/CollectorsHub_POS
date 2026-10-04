@@ -8447,3 +8447,17 @@ button:disabled {
   font-weight: 900;
   padding: 7px 14px;
 }
+
+/* Checkout stays reachable: the sale summary scrolls when the payment
+   details (cash received, change, split payments) don't fit, and the
+   Complete Checkout button stays pinned at the bottom instead of being
+   cut off. */
+.register-side-panel .totals-card {
+  overflow-y: auto;
+}
+
+.register-side-panel .totals-card > .pay-button {
+  bottom: 10px;
+  position: sticky;
+  z-index: 2;
+}
