@@ -8670,3 +8670,29 @@ button:disabled {
     display: none;
   }
 }
+
+/* Register panel: the item list (or Scan Intake) takes the spare height,
+   whatever appears above it. As a fixed row grid, a notice or warning
+   shown above the list landed in the list's stretchy row and filled half
+   the screen. */
+.register-pos-panel,
+.register-pos-panel.scan-intake-mode {
+  display: flex;
+  flex-direction: column;
+}
+
+.register-pos-panel > * {
+  flex: 0 0 auto;
+}
+
+.register-pos-panel > .sale-items-panel,
+.register-pos-panel > .scan-intake-register-panel {
+  flex: 1 1 auto;
+  min-height: 220px;
+}
+
+.register-pos-panel > .register-notice,
+.register-pos-panel > .register-warning {
+  max-height: 96px;
+  overflow-y: auto;
+}
