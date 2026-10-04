@@ -1,4 +1,23 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webFrame } = require('electron')
+
+// The app is laid out for a maximized 1920x1080 screen. Smaller or larger windows are
+// scaled to fit (real page zoom, so full-height layouts still fit exactly):
+// e.g. a 1366x768 laptop ~80%, 2560x1440 ~125%. Updates as the window resizes.
+const DESIGN_WIDTH = 1920
+const DESIGN_HEIGHT = 1000 // a maximized 1080p window, after the title bar and taskbar
+function fitToWindow() {
+  const zoom = webFrame.getZoomFactor() || 1
+  // Window size in screen pixels (innerWidth is in zoomed CSS pixels).
+  const width = window.innerWidth * zoom
+  const height = window.innerHeight * zoom
+  if (!width || !height) return
+  const fit = Math.min(width / DESIGN_WIDTH, height / DESIGN_HEIGHT)
+  const next = Math.round(Math.min(1.25, Math.max(0.75, fit)) * 20) / 20
+  if (Math.abs(next - zoom) >= 0.01) webFrame.setZoomFactor(next)
+}
+let fitTimer = 0
+window.addEventListener('resize', () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitToWindow, 120) })
+window.addEventListener('DOMContentLoaded', fitToWindow)
 
 contextBridge.exposeInMainWorld('nordvikDesktop', {
   loadStore: () => ipcRenderer.invoke('store:load'),
