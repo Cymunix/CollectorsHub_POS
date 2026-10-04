@@ -3712,16 +3712,17 @@ function ReceiptAmount({ label, value, positive = false, total = false }) {
   return <div className={total ? 'receipt-amount total' : 'receipt-amount'}><span>{label}</span><strong className={positive ? 'positive' : ''}>{money.format(Number(value || 0))}</strong></div>
 }
 
+// While typing, the box keeps exactly what was typed ("0.", "0.5"), so cents
+// can be entered; the number is saved as you type and tidied on leaving.
 function MoneyInput({ value, onChange, zeroAsDash = false }) {
-  const [isEditing, setIsEditing] = useState(false)
+  const [draft, setDraft] = useState(null)
   const numericValue = Number(value || 0)
-  const displayValue = isEditing
-    ? String(value ?? 0)
+  const displayValue = draft !== null
+    ? draft
     : (zeroAsDash && numericValue === 0 ? '-' : money.format(numericValue))
-
-  function commit(nextValue) {
-    const numeric = Number(String(nextValue || '').replace(/[^0-9.-]/g, '')) || 0
-    onChange(numeric)
+  const toNumber = (text) => {
+    const numeric = Number(String(text || '').replace(/[^0-9.]/g, ''))
+    return Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : 0
   }
 
   return (
@@ -3729,13 +3730,19 @@ function MoneyInput({ value, onChange, zeroAsDash = false }) {
       className="money-input"
       inputMode="decimal"
       value={displayValue}
-      onBlur={(event) => {
-        commit(event.target.value)
-        setIsEditing(false)
+      onBlur={() => {
+        if (draft !== null) onChange(toNumber(draft))
+        setDraft(null)
       }}
-      onChange={(event) => onChange(Number(String(event.target.value || '').replace(/[^0-9.-]/g, '')) || 0)}
+      onChange={(event) => {
+        // Digits and one decimal point, at most two decimals.
+        const text = event.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1').replace(/(\.\d{2})\d+$/, '$1')
+        setDraft(text)
+        onChange(toNumber(text))
+      }}
+      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
       onFocus={(event) => {
-        setIsEditing(true)
+        setDraft(numericValue ? String(numericValue) : '')
         window.setTimeout(() => event.target.select(), 0)
       }}
     />
