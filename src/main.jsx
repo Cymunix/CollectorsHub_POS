@@ -1428,6 +1428,32 @@ function RegisterView({
     return () => window.clearTimeout(focusTimer)
   }, [isOpen, lines.length, mode])
 
+  // Enter moves the sale on: cart -> checkout, checkout -> complete. Not while
+  // typing in a field (except Cash received on checkout), not with a pop-up
+  // open, and not on the receipt screen (New sale stays a click, so a double
+  // press can't skip the receipt).
+  useEffect(() => {
+    const onEnter = (event) => {
+      if (event.key !== 'Enter' || event.defaultPrevented || event.repeat) return
+      if (mode === 'scan_intake' || activeModal || managerRequest || completedTransaction) return
+      const target = event.target
+      const tag = String(target?.tagName || '').toLowerCase()
+      const inCashBox = Boolean(target?.closest?.('[data-cash-received]'))
+      if (['input', 'textarea', 'select', 'button'].includes(tag) && !inCashBox) return
+      if (!checkoutOpen) {
+        if (!lines.length) return
+        event.preventDefault()
+        openCheckout()
+        return
+      }
+      if (!canComplete) return
+      event.preventDefault()
+      completeTransaction()
+    }
+    window.addEventListener('keydown', onEnter)
+    return () => window.removeEventListener('keydown', onEnter)
+  })
+
   useEffect(() => {
     const onKeyDown = (event) => {
       if (!isOpen) return
@@ -2093,7 +2119,11 @@ function RegisterView({
   function handleScannerSubmit(event) {
     event.preventDefault()
     const value = query.trim()
-    if (!value) return
+    // Enter on an empty scanner field: on to checkout.
+    if (!value) {
+      if (mode !== 'scan_intake' && lines.length && !checkoutOpen) openCheckout()
+      return
+    }
 
     const exact = inventory.find((item) => (
       [item.barcode, item.sku, item.number].some((field) => String(field || '').toLowerCase() === value.toLowerCase())
@@ -3026,7 +3056,7 @@ function RegisterView({
                               <div className="cash-payment-summary">
                                 <span>Total Due <strong>{money.format(cashDue)}</strong></span>
                                 {cashRounding ? <small className="cash-rounding-note">Cash rounding: {cashRounding > 0 ? '+' : ''}{money.format(cashRounding)}</small> : null}
-                                <label>Cash Received<input value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
+                                <label>Cash Received<input data-cash-received value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
                                 <span className={cashAmount > 0 ? 'change-due active' : 'change-due'}>Change Due <strong>{money.format(changeDue)}</strong></span>
                               </div>
                             ) : null}
@@ -3061,7 +3091,7 @@ function RegisterView({
 
                     {paymentMethod === 'cash' ? (
                       <div className="cash-pad">
-                        <label>Amount tendered<input value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
+                        <label>Amount tendered<input data-cash-received value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} inputMode="decimal" placeholder="0.00" /></label>
                         <div>
                           {[cashDue, Math.ceil(cashDue / 5) * 5, Math.ceil(cashDue / 10) * 10, 50].filter((value, index, array) => value > 0 && array.indexOf(value) === index).map((value) => (
                             <button type="button" key={value} onClick={() => setCashReceived(String(value.toFixed(2)))}>{value === cashDue ? 'Exact' : money.format(value)}</button>
