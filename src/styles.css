@@ -8461,3 +8461,22 @@ button:disabled {
   position: sticky;
   z-index: 2;
 }
+
+/* The Customer box keeps one height, so the Current Sale box below never
+   moves: an attached customer's details (or the guest name field) scroll
+   inside it instead of pushing the sale down. With no customer attached the
+   box stays unclipped so the search results can float over the page. */
+.register-side-panel {
+  grid-template-rows: 245px minmax(0, 1fr);
+}
+
+.register-side-panel .customer-card {
+  box-sizing: border-box;
+  height: 245px;
+  min-height: 0;
+}
+
+.register-side-panel .customer-card:has(.attached-customer),
+.register-side-panel .customer-card:has(.guest-legal-name) {
+  overflow-y: auto;
+}
