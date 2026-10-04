@@ -102,6 +102,11 @@ const generalRetailCategories = [
   'Other',
 ]
 
+// A scan intake still in progress (not completed, abandoned or set aside).
+function isOpenScanSession(session) {
+  return session?.status === 'active' || session?.status === 'paused'
+}
+
 function isCollectibleCategory(category) {
   const text = String(category || '').toLowerCase()
   return /card|lego|building|comic|coin|collectible|memorabilia|video game|game|toy|figure/.test(text)
@@ -1296,8 +1301,10 @@ function RegisterView({
   }, [inventory, lines])
   const hasRecommendationSeed = lines.some((line) => line.direction !== 'incoming')
   const shouldShowRecommendedBody = !isRecommendedCollapsed && (recommendedItems.length > 0 || (hasRecommendationSeed && lines.length > 0))
-  const activeScanSession = (scanSessions || []).find((session) => session.id === activeScanSessionId)
-    || (scanSessions || []).find((session) => session.status === 'active' || session.status === 'paused')
+  // Only an open intake (active or paused) is current; completed, abandoned
+  // and set-aside ones stay in history.
+  const activeScanSession = (scanSessions || []).find((session) => session.id === activeScanSessionId && isOpenScanSession(session))
+    || (scanSessions || []).find(isOpenScanSession)
     || null
   // Latest sessions for scans that add several cards in one go (FastFoto stacks).
   // Taken from state only when it changes, so a render in between doesn't
@@ -1569,8 +1576,8 @@ function RegisterView({
 
   async function addScanSessionItem(seed = {}) {
     const latest = scanSessionsRef.current || []
-    const session = latest.find((entry) => entry.id === activeScanSessionIdRef.current)
-      || latest.find((entry) => entry.status === 'active' || entry.status === 'paused')
+    const session = latest.find((entry) => entry.id === activeScanSessionIdRef.current && isOpenScanSession(entry))
+      || latest.find(isOpenScanSession)
       || await startScanIntakeSession()
     const now = new Date().toISOString()
     const candidate = seed.catalogueItem || null
@@ -2599,6 +2606,7 @@ function RegisterView({
               filters={['All', 'Needs Review', 'Unidentified', 'Ambiguous Match', 'Duplicate', 'Graded', 'Pricing Missing']}
               onAddManualMatch={addScanIntakeManualMatch}
               onAbandon={() => setScanSessionStatus('abandoned')}
+              onSetAside={() => setScanSessionStatus('set_aside')}
               onConvert={convertScanSessionToBuy}
               onPause={() => setScanSessionStatus('paused')}
               onRemoveItem={removeScanItem}
@@ -3267,6 +3275,7 @@ function ScanIntakePanel({
   onRemoveItem,
   onResume,
   onScan,
+  onSetAside,
   onStart,
   onUpdateItem,
   query,
@@ -3281,9 +3290,21 @@ function ScanIntakePanel({
   const acceptedCount = sessionItems.filter((item) => item.reviewState === 'accepted' && item.confidenceState !== 'low').length
   const isPaused = activeSession?.status === 'paused'
   const canScan = activeSession && activeSession.status !== 'abandoned' && activeSession.status !== 'complete'
+  // An intake left open from an earlier day: resume it or start fresh (it's
+  // set aside, not deleted).
+  const [resumedId, setResumedId] = useState('')
+  const startedDay = activeSession?.startedAt ? new Date(activeSession.startedAt).toDateString() : ''
+  const leftOpen = Boolean(activeSession && sessionItems.length && startedDay && startedDay !== new Date().toDateString() && resumedId !== activeSession.id)
 
   return (
-    <section className="scan-intake-register-panel">
+    <section className={`scan-intake-register-panel${leftOpen ? ' has-notice' : ''}`}>
+      {leftOpen ? (
+        <div className="scan-intake-left-open">
+          <span>Unfinished intake <strong>{activeSession.number}</strong> from {new Date(activeSession.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}: {stats.total} card{stats.total === 1 ? '' : 's'}.</span>
+          <button type="button" onClick={() => setResumedId(activeSession.id)}>Resume</button>
+          <button type="button" className="gold-button" onClick={onSetAside}>Start new</button>
+        </div>
+      ) : null}
       <div className="scan-intake-hero">
         <div>
           <p className="register-kicker">Scan Intake</p>

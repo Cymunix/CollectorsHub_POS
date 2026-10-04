@@ -8417,3 +8417,33 @@ button:disabled {
   display: inline-flex;
   gap: 5px;
 }
+
+/* Scan intake: an intake left open from an earlier day */
+.scan-intake-register-panel.has-notice {
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+}
+
+.scan-intake-left-open {
+  align-items: center;
+  background: #fff7e6;
+  border: 1px solid #f0c674;
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.scan-intake-left-open span {
+  color: #5c3b00;
+  flex: 1;
+  font-weight: 700;
+}
+
+.scan-intake-left-open button {
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 7px 14px;
+}
