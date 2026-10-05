@@ -41,7 +41,7 @@ import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
 import StoreScanIntake from './StoreScanIntake'
 import ConditionHint from './ConditionHint'
-import SalesHistoryPanel from './SalesHistoryPanel'
+import SalesHistoryList from './SalesHistoryPanel'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadDesktopCatalogueItem, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
@@ -4426,14 +4426,17 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
   }, [filtered])
   // A card with several copies opens its own screen listing each copy.
   const [openGroupKey, setOpenGroupKey] = useState('')
-  const openGroup = groupedRows.find((group) => group.key === openGroupKey && group.items.length > 1) || null
+  const openGroup = groupedRows.find((group) => group.key === openGroupKey) || null
+  // The item screen's tab: the copies in stock, or sales history.
+  const [itemTab, setItemTab] = useState('stock')
   const showGroup = (group) => {
     setOpenGroupKey(group.key)
+    setItemTab('stock')
     setSelectedId(group.items[0]?.id || '')
   }
 
   // One stock record's row (a copy, when nested under its card's group row).
-  const renderInventoryRow = (item, nested = false) => {
+  const renderInventoryRow = (item, nested = false, onOpen = null) => {
     const available = inventoryStock(item)
     const cost = Number(item.cost ?? item.buyPrice ?? 0)
     const inStorePrice = Number(item.inStorePrice || 0)
@@ -4446,7 +4449,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
         key={item.id}
         role="button"
         tabIndex={0}
-        onClick={() => selectInventoryRow(item)}
+        onClick={() => (onOpen ? onOpen() : selectInventoryRow(item))}
         onKeyDown={(event) => handleInventoryRowKey(event, item)}
       >
         <span className="inventory-row-main">
@@ -4731,7 +4734,12 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
               <button type="button" onClick={() => setOpenGroupKey('')}><ArrowLeft size={16} /> Back to inventory</button>
               <span>
                 <strong>{openGroup.items[0].name || openGroup.items[0].title}</strong>
-                <small>{openGroup.items.length} copies · {openGroup.items.reduce((sum, item) => sum + inventoryStock(item), 0)} available</small>
+                <small>{openGroup.items.length} {openGroup.items.length === 1 ? 'copy' : 'copies'} · {openGroup.items.reduce((sum, item) => sum + inventoryStock(item), 0)} available</small>
+              </span>
+              <span className="inventory-item-tabs" role="tablist" aria-label="Item views">
+                {[['stock', 'In stock'], ['store', 'Sales: this store'], ['all', 'Sales: all CollectorsHub']].map(([key, label]) => (
+                  <button key={key} type="button" role="tab" aria-selected={itemTab === key} className={itemTab === key ? 'active' : ''} onClick={() => setItemTab(key)}>{label}</button>
+                ))}
               </span>
             </div>
           ) : (
@@ -4740,6 +4748,11 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
               <small>{search.trim() ? `Search: ${search.trim()}` : 'Local inventory view'}</small>
             </div>
           )}
+          {openGroup && itemTab !== 'stock' ? (
+            <div className="inventory-item-sales">
+              <SalesHistoryList storeId={storeId} catalogItemId={openGroup.items[0].catalogItemId || openGroup.items[0].catalogueItemId || ''} scope={itemTab} />
+            </div>
+          ) : (
           <div className="inventory-table">
             <div className="inventory-table-row inventory-table-header">
               <span>Item</span>
@@ -4753,7 +4766,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
             </div>
             {!filtered.length ? <EmptyState text="No inventory matches the current filters." /> : null}
             {openGroup ? openGroup.items.map((item) => renderInventoryRow(item, true)) : groupedRows.map((group) => {
-              if (group.items.length === 1) return renderInventoryRow(group.items[0])
+              if (group.items.length === 1) return renderInventoryRow(group.items[0], false, () => showGroup(group))
               const first = group.items[0]
               const range = (values) => {
                 const nums = values.filter((value) => value > 0)
@@ -4824,6 +4837,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
               )
             })}
           </div>
+          )}
         </section>
 
         <aside className="inventory-detail-panel panel">
@@ -4869,7 +4883,6 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
                   List Online
                 </button>
               </div>
-              <SalesHistoryPanel storeId={storeId} catalogItemId={selected.catalogItemId || selected.catalogueItemId || ''} name={selected.name || selected.title} />
               <div className="inventory-detail-scroll">
                 <div className="inventory-detail-metrics">
                   <InventorySummary label="Available" value={String(inventoryStock(selected))} />
