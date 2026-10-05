@@ -41,6 +41,7 @@ import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
 import StoreScanIntake from './StoreScanIntake'
 import ConditionHint from './ConditionHint'
+import SalesHistoryPanel from './SalesHistoryPanel'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadDesktopCatalogueItem, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
@@ -965,6 +966,7 @@ function App() {
 
         {activeView === 'inventory' ? (
           <InventoryView
+            storeId={authSession?.storeId || ''}
             inventory={store.inventory}
             isSyncing={isSyncing}
             onNavigate={requestNavigate}
@@ -4292,7 +4294,7 @@ function conditionOptions(mode, category) {
   return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged', 'New/Sealed', 'Used/Complete']
 }
 
-function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow, onCreateItem, onUpdateItem, favorites = {}, favoriteAlerts = [], onToggleFavorite, onChangeFavoriteThreshold, search, setSearch, syncStatus }) {
+function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellItem, onSyncNow, onCreateItem, onUpdateItem, favorites = {}, favoriteAlerts = [], onToggleFavorite, onChangeFavoriteThreshold, search, setSearch, syncStatus }) {
   // Favourite cards (the store's must-stock list): kept on screen at 0.
   const favoriteOf = (item) => {
     const id = item?.catalogItemId || item?.catalogueItemId || ''
@@ -4867,6 +4869,7 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
                   List Online
                 </button>
               </div>
+              <SalesHistoryPanel storeId={storeId} catalogItemId={selected.catalogItemId || selected.catalogueItemId || ''} name={selected.name || selected.title} />
               <div className="inventory-detail-scroll">
                 <div className="inventory-detail-metrics">
                   <InventorySummary label="Available" value={String(inventoryStock(selected))} />

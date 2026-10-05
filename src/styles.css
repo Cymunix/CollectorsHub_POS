@@ -8864,3 +8864,107 @@ button:disabled {
   font-weight: 900;
   padding: 4px 10px;
 }
+
+/* Inventory: sales history for the selected card */
+.sales-history {
+  border-top: 1px solid #e1e8f1;
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.sales-history-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.sales-history-tabs {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.sales-history-tabs button {
+  background: #fff;
+  border: 1px solid #d5dfeb;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+}
+
+.sales-history-tabs button.active {
+  background: #1f2a3a;
+  border-color: #1f2a3a;
+  color: #fff;
+}
+
+.sales-history-summary {
+  color: #5b6677;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 12px;
+}
+
+.sales-history-summary b {
+  color: #17253d;
+}
+
+.sales-history-table {
+  display: grid;
+  font-size: 13px;
+}
+
+.sales-history-row {
+  border-bottom: 1px solid #edf1f6;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1.1fr 1.2fr 0.4fr 0.8fr 1.1fr;
+  padding: 6px 0;
+}
+
+.sales-history-header {
+  color: #667896;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.sales-history-empty {
+  color: #667896;
+  font-size: 13px;
+  margin: 0;
+}
+
+.sales-history-more {
+  background: none;
+  border: 0;
+  color: #2457a6;
+  cursor: pointer;
+  font-weight: 800;
+  justify-self: start;
+  padding: 0;
+}
+
+.sales-history-modal section {
+  max-height: 85vh;
+  max-width: 760px;
+  overflow: auto;
+  width: 100%;
+}
+
+.sales-history-modal-head {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.sales-history-modal-head span {
+  display: grid;
+  gap: 4px;
+}
