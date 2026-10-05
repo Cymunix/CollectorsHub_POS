@@ -9087,3 +9087,19 @@ button:disabled {
 .new-store-item-form .new-store-item-error {
   color: #b3261e;
 }
+
+/* Buttons for features that aren't built yet: greyed out, not clickable. */
+button.not-ready,
+button.not-ready:hover,
+button.not-ready:disabled {
+  background-image: linear-gradient(rgba(120, 130, 145, 0.28), rgba(120, 130, 145, 0.28)) !important;
+  box-shadow: none !important;
+  color: #8a94a3 !important;
+  cursor: not-allowed !important;
+  filter: grayscale(1);
+  opacity: 0.6 !important;
+}
+
+.inventory-label-preview .inventory-workflow-actions {
+  margin-top: 8px;
+}

@@ -10,6 +10,7 @@ import {
   Building2,
   CircleDollarSign,
   CreditCard,
+  Eye,
   EyeOff,
   Gift,
   History,
@@ -49,6 +50,7 @@ import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeD
 import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync'
 import { favoriteStockAlerts, loadStoreFavorites, setFavoriteThreshold, setStoreFavorite } from './lib/storeFavorites'
 import { createStoreItem, saveStoreItemChanges } from './lib/storeScan'
+import { printItemLabel } from './lib/printLabel'
 import { supabase } from './lib/supabaseClient'
 
 const emptyStore = {
@@ -427,16 +429,23 @@ function App() {
   async function updateInventoryItem(itemId, patch) {
     const current = (store.inventory || []).find((item) => item.id === itemId)
     const saved = current ? await saveStoreItemChanges({ session: authSession, item: current, patch }) : false
+    const { stockDelta, ...localPatch } = patch
+    // After a stock change, show the count Supabase now holds.
+    if (saved && saved.onHand != null) {
+      const available = Math.max(0, saved.onHand - Number(current?.reserved || 0))
+      Object.assign(localPatch, { onHand: saved.onHand, quantity: available, available, quantityAvailable: available })
+    }
     const nextSync = {
       ...syncStatus,
       pendingLocalChanges: Number(syncStatus?.pendingLocalChanges || 0) + (saved ? 0 : 1),
     }
     const nextInventory = (store.inventory || []).map((item) => (
       item.id === itemId
-        ? { ...item, ...patch, syncedAt: patch.syncedAt || new Date().toISOString() }
+        ? { ...item, ...localPatch, syncedAt: localPatch.syncedAt || new Date().toISOString() }
         : item
     ))
     await persist({ ...store, inventory: nextInventory, sync: nextSync })
+    return localPatch
   }
 
   // Add Item: a store's own item (a drink, a snack…) saved to the store's
@@ -864,9 +873,9 @@ function App() {
           <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
           {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan to Inventory" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
-          <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} />
+          <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} notReady />
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
-          <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} />
+          <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} notReady />
           <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => requestNavigate('settings')} />
         </nav>
 
@@ -1004,6 +1013,7 @@ function App() {
 
 function LoginScreen({ appVersion, draft, error, isAuthenticating, mode, onChange, onClearError, onModeChange, onSubmit }) {
   const isAdminMode = mode === 'admin'
+  const [showPassword, setShowPassword] = useState(false)
 
   function handleExit() {
     desktopApi().exitApp()
@@ -1061,13 +1071,13 @@ function LoginScreen({ appVersion, draft, error, isAuthenticating, mode, onChang
               <LockKeyhole size={21} aria-hidden="true" />
               <input
                 autoComplete="current-password"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={draft.password}
                 onChange={(event) => onChange({ ...draft, password: event.target.value })}
                 placeholder="••••••••"
               />
-              <button className="password-visibility" type="button" aria-label="Show password">
-                <EyeOff size={21} />
+              <button className="password-visibility" type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword((current) => !current)}>
+                {showPassword ? <Eye size={21} /> : <EyeOff size={21} />}
               </button>
             </span>
           </label>
@@ -1083,7 +1093,7 @@ function LoginScreen({ appVersion, draft, error, isAuthenticating, mode, onChang
             <ArrowRight size={24} />
           </button>
 
-          <button className="forgot-password" type="button">Forgot password?</button>
+          <button className="forgot-password not-ready" type="button" disabled title="Coming soon. Ask the store owner to reset it for now">Forgot password?</button>
 
           <div className="login-version" aria-label="Application version">
             <span />
@@ -1116,9 +1126,15 @@ function describeAuthSession(session) {
   return `${session.storeName || 'Store'}: ${session.username || session.role || 'Employee'}`
 }
 
-function NavButton({ icon: Icon, label, active, onClick, badge = null, badgeTitle = '' }) {
+function NavButton({ icon: Icon, label, active, onClick, badge = null, badgeTitle = '', notReady = false }) {
   return (
-    <button className={active ? 'nav-button active' : 'nav-button'} type="button" onClick={onClick}>
+    <button
+      className={`nav-button${active ? ' active' : ''}${notReady ? ' not-ready' : ''}`}
+      type="button"
+      onClick={onClick}
+      disabled={notReady}
+      title={notReady ? 'Coming soon' : undefined}
+    >
       <Icon size={18} />
       <span>{label}</span>
       {badge ? <b className="nav-badge" title={badgeTitle}>{badge}</b> : null}
@@ -2675,7 +2691,7 @@ function RegisterView({
               <div className="register-actions-popover">
                 <button type="button" onClick={holdSale}>Hold Sale</button>
                 <button type="button" onClick={() => openModal('heldSales')}>Held Sales {heldSales.length ? `(${heldSales.length})` : ''}</button>
-                <button type="button" onClick={() => setNotice('Cash drawer opened locally.')}>Open Cash Drawer</button>
+                <button type="button" disabled className="not-ready" title="Coming soon">Open Cash Drawer</button>
                 <button type="button" onClick={() => { setCashAdjustment({ type: 'in', amount: '', reason: '' }); openModal('cashAdjustment') }}>Cash In</button>
                 <button type="button" onClick={() => { setCashAdjustment({ type: 'out', amount: '', reason: '' }); openModal('cashAdjustment') }}>Cash Out / Paid Out</button>
                 <button type="button" onClick={() => openModal('refund')}>Refund</button>
@@ -3022,7 +3038,7 @@ function RegisterView({
                           <small>Store Credit <b>{money.format(Number(customer.storeCredit || 0))}</b></small>
                           {!customer.guest ? <small>Purchase XP <b>+250 XP</b></small> : null}
                         </span>
-                        {!customer.guest ? <button type="button">View Customer</button> : null}
+                        {!customer.guest ? <button type="button" disabled className="not-ready" title="Coming soon">View Customer</button> : null}
                         <button type="button" aria-label="Remove customer" onClick={() => { setCustomer(null); setGuestLegalName('') }}>x</button>
                       </div>
                     ) : null}
@@ -3040,7 +3056,7 @@ function RegisterView({
                       <>
                         <div className="customer-actions">
                           <button type="button" onClick={() => { setCustomer({ name: 'Guest', guest: true, storeCredit: 0 }); setGuestLegalName('') }}><User size={15} /> Guest</button>
-                          <button type="button"><Keyboard size={17} /> Scan Membership</button>
+                          <button type="button" disabled className="not-ready" title="Coming soon"><Keyboard size={17} /> Scan Membership</button>
                         </div>
                         <div className="customer-search-popover">
                           <label className="customer-search compact-customer-search">
@@ -4502,23 +4518,26 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
   const lastSynced = formatSyncTime(syncStatus?.lastSyncAt)
 
   // Shown straight away, saved to Supabase, and undone (with the reason) if
-  // the save fails. Returns whether it saved.
+  // the save fails. Returns what was saved (with the real stock count after
+  // a stock change), or false.
   async function updateInventoryItem(itemId, patch) {
     const nextPatch = {
       ...patch,
       syncedAt: patch.syncedAt || new Date().toISOString(),
     }
+    const { stockDelta, ...shown } = nextPatch
     const before = itemOverrides[itemId]
     setItemOverrides((current) => ({
       ...current,
       [itemId]: {
         ...(current[itemId] || {}),
-        ...nextPatch,
+        ...shown,
       },
     }))
     try {
-      await onUpdateItem?.(itemId, nextPatch)
-      return true
+      const saved = (await onUpdateItem?.(itemId, nextPatch)) || shown
+      setItemOverrides((current) => ({ ...current, [itemId]: { ...(current[itemId] || {}), ...saved } }))
+      return saved
     } catch (error) {
       setItemOverrides((current) => ({ ...current, [itemId]: before }))
       setInventoryNotice(`Couldn't save the change: ${error?.message || error}`)
@@ -4607,13 +4626,18 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
 
   async function adjustStock(item = selected, delta = 1) {
     if (!item) return
-    const nextQuantity = Math.max(0, inventoryStock(item) + delta)
+    // Never below 0: "-All" (or a big minus) takes what's available.
+    const change = Math.max(delta, -inventoryStock(item))
+    if (!change) return
+    const nextQuantity = inventoryStock(item) + change
     const saved = await updateInventoryItem(item.id, {
+      stockDelta: change,
       available: nextQuantity,
       quantity: nextQuantity,
-      onHand: Math.max(0, Number(item.onHand ?? inventoryStock(item)) + delta),
+      quantityAvailable: nextQuantity,
+      onHand: Math.max(0, Number(item.onHand ?? inventoryStock(item)) + change),
     })
-    if (saved) setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} stock adjusted to ${nextQuantity}.`)
+    if (saved) setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} stock is now ${inventoryStock(saved)}.`)
   }
 
   function handleInventoryRowKey(event, item) {
@@ -5112,7 +5136,8 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
         <div className="inventory-workflow-stack">
           <p>{inventoryStock(item)} available · {Number(item.reserved || 0)} reserved</p>
           <div className="inventory-workflow-actions">
-            <button type="button" onClick={() => onAdjustStock(item, -1)}>-1</button>
+            <button type="button" disabled={inventoryStock(item) <= 0} onClick={() => onAdjustStock(item, -inventoryStock(item))}>-All</button>
+            <button type="button" disabled={inventoryStock(item) <= 0} onClick={() => onAdjustStock(item, -1)}>-1</button>
             <button type="button" onClick={() => onAdjustStock(item, 1)}>+1</button>
             <button type="button" onClick={() => onAdjustStock(item, 5)}>+5</button>
           </div>
@@ -5136,6 +5161,20 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
           <strong>{itemName}</strong>
           <span>{item.sku || item.barcode || 'No SKU'}</span>
           <b>{Number(item.inStorePrice || 0) > 0 ? money.format(Number(item.inStorePrice)) : 'Price pending'}</b>
+          <div className="inventory-workflow-actions">
+            <button
+              className="gold-button"
+              type="button"
+              onClick={() => printItemLabel({
+                name: itemName,
+                price: Number(item.inStorePrice || 0) > 0 ? money.format(Number(item.inStorePrice)) : '',
+                code: item.barcode || item.sku || '',
+                detail: [item.number, item.condition].filter(Boolean).join(' · '),
+              })}
+            >
+              Print
+            </button>
+          </div>
         </div>
       ) : null}
     </section>

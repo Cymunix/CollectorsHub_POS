@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient'
+import { resolvePrimaryLocation } from './sync'
 
 // Store scan intake: scanned cards that matched a catalogue item are added to
 // the signed-in store's stock exactly the way the website adds stock - a
@@ -125,18 +126,27 @@ export async function saveStoreItemChanges({ session, item, patch }) {
     const { error } = await supabase.from('store_inventory').update(update).eq('id', id).eq('store_id', session.storeId)
     if (error) throw error
   }
-  if ('onHand' in patch && session.locationId) {
-    const delta = Math.round(Number(patch.onHand) - Number(item.onHand ?? item.quantity ?? 0))
+  // A stock change: the +/- amount (stockDelta), or a new on-hand count. The
+  // movement goes to the location the stock is held at, and the count it
+  // returns (the real one in Supabase) is passed back for the screen.
+  const result = { saved: true, onHand: null }
+  if ('stockDelta' in patch || 'onHand' in patch) {
+    const delta = 'stockDelta' in patch
+      ? Math.round(Number(patch.stockDelta) || 0)
+      : Math.round(Number(patch.onHand) - Number(item.onHand ?? item.quantity ?? 0))
     if (delta) {
-      const { error } = await supabase.rpc('apply_inventory_movement', {
+      const locationId = item.locationId || await resolvePrimaryLocation(session.storeId, session.locationId)
+      if (!locationId) throw new Error('This store has no location to hold stock.')
+      const { data, error } = await supabase.rpc('apply_inventory_movement', {
         p_inventory_id: id,
-        p_location_id: session.locationId,
+        p_location_id: locationId,
         p_quantity_change: delta,
         p_movement_type: 'adjustment',
         p_reason: 'inventory screen adjustment',
       })
       if (error) throw error
+      if (data != null && Number.isFinite(Number(data))) result.onHand = Number(data)
     }
   }
-  return true
+  return result
 }

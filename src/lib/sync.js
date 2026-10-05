@@ -12,7 +12,7 @@ function uniq(values) {
   return [...new Set((values || []).filter(Boolean))]
 }
 
-async function resolvePrimaryLocation(storeId, preferredLocationId) {
+export async function resolvePrimaryLocation(storeId, preferredLocationId) {
   if (preferredLocationId) return preferredLocationId
   if (!storeId) return null
 
