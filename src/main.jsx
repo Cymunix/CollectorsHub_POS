@@ -48,6 +48,7 @@ import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadDesktopCatalogueItem, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
 import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync'
 import { favoriteStockAlerts, loadStoreFavorites, setFavoriteThreshold, setStoreFavorite } from './lib/storeFavorites'
+import { createStoreItem, saveStoreItemChanges } from './lib/storeScan'
 import { supabase } from './lib/supabaseClient'
 
 const emptyStore = {
@@ -421,10 +422,14 @@ function App() {
     setCart((currentCart) => currentCart.filter((item) => item.id !== itemId))
   }
 
+  // Inventory edits and stock adjustments are saved to the store's stock in
+  // Supabase first (they used to stay on this PC and be lost at the next sync).
   async function updateInventoryItem(itemId, patch) {
+    const current = (store.inventory || []).find((item) => item.id === itemId)
+    const saved = current ? await saveStoreItemChanges({ session: authSession, item: current, patch }) : false
     const nextSync = {
       ...syncStatus,
-      pendingLocalChanges: Number(syncStatus?.pendingLocalChanges || 0) + 1,
+      pendingLocalChanges: Number(syncStatus?.pendingLocalChanges || 0) + (saved ? 0 : 1),
     }
     const nextInventory = (store.inventory || []).map((item) => (
       item.id === itemId
@@ -434,45 +439,20 @@ function App() {
     await persist({ ...store, inventory: nextInventory, sync: nextSync })
   }
 
+  // Add Item: a store's own item (a drink, a snack…) saved to the store's
+  // stock in Supabase (not only this PC), then the inventory is synced.
   async function createInventoryItem(draft) {
-    const now = new Date().toISOString()
-    const quantity = Math.max(0, Number(draft.quantityAvailable ?? draft.quantity ?? draft.available ?? 0))
-    const item = {
-      id: createId('inventory'),
-      inventoryId: '',
-      catalogItemId: '',
-      name: String(draft.name || draft.title || 'New item').trim(),
-      title: String(draft.name || draft.title || 'New item').trim(),
-      sku: String(draft.sku || '').trim(),
-      barcode: String(draft.barcode || '').trim(),
-      category: String(draft.category || 'General Merchandise').trim(),
-      itemType: String(draft.itemType || 'general').trim(),
-      condition: String(draft.condition || 'New').trim(),
-      cost: Number(draft.cost || 0),
-      buyPrice: Number(draft.cost || 0),
-      inStorePrice: Number(draft.inStorePrice || 0),
-      onlinePrice: Number(draft.onlinePrice || draft.inStorePrice || 0),
-      price: Number(draft.inStorePrice || 0),
-      quantity,
-      quantityAvailable: quantity,
-      available: quantity,
-      onHand: quantity,
-      reserved: 0,
-      hasExplicitPrice: Number(draft.inStorePrice || draft.onlinePrice || 0) > 0,
-      hasOnlineDraft: false,
-      listedForSale: false,
-      listingApproved: false,
-      isTradeIn: false,
-      isGeneralRetail: !isCollectibleCategory(draft.category),
-      syncedAt: now,
-      createdAt: now,
-    }
-    const nextSync = {
-      ...syncStatus,
-      pendingLocalChanges: Number(syncStatus?.pendingLocalChanges || 0) + 1,
-    }
-    await persist({ ...store, inventory: [...(store.inventory || []), item], sync: nextSync })
-    return item
+    await createStoreItem({
+      session: authSession,
+      name: draft.name || draft.title,
+      sku: draft.sku,
+      barcode: draft.barcode,
+      cost: draft.cost,
+      price: draft.inStorePrice,
+      quantity: draft.quantityAvailable ?? draft.quantity ?? draft.available ?? 0,
+      condition: draft.condition || 'New',
+    })
+    await handleSyncNow()
   }
 
   function requestNavigate(nextView) {
@@ -4518,29 +4498,17 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
     )
   }
 
-  const workflowItem = activeWorkflow === 'create'
-    ? {
-        id: 'new',
-        name: '',
-        sku: '',
-        barcode: '',
-        category: 'General Merchandise',
-        itemType: 'general',
-        condition: 'New',
-        quantityAvailable: 1,
-        cost: 0,
-        inStorePrice: 0,
-        onlinePrice: 0,
-      }
-    : selected
   const pendingChanges = Number(syncStatus?.pendingLocalChanges || 0)
   const lastSynced = formatSyncTime(syncStatus?.lastSyncAt)
 
-  function updateInventoryItem(itemId, patch) {
+  // Shown straight away, saved to Supabase, and undone (with the reason) if
+  // the save fails. Returns whether it saved.
+  async function updateInventoryItem(itemId, patch) {
     const nextPatch = {
       ...patch,
       syncedAt: patch.syncedAt || new Date().toISOString(),
     }
+    const before = itemOverrides[itemId]
     setItemOverrides((current) => ({
       ...current,
       [itemId]: {
@@ -4548,7 +4516,14 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
         ...nextPatch,
       },
     }))
-    onUpdateItem?.(itemId, nextPatch)
+    try {
+      await onUpdateItem?.(itemId, nextPatch)
+      return true
+    } catch (error) {
+      setItemOverrides((current) => ({ ...current, [itemId]: before }))
+      setInventoryNotice(`Couldn't save the change: ${error?.message || error}`)
+      return false
+    }
   }
 
   function showInventoryNotice(message) {
@@ -4564,13 +4539,16 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
   }
 
   async function createInventoryItem(patch) {
-    const created = await onCreateItem?.(patch)
-    if (created?.id) {
-      setSelectedId(created.id)
-      setStockFilter('all')
-      setCategoryFilter('all')
+    try {
+      await onCreateItem?.(patch)
+    } catch (error) {
+      setInventoryNotice(`Couldn't add ${patch.name || 'the item'}: ${error?.message || error}`)
+      return
     }
-    setInventoryNotice(`${patch.name || 'Item'} was added to inventory.`)
+    setStockFilter('all')
+    setCategoryFilter('all')
+    setSearch(patch.name || '')
+    setInventoryNotice(`${patch.name || 'Item'} was added to the store's stock.`)
     setActiveWorkflow('')
   }
 
@@ -4627,15 +4605,15 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
     setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} was priced at ${money.format(price)} and is waiting for listing approval.`)
   }
 
-  function adjustStock(item = selected, delta = 1) {
+  async function adjustStock(item = selected, delta = 1) {
     if (!item) return
     const nextQuantity = Math.max(0, inventoryStock(item) + delta)
-    updateInventoryItem(item.id, {
+    const saved = await updateInventoryItem(item.id, {
       available: nextQuantity,
       quantity: nextQuantity,
       onHand: Math.max(0, Number(item.onHand ?? inventoryStock(item)) + delta),
     })
-    setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} stock adjusted to ${nextQuantity}.`)
+    if (saved) setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} stock adjusted to ${nextQuantity}.`)
   }
 
   function handleInventoryRowKey(event, item) {
@@ -4673,6 +4651,9 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
         <InventorySummary label="Unpriced" value={String(stats.unpriced)} tone={stats.unpriced ? 'warn' : ''} />
       </section>
 
+      {activeWorkflow === 'create' ? (
+        <NewStoreItemDialog notice={inventoryNotice} onCancel={() => setActiveWorkflow('')} onCreate={createInventoryItem} />
+      ) : null}
       {favoriteAlerts.length ? (
         <button className="favorite-alert-bar" type="button" onClick={() => { setStockFilter('favourites'); setOpenGroupKey('') }}>
           <b>★</b>
@@ -4894,15 +4875,15 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
                 </div>
                 <InventoryWorkflowPanel
                   item={selected}
-                  mode={activeWorkflow}
+                  mode={activeWorkflow === 'create' ? '' : activeWorkflow}
                   onAdjustStock={adjustStock}
                   onApplyDefaultMarkup={applyDefaultMarkup}
                   onApproveListing={approveListing}
                   onClose={() => setActiveWorkflow('')}
-                  onSaveItem={(patch) => {
-                    updateInventoryItem(selected.id, patch)
-                    setInventoryNotice(`${selected.name || selected.title || selected.sku || 'Item'} was updated locally.`)
+                  onSaveItem={async (patch) => {
+                    const item = selected
                     setActiveWorkflow('')
+                    if (await updateInventoryItem(item.id, patch)) setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} was saved.`)
                   }}
                 />
                 <div className="inventory-field-list">
@@ -4964,6 +4945,74 @@ function InventoryField({ label, value }) {
   )
 }
 
+// A store's own (non-catalogue) item: drinks, snacks, supplies, anything
+// sold over the counter. Saved straight to the store's stock in Supabase.
+function NewStoreItemDialog({ notice, onCancel, onCreate }) {
+  const [draft, setDraft] = useState({ name: '', barcode: '', sku: '', cost: '', price: '', quantity: '1' })
+  const [saving, setSaving] = useState(false)
+  const set = (key) => (event) => setDraft((current) => ({ ...current, [key]: event.target.value }))
+  const ready = draft.name.trim() && !saving
+
+  async function submit(event) {
+    event.preventDefault()
+    if (!ready) return
+    setSaving(true)
+    try {
+      await onCreate({
+        name: draft.name.trim(),
+        barcode: draft.barcode.trim(),
+        sku: draft.sku.trim(),
+        cost: Number(draft.cost || 0),
+        inStorePrice: Number(draft.price || 0),
+        quantityAvailable: Math.max(0, Math.floor(Number(draft.quantity || 0))),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="register-modal" role="dialog" aria-modal="true" aria-labelledby="new-store-item-title">
+      <section>
+        <button className="modal-close" type="button" onClick={onCancel}><X size={18} /></button>
+        <h2 id="new-store-item-title">New store item</h2>
+        <p>For things you sell that aren't in the catalogue, like a Coke or a pack of sleeves.</p>
+        <form className="modal-form-grid new-store-item-form" onSubmit={submit}>
+          <label className="wide">
+            <span>Name</span>
+            <input autoFocus value={draft.name} onChange={set('name')} placeholder="Coke 355ml can" />
+          </label>
+          <label>
+            <span>Barcode</span>
+            <input value={draft.barcode} onChange={set('barcode')} placeholder="Scan or type" onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault() }} />
+          </label>
+          <label>
+            <span>SKU (optional)</span>
+            <input value={draft.sku} onChange={set('sku')} placeholder="Made for you if blank" />
+          </label>
+          <label>
+            <span>Cost</span>
+            <input type="number" min="0" step="0.01" value={draft.cost} onChange={set('cost')} placeholder="0.00" />
+          </label>
+          <label>
+            <span>Price</span>
+            <input type="number" min="0" step="0.01" value={draft.price} onChange={set('price')} placeholder="0.00" />
+          </label>
+          <label>
+            <span>Starting quantity</span>
+            <input type="number" min="0" step="1" value={draft.quantity} onChange={set('quantity')} />
+          </label>
+          {notice ? <p className="new-store-item-error wide">{notice}</p> : null}
+          <div className="modal-actions wide">
+            <button type="button" onClick={onCancel}>Cancel</button>
+            <button className="gold-button" type="submit" disabled={!ready}>{saving ? 'Adding…' : 'Add item'}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  )
+}
+
 function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarkup, onApproveListing, onClose, onSaveItem }) {
   const itemName = item.name || item.title || item.sku || 'Inventory item'
   const cost = Number(item.cost ?? item.buyPrice ?? 0)
@@ -4971,6 +5020,7 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
   const [editDraft, setEditDraft] = useState({
     category: '',
     condition: '',
+    cost: '',
     inStorePrice: '',
     onlinePrice: '',
   })
@@ -4980,6 +5030,7 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
     setEditDraft({
       category: item.category || '',
       condition: item.condition || '',
+      cost: item.cost != null || item.buyPrice != null ? String(Number(item.cost ?? item.buyPrice)) : '',
       inStorePrice: String(Number(item.inStorePrice || item.price || suggestedPrice || 0) || ''),
       onlinePrice: String(Number(item.onlinePrice || item.inStorePrice || item.price || suggestedPrice || 0) || ''),
     })
@@ -4994,6 +5045,7 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
     const inStorePrice = inStoreDraft ? Number(inStoreDraft) : Number(item.inStorePrice || item.price || suggestedPrice || 0)
     const onlinePrice = onlineDraft ? Number(onlineDraft) : Number(item.onlinePrice || item.inStorePrice || item.price || suggestedPrice || 0)
     onSaveItem({
+      ...(String(editDraft.cost ?? '').trim() !== '' ? { cost: Number(editDraft.cost), buyPrice: Number(editDraft.cost) } : {}),
       category: String(editDraft.category || item.category || ''),
       condition: String(editDraft.condition || item.condition || ''),
       inStorePrice,
@@ -5028,6 +5080,10 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
             <span>Cost</span>
             <strong>{cost > 0 ? money.format(cost) : '—'}</strong>
           </div>
+          <label>
+            <span>Cost (what the store paid)</span>
+            <input name="cost" type="number" min="0" step="0.01" value={editDraft.cost} onChange={(event) => setEditDraft((current) => ({ ...current, cost: event.target.value }))} />
+          </label>
           <label>
             <span>In-store price</span>
             <input name="inStorePrice" type="number" min="0" step="0.01" value={editDraft.inStorePrice} onChange={(event) => setEditDraft((current) => ({ ...current, inStorePrice: event.target.value }))} />

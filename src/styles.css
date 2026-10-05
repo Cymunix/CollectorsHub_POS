@@ -9074,3 +9074,16 @@ button:disabled {
 .inventory-detail-panel {
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
+
+/* New store item (misc, non-catalogue items like drinks) */
+.new-store-item-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.new-store-item-form .wide {
+  grid-column: 1 / -1;
+}
+
+.new-store-item-form .new-store-item-error {
+  color: #b3261e;
+}

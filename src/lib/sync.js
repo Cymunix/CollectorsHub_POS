@@ -59,14 +59,26 @@ async function loadCategoryMap(categoryIds) {
   return Object.fromEntries((data || []).map((row) => [row.category_id, row.name]))
 }
 
+// Runs a query per batch of ids (one request listing thousands of ids is too
+// long for the server) and joins the rows.
+async function inBatches(ids, query, size = 100) {
+  const rows = []
+  for (let index = 0; index < ids.length; index += size) {
+    const { data, error } = await query(ids.slice(index, index + size))
+    if (error) throw error
+    rows.push(...(data || []))
+  }
+  return { data: rows, error: null }
+}
+
 async function loadCatalogueMeta(catalogItemIds) {
   const ids = uniq(catalogItemIds)
   if (!ids.length) return {}
 
-  const { data, error } = await supabase
+  const { data, error } = await inBatches(ids, (batch) => supabase
     .from('items')
     .select('item_id, name, card_number, lego_set_number, minifig_code, category_id, market_price, retail_price, image_path, dynamic_fields')
-    .in('item_id', ids)
+    .in('item_id', batch))
 
   if (error) throw error
 
@@ -92,11 +104,11 @@ async function loadImageMaps(inventoryIds, catalogItemIds) {
   const catalogImageMap = {}
 
   if (inventoryIds.length) {
-    const { data, error } = await supabase
+    const { data, error } = await inBatches(inventoryIds, (batch) => supabase
       .from('store_inventory_images')
       .select('inventory_id, storage_path, position')
-      .in('inventory_id', inventoryIds)
-      .order('position')
+      .in('inventory_id', batch)
+      .order('position'))
 
     if (error) throw error
 
@@ -108,11 +120,11 @@ async function loadImageMaps(inventoryIds, catalogItemIds) {
   }
 
   if (catalogItemIds.length) {
-    const { data, error } = await supabase
+    const { data, error } = await inBatches(catalogItemIds, (batch) => supabase
       .from('item_images')
       .select('item_id, image_path, position')
-      .in('item_id', catalogItemIds)
-      .order('position')
+      .in('item_id', batch)
+      .order('position'))
 
     if (error) throw error
 
@@ -165,20 +177,28 @@ export async function syncInventoryFromSupabase(session) {
     throw new Error('No active store/location could be resolved for this desktop session.')
   }
 
-  const { data: quantityRows, error: quantityError } = await supabase
-    .from('store_inventory_quantities')
-    .select('inventory_id, store_id, location_id, quantity, quantity_reserved, updated_at')
-    .eq('store_id', storeId)
-    .eq('location_id', locationId)
-    .gt('quantity', 0)
-    .order('updated_at', { ascending: false })
-
-  if (quantityError) {
-    console.error('[Desktop Sync] RLS/query error:', quantityError)
-    throw quantityError
+  // Every stock record at this location, including ones at 0 (favourites stay
+  // listed and the Sold out filter needs them; the register only sells what's
+  // available). Paged past Supabase's 1,000-row limit.
+  const quantityRows = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error: quantityError } = await supabase
+      .from('store_inventory_quantities')
+      .select('inventory_id, store_id, location_id, quantity, quantity_reserved, updated_at')
+      .eq('store_id', storeId)
+      .eq('location_id', locationId)
+      .gte('quantity', 0)
+      .order('updated_at', { ascending: false })
+      .range(from, from + 999)
+    if (quantityError) {
+      console.error('[Desktop Sync] RLS/query error:', quantityError)
+      throw quantityError
+    }
+    quantityRows.push(...(data || []))
+    if (!data || data.length < 1000) break
   }
 
-  const quantityList = quantityRows || []
+  const quantityList = quantityRows
   const inventoryIds = quantityList.map((row) => row.inventory_id)
   console.info('[Desktop Sync] Quantity rows returned:', quantityList.length)
 
@@ -192,16 +212,20 @@ export async function syncInventoryFromSupabase(session) {
     }
   }
 
-  const { data: inventoryRows, error: inventoryError } = await supabase
-    .from('store_inventory')
-    .select('id, store_id, catalog_item_id, sku, barcode, condition, grade, grading_company, buy_price, sell_price, in_store_price, name_snapshot, status, is_trade_in, listed_for_sale')
-    .eq('store_id', storeId)
-    .eq('status', 'active')
-    .in('id', inventoryIds)
-
-  if (inventoryError) {
-    console.error('[Desktop Sync] RLS/query error:', inventoryError)
-    throw inventoryError
+  // In batches: one request listing thousands of ids is too long for the server.
+  const inventoryRows = []
+  for (let index = 0; index < inventoryIds.length; index += 200) {
+    const { data, error: inventoryError } = await supabase
+      .from('store_inventory')
+      .select('id, store_id, catalog_item_id, sku, barcode, condition, grade, grading_company, buy_price, sell_price, in_store_price, name_snapshot, status, is_trade_in, listed_for_sale')
+      .eq('store_id', storeId)
+      .eq('status', 'active')
+      .in('id', inventoryIds.slice(index, index + 200))
+    if (inventoryError) {
+      console.error('[Desktop Sync] RLS/query error:', inventoryError)
+      throw inventoryError
+    }
+    inventoryRows.push(...(data || []))
   }
 
   const quantityMap = Object.fromEntries(quantityList.map((row) => [row.inventory_id, row]))
@@ -234,7 +258,8 @@ export async function syncInventoryFromSupabase(session) {
       barcode: row.barcode || '',
       name: row.name_snapshot || meta.name || row.sku || 'Inventory Item',
       title: row.name_snapshot || meta.name || row.sku || 'Inventory Item',
-      category: meta.category || '',
+      // A store's own item (a drink, a snack…) has no catalogue card.
+      category: meta.category || (row.catalog_item_id ? '' : 'Store item'),
       number: meta.number || '',
       condition: row.grade || row.condition || '',
       rawCondition: row.condition || '',
@@ -258,7 +283,7 @@ export async function syncInventoryFromSupabase(session) {
       unit_price: price,
       syncedAt: new Date().toISOString(),
     }
-  }).filter((row) => row.available > 0)
+  })
 
   console.info(`[Desktop Sync] Inventory returned: ${inventory.length} records`)
   console.info(`[Desktop Sync] Local cache written: ${inventory.length} records`)
