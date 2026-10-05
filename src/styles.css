@@ -9006,3 +9006,64 @@ button:disabled {
   border-top: 0;
   margin-top: 0;
 }
+
+/* Check for updates */
+.update-check {
+  display: grid;
+  gap: 6px;
+}
+
+.update-check-version {
+  font-weight: 800;
+}
+
+.update-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.update-check-actions button {
+  border: 1px solid #d5dfeb;
+  border-radius: 7px;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 5px 10px;
+}
+
+.update-check-status {
+  color: #5b6677;
+}
+
+.update-check-status.error {
+  color: #a12020;
+}
+
+.update-check-status.downloading,
+.update-check-status.ready {
+  color: #1d6b35;
+}
+
+.update-check.compact {
+  font-size: 12px;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.update-check.compact .update-check-version {
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+.update-check.compact .update-check-actions button {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.35);
+  color: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.update-check.compact .update-check-status {
+  color: inherit;
+  opacity: 0.85;
+}

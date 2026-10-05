@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   refocusWindow: () => ipcRenderer.invoke('app:refocus'),
   getPendingUpdate: () => ipcRenderer.invoke('app:get-pending-update'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),
   onUpdateReady: (callback) => {
     const listener = (_event, update) => callback(update)
     ipcRenderer.on('app:update-ready', listener)

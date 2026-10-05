@@ -41,6 +41,7 @@ import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
 import StoreScanIntake from './StoreScanIntake'
 import ConditionHint from './ConditionHint'
+import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
@@ -895,6 +896,7 @@ function App() {
           </span>
           <small>{isSaving ? 'Saving...' : 'Local data saved'}</small>
           <small>{describeAuthSession(authSession)}</small>
+          <UpdateCheck compact />
           <button className="sidebar-logout" type="button" onClick={handleLogout}>
             <LogOut size={16} />
             <span>Logout</span>
@@ -5138,6 +5140,10 @@ function SettingsView({ dataPath }) {
       <div className="settings-row">
         <span>Connection mode</span>
         <strong>Offline/local first</strong>
+      </div>
+      <div className="settings-row">
+        <span>App version</span>
+        <UpdateCheck />
       </div>
     </section>
   )

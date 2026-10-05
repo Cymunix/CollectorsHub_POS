@@ -1179,6 +1179,22 @@ ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('app:exit', () => app.quit())
 ipcMain.handle('app:refocus', () => refocusMainWindow())
 ipcMain.handle('app:get-pending-update', () => pendingUpdate)
+
+// "Check for updates" button: the same check that runs at start-up. A newer
+// version downloads in the background and the Update ready prompt follows.
+ipcMain.handle('app:check-for-updates', async () => {
+  const currentVersion = app.getVersion()
+  if (isDev) return { state: 'dev', currentVersion }
+  if (pendingUpdate) return { state: 'ready', currentVersion, version: pendingUpdate.version }
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    const latest = result?.updateInfo?.version || ''
+    const newer = latest && latest.localeCompare(currentVersion, undefined, { numeric: true }) > 0
+    return newer ? { state: 'downloading', currentVersion, version: latest } : { state: 'up-to-date', currentVersion }
+  } catch (error) {
+    return { state: 'error', currentVersion, message: error?.message || 'The update check failed.' }
+  }
+})
 ipcMain.handle('app:install-update', () => {
   if (pendingUpdate) autoUpdater.quitAndInstall(false, true)
 })

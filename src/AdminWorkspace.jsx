@@ -99,6 +99,7 @@ import {
   signRemoteImages,
 } from './lib/scanReviewCloud'
 import { looseCardKey, scanConfidence } from './lib/scanConfidence'
+import UpdateCheck from './UpdateCheck'
 import { SUPABASE_PUBLIC_CONFIG } from './lib/supabaseClient'
 
 const adminNav = [
@@ -875,6 +876,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
           <span>{session?.email || 'CollectorsHub admin'}</span>
           <small>Role: platform_admin</small>
           <small>{syncStatus?.online ? 'Online' : 'Offline'} · Supabase authenticated</small>
+          <UpdateCheck compact />
           <button type="button" onClick={onLogout}>
             <LogOut size={16} />
             Logout
