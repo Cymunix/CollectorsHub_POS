@@ -45,6 +45,7 @@ import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadDesktopCatalogueItem, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
 import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync'
+import { favoriteStockAlerts, loadStoreFavorites, setFavoriteThreshold, setStoreFavorite } from './lib/storeFavorites'
 import { supabase } from './lib/supabaseClient'
 
 const emptyStore = {
@@ -198,6 +199,11 @@ function App() {
   const signingOutRef = useRef(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState(emptyStore.sync)
+  // Store favourites: cards the store always wants in stock (shared by every
+  // register of the store), with low / out-of-stock alerts.
+  const [favorites, setFavorites] = useState({})
+  const [stockToast, setStockToast] = useState(null)
+  const alertKeysRef = useRef(null)
   const [appVersion, setAppVersion] = useState('')
   const [registerLocation, setRegisterLocation] = useState(null)
   const [receiptBranding, setReceiptBranding] = useState(null)
@@ -253,6 +259,49 @@ function App() {
     } finally {
       setIsSaving(false)
     }
+  }
+
+  useEffect(() => {
+    const storeId = authSession?.storeId
+    if (!storeId) { setFavorites({}); return undefined }
+    let cancelled = false
+    loadStoreFavorites(storeId)
+      .then((next) => { if (!cancelled) setFavorites(next) })
+      .catch((error) => console.warn('[Favourites] Could not load store favourites:', error?.message || error))
+    return () => { cancelled = true }
+  }, [authSession?.storeId, store.sync?.lastSyncAt])
+
+  const favoriteAlerts = useMemo(() => favoriteStockAlerts(favorites, store.inventory, inventoryStock), [favorites, store.inventory])
+
+  // A favourite newly going low or out shows a notice (once per change).
+  useEffect(() => {
+    const keys = new Set(favoriteAlerts.map((alert) => `${alert.catalogItemId}:${alert.level}`))
+    if (alertKeysRef.current) {
+      const fresh = favoriteAlerts.filter((alert) => !alertKeysRef.current.has(`${alert.catalogItemId}:${alert.level}`))
+      if (fresh.length) setStockToast(fresh)
+    }
+    alertKeysRef.current = keys
+  }, [favoriteAlerts])
+
+  useEffect(() => {
+    if (!stockToast) return undefined
+    const timer = window.setTimeout(() => setStockToast(null), 12000)
+    return () => window.clearTimeout(timer)
+  }, [stockToast])
+
+  async function toggleFavorite(catalogItemId, favorite) {
+    await setStoreFavorite(authSession?.storeId, catalogItemId, favorite)
+    setFavorites((current) => {
+      const next = { ...current }
+      if (favorite) next[catalogItemId] = next[catalogItemId] || { threshold: 1 }
+      else delete next[catalogItemId]
+      return next
+    })
+  }
+
+  async function changeFavoriteThreshold(catalogItemId, threshold) {
+    const value = await setFavoriteThreshold(authSession?.storeId, catalogItemId, threshold)
+    setFavorites((current) => (current[catalogItemId] ? { ...current, [catalogItemId]: { ...current[catalogItemId], threshold: value } } : current))
   }
 
   async function handleSyncNow() {
@@ -831,7 +880,7 @@ function App() {
 
         <nav className="nav-list" aria-label="Main">
           <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
-          <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} />
+          <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
           {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan to Inventory" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
           <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} />
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
@@ -926,6 +975,10 @@ function App() {
             onSyncNow={handleSyncNow}
             onCreateItem={createInventoryItem}
             onUpdateItem={updateInventoryItem}
+            favorites={favorites}
+            favoriteAlerts={favoriteAlerts}
+            onToggleFavorite={toggleFavorite}
+            onChangeFavoriteThreshold={changeFavoriteThreshold}
             search={search}
             setSearch={setSearch}
             syncStatus={syncStatus}
@@ -948,6 +1001,19 @@ function App() {
         {activeView === 'reports' ? <PlaceholderView icon={BarChart3} title="Reports" copy="Daily closeout, stock movement, margin, category performance, and tax summaries will live here." /> : null}
         {activeView === 'settings' ? <SettingsView dataPath={dataPath} /> : null}
       </section>
+      {stockToast ? (
+        <div className="stock-toast" role="status">
+          <strong>Favourite stock alert</strong>
+          {stockToast.slice(0, 4).map((alert) => (
+            <span key={alert.catalogItemId}>{alert.name || 'Item'}: {alert.level === 'out' ? 'out of stock' : `${alert.available} left`}</span>
+          ))}
+          {stockToast.length > 4 ? <span>and {stockToast.length - 4} more</span> : null}
+          <span className="stock-toast-actions">
+            <button type="button" onClick={() => { setStockToast(null); requestNavigate('inventory') }}>View</button>
+            <button type="button" onClick={() => setStockToast(null)} aria-label="Dismiss"><X size={14} /></button>
+          </span>
+        </div>
+      ) : null}
     </main>
   )
 }
@@ -1066,11 +1132,12 @@ function describeAuthSession(session) {
   return `${session.storeName || 'Store'}: ${session.username || session.role || 'Employee'}`
 }
 
-function NavButton({ icon: Icon, label, active, onClick }) {
+function NavButton({ icon: Icon, label, active, onClick, badge = null, badgeTitle = '' }) {
   return (
     <button className={active ? 'nav-button active' : 'nav-button'} type="button" onClick={onClick}>
       <Icon size={18} />
       <span>{label}</span>
+      {badge ? <b className="nav-badge" title={badgeTitle}>{badge}</b> : null}
     </button>
   )
 }
@@ -4225,7 +4292,21 @@ function conditionOptions(mode, category) {
   return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged', 'New/Sealed', 'Used/Complete']
 }
 
-function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow, onCreateItem, onUpdateItem, search, setSearch, syncStatus }) {
+function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow, onCreateItem, onUpdateItem, favorites = {}, favoriteAlerts = [], onToggleFavorite, onChangeFavoriteThreshold, search, setSearch, syncStatus }) {
+  // Favourite cards (the store's must-stock list): kept on screen at 0.
+  const favoriteOf = (item) => {
+    const id = item?.catalogItemId || item?.catalogueItemId || ''
+    return id && favorites[id] ? { id, ...favorites[id] } : null
+  }
+  async function toggleFavoriteFor(item) {
+    const id = item?.catalogItemId || item?.catalogueItemId || ''
+    if (!id) { setInventoryNotice('Only catalogue items can be favourited.'); return }
+    try {
+      await onToggleFavorite?.(id, !favorites[id])
+    } catch (error) {
+      setInventoryNotice(`Could not change the favourite: ${error?.message || error}`)
+    }
+  }
   const [activeWorkflow, setActiveWorkflow] = useState('')
   const [itemOverrides, setItemOverrides] = useState({})
   const [inventoryNotice, setInventoryNotice] = useState('')
@@ -4282,9 +4363,12 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
     const term = search.trim().toLowerCase()
     const rows = inventoryRows.filter((item) => {
       const available = inventoryStock(item)
-      // Sold-out records (0 available) only show under the Sold out filter.
-      if (stockFilter === 'soldout') { if (available > 0) return false }
-      else if (available <= 0) return false
+      // Sold-out records (0 available) only show under the Sold out filter,
+      // except favourites, which always stay on screen.
+      const favorite = favoriteOf(item)
+      if (stockFilter === 'favourites') { if (!favorite) return false }
+      else if (stockFilter === 'soldout') { if (available > 0) return false }
+      else if (available <= 0 && !favorite) return false
       if (stockFilter === 'available' && available <= 0) return false
       if (stockFilter === 'low' && available > 1) return false
       if (stockFilter === 'unpriced' && item.hasExplicitPrice) return false
@@ -4311,7 +4395,7 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
       if (sortMode === 'updated') return new Date(b.syncedAt || 0) - new Date(a.syncedAt || 0)
       return String(a.name || a.title || '').localeCompare(String(b.name || b.title || ''))
     })
-  }, [categoryFilter, inventoryRows, search, sortMode, stockFilter])
+  }, [categoryFilter, favorites, inventoryRows, search, sortMode, stockFilter])
 
   useEffect(() => {
     if (!filtered.length) {
@@ -4394,10 +4478,17 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
           <b className={item.listedForSale ? 'inventory-chip' : item.hasOnlineDraft || item.listingApproved ? 'inventory-chip muted' : 'inventory-chip warn'}>
             {item.listedForSale ? 'Listed' : item.listingApproved ? 'Approved' : item.hasOnlineDraft ? 'Draft' : 'Needs approval'}
           </b>
-          {lowStock ? <b className="inventory-chip warn">Low</b> : null}
+          {available <= 0 ? <b className="inventory-chip warn">Out of stock</b> : lowStock ? <b className="inventory-chip warn">Low</b> : null}
           {unpriced ? <b className="inventory-chip warn">Unpriced</b> : null}
         </span>
         <span className="inventory-row-actions">
+          <button
+            className={`inventory-favorite${favoriteOf(item) ? ' on' : ''}`}
+            type="button"
+            title={favoriteOf(item) ? 'Favourite: stays listed at 0 and alerts when low (click to remove)' : 'Add to favourites'}
+            aria-pressed={Boolean(favoriteOf(item))}
+            onClick={(event) => { event.stopPropagation(); toggleFavoriteFor(item) }}
+          >{favoriteOf(item) ? '★' : '☆'}</button>
           <button
             className="inventory-row-more"
             type="button"
@@ -4575,6 +4666,18 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
         <InventorySummary label="Unpriced" value={String(stats.unpriced)} tone={stats.unpriced ? 'warn' : ''} />
       </section>
 
+      {favoriteAlerts.length ? (
+        <button className="favorite-alert-bar" type="button" onClick={() => { setStockFilter('favourites'); setOpenGroupKey('') }}>
+          <b>★</b>
+          <span>
+            {favoriteAlerts.filter((alert) => alert.level === 'out').length ? `${favoriteAlerts.filter((alert) => alert.level === 'out').length} favourite${favoriteAlerts.filter((alert) => alert.level === 'out').length === 1 ? '' : 's'} out of stock` : ''}
+            {favoriteAlerts.some((alert) => alert.level === 'out') && favoriteAlerts.some((alert) => alert.level === 'low') ? ' · ' : ''}
+            {favoriteAlerts.filter((alert) => alert.level === 'low').length ? `${favoriteAlerts.filter((alert) => alert.level === 'low').length} running low` : ''}
+          </span>
+          <small>{favoriteAlerts.slice(0, 3).map((alert) => alert.name).filter(Boolean).join(', ')}{favoriteAlerts.length > 3 ? '…' : ''}</small>
+          <em>Show</em>
+        </button>
+      ) : null}
       {inventoryNotice ? (
         <DismissibleAlert className="inventory-notice" onDismiss={() => setInventoryNotice('')}>
           {inventoryNotice}
@@ -4590,6 +4693,7 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
             ['unpriced', 'Unpriced'],
             ['approval', 'Needs Approval'],
             ['listed', 'Listed'],
+            ['favourites', 'Favourites'],
             ['soldout', 'Sold out'],
           ].map(([key, label]) => (
             <button className={stockFilter === key ? 'active' : ''} type="button" key={key} onClick={() => setStockFilter(key)}>
@@ -4696,8 +4800,22 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
                     </span>
                     <span className="inventory-status-stack">
                       <b className="inventory-chip muted">{group.items.length} copies</b>
+                      {(() => {
+                        const total = group.items.reduce((sum, item) => sum + inventoryStock(item), 0)
+                        const favorite = favoriteOf(first)
+                        if (total <= 0) return <b className="inventory-chip warn">Out of stock</b>
+                        if (favorite && total <= favorite.threshold) return <b className="inventory-chip warn">Low</b>
+                        return null
+                      })()}
                     </span>
                     <span className="inventory-row-actions">
+                      <button
+                        className={`inventory-favorite${favoriteOf(first) ? ' on' : ''}`}
+                        type="button"
+                        title={favoriteOf(first) ? 'Favourite: stays listed at 0 and alerts when low (click to remove)' : 'Add to favourites'}
+                        aria-pressed={Boolean(favoriteOf(first))}
+                        onClick={(event) => { event.stopPropagation(); toggleFavoriteFor(first) }}
+                      >{favoriteOf(first) ? '★' : '☆'}</button>
                       <span className="inventory-group-toggle" aria-hidden="true">›</span>
                     </span>
                   </div>
@@ -4716,6 +4834,24 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
                   <h3>{selected.name || selected.title}</h3>
                   <small>{[selected.category, selected.condition].filter(Boolean).join(' · ') || selected.inventoryId}</small>
                 </span>
+              </div>
+              <div className="inventory-favorite-panel">
+                <button type="button" className={`inventory-favorite${favoriteOf(selected) ? ' on' : ''}`} onClick={() => toggleFavoriteFor(selected)}>
+                  {favoriteOf(selected) ? '★ Favourite' : '☆ Add to favourites'}
+                </button>
+                {favoriteOf(selected) ? (
+                  <label>
+                    Alert when at or below
+                    <input
+                      key={favoriteOf(selected).id}
+                      type="number"
+                      min="0"
+                      defaultValue={favoriteOf(selected).threshold}
+                      onBlur={(event) => onChangeFavoriteThreshold?.(favoriteOf(selected).id, event.target.value).catch((error) => setInventoryNotice(`Could not save the alert level: ${error?.message || error}`))}
+                      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+                    />
+                  </label>
+                ) : null}
               </div>
               <div className="inventory-detail-actions inventory-detail-actions-top">
                 <button className="gold-button" type="button" onClick={() => openWorkflow('edit')}>

@@ -94,7 +94,7 @@ Deno.serve(async (request) => {
 
   // Staff of this store (any id column linking the employee to the login), or its owner.
   const [{ data: store }, { data: staff }] = await Promise.all([
-    admin.from('stores').select('owner_user_id').eq('store_id', storeId).maybeSingle(),
+    admin.from('stores').select('owner_user_id').eq('id', storeId).maybeSingle(),
     admin.from('store_employees').select('*').eq('store_id', storeId),
   ])
   // Linked by the login's id, or by its email (staff sign in with an internal

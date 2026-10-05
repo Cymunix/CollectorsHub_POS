@@ -8731,3 +8731,136 @@ button:disabled {
   font-size: 22px;
   font-weight: 900;
 }
+
+/* Store favourites */
+.inventory-favorite {
+  background: none;
+  border: 0;
+  color: #9aa8bb;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.inventory-favorite.on {
+  color: #d6a632;
+}
+
+.inventory-favorite-panel {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+
+.inventory-favorite-panel .inventory-favorite {
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 7px 12px;
+}
+
+.inventory-favorite-panel label {
+  align-items: center;
+  color: #5b6677;
+  display: flex;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.inventory-favorite-panel input {
+  border: 1px solid #d5dfeb;
+  border-radius: 7px;
+  font: inherit;
+  padding: 5px 8px;
+  width: 64px;
+}
+
+.favorite-alert-bar {
+  align-items: center;
+  background: #fff7e6;
+  border: 1px solid #f0c674;
+  border-radius: 8px;
+  color: #5c3b00;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+  text-align: left;
+  width: 100%;
+}
+
+.favorite-alert-bar b {
+  color: #d6a632;
+  font-size: 18px;
+}
+
+.favorite-alert-bar span {
+  font-weight: 900;
+}
+
+.favorite-alert-bar small {
+  color: #8a6a17;
+  flex: 1;
+}
+
+.favorite-alert-bar em {
+  font-style: normal;
+  font-weight: 900;
+  text-decoration: underline;
+}
+
+.nav-badge {
+  background: #c0392b;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  margin-left: auto;
+  min-width: 20px;
+  padding: 2px 6px;
+  text-align: center;
+}
+
+.stock-toast {
+  background: #fff;
+  border: 1px solid #f0c674;
+  border-left: 5px solid #d6a632;
+  border-radius: 8px;
+  bottom: 18px;
+  box-shadow: 0 16px 36px rgba(11, 17, 27, 0.18);
+  display: grid;
+  gap: 4px;
+  max-width: 340px;
+  padding: 12px 14px;
+  position: fixed;
+  right: 18px;
+  z-index: 200;
+}
+
+.stock-toast span {
+  color: #33415a;
+  font-size: 13px;
+}
+
+.stock-toast-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.stock-toast-actions button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d5dfeb;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 900;
+  padding: 4px 10px;
+}
