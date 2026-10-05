@@ -1181,6 +1181,8 @@ function RegisterView({
   const [isSearchingProfiles, setIsSearchingProfiles] = useState(false)
   const [profileSearchError, setProfileSearchError] = useState('')
   const [buyCatalogueResults, setBuyCatalogueResults] = useState([])
+  // The text those results were searched for (older results are filtered locally).
+  const [buyCatalogueQuery, setBuyCatalogueQuery] = useState('')
   const [isSearchingBuyCatalogue, setIsSearchingBuyCatalogue] = useState(false)
   const [buyCatalogueSearchError, setBuyCatalogueSearchError] = useState('')
   const [guestLegalName, setGuestLegalName] = useState('')
@@ -1268,8 +1270,13 @@ function RegisterView({
 
     if (mode === 'buy') {
       const seen = new Set()
+      // Results for exactly what's typed are shown as the catalogue returned
+      // them (they may match on the subject, description, or name + number);
+      // results from an earlier search are narrowed by every typed word.
+      const fresh = buyCatalogueQuery.trim().toLowerCase() === value
+      const words = value.split(/\s+/).filter(Boolean)
       return buyCatalogueResults.filter((item) => (
-        itemSearchValues(item).some((field) => field.includes(value))
+        fresh || words.every((word) => itemSearchValues(item).some((field) => field.includes(word.replace(/^#/, ''))))
       ))
         .filter((item) => {
           const identity = item.catalogItemId || item.sku || item.name
@@ -1281,7 +1288,7 @@ function RegisterView({
     }
 
     return filteredInventory.slice(0, 6)
-  }, [buyCatalogueResults, filteredInventory, inventory, mode, query])
+  }, [buyCatalogueQuery, buyCatalogueResults, filteredInventory, inventory, mode, query])
 
   const recommendedItems = useMemo(() => {
     const saleInventoryIds = new Set(lines.map((line) => String(line.id || line.inventoryId || '')))
@@ -1543,6 +1550,7 @@ function RegisterView({
         const results = await searchDesktopTradeCatalogue(value)
         if (!cancelled) {
           setBuyCatalogueResults(results)
+          setBuyCatalogueQuery(value)
           setBuyCatalogueSearchError('')
         }
       } catch (error) {

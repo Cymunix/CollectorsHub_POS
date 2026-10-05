@@ -56,6 +56,21 @@ export async function searchDesktopTradeCatalogue(query) {
     supabase.from('items').select(catalogueSelect).ilike('catalog_code', `%${term}%`).limit(15),
     supabase.from('items').select(catalogueSelect).ilike('upc', `%${term}%`).limit(15),
   ]
+  // Several words, e.g. "jalen hurts 64": the name words in order, and any
+  // word with a digit as the card number.
+  const words = term.split(/\s+/).map((word) => word.replace(/^#/, '')).filter(Boolean)
+  const numberWords = words.filter((word) => /\d/.test(word))
+  const nameWords = words.filter((word) => !/\d/.test(word)).map((word) => word.replace(/[^\p{L}\p{N}'-]/gu, '')).filter((word) => word.length >= 2)
+  if (words.length > 1 && nameWords.length) {
+    const namePattern = `%${nameWords.join('%')}%`
+    if (numberWords.length) {
+      const numbers = [...new Set(numberWords.flatMap((word) => [word, word.toUpperCase(), word.replace(/^0+(?=\d)/, '')]))]
+      textQueries.push(supabase.from('items').select(catalogueSelect).ilike('name', namePattern).in('card_number', numbers).limit(15))
+      textQueries.push(supabase.from('items').select(catalogueSelect).ilike('subject', namePattern).in('card_number', numbers).limit(15))
+    } else {
+      textQueries.push(supabase.from('items').select(catalogueSelect).ilike('name', namePattern).limit(15))
+    }
+  }
   const responses = await Promise.all(textQueries)
   // Keep a supported name search useful even if an older database instance is
   // missing one of the optional identifier columns.
