@@ -3,9 +3,9 @@ import { supabase } from './supabaseClient'
 // Store scan intake: scanned cards that matched a catalogue item are added to
 // the signed-in store's stock exactly the way the website adds stock - a
 // store_inventory row, then a "receive" movement for the quantity at the
-// store's location (apply_inventory_movement keeps the stock history). A card
-// the store already has in the same condition gets its quantity increased
-// instead of a second row. Never creates catalogue items.
+// store's location (apply_inventory_movement keeps the stock history). Each
+// batch is its own record (own cost, condition and price); the Inventory
+// screen groups copies of a card. Never creates catalogue items.
 
 export const CARD_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged']
 
@@ -29,39 +29,25 @@ export async function addScannedCardToStock({ session, item, condition = 'Near M
   const sell = money(sellPrice)
   const buy = money(buyPrice)
 
-  const { data: existing, error: findError } = await supabase.from('store_inventory')
-    .select('id, sell_price, in_store_price')
-    .eq('store_id', session.storeId)
-    .eq('catalog_item_id', item.item_id)
-    .eq('condition', condition)
-    .eq('status', 'active')
-    .is('grade', null)
-    .limit(1)
-  if (findError) throw findError
+  // Each scanned batch of a card becomes its own stock record (its own cost,
+  // condition and price), never merged into an existing one.
+  const { data, error } = await supabase.from('store_inventory').insert({
+    store_id: session.storeId,
+    catalog_item_id: item.item_id,
+    sku: makeSku(item.card_number || item.name || item.subject),
+    condition,
+    cost_basis: buy,
+    buy_price: buy,
+    sell_price: sell,
+    in_store_price: sell,
+    name_snapshot: String(item.name || item.subject || 'Card').trim(),
+    status: 'active',
+    is_used: false,
+    is_trade_in: false,
+  }).select('id').single()
+  if (error) throw error
+  const inventoryId = data.id
 
-  let inventoryId = existing?.[0]?.id || ''
-  const created = !inventoryId
-  if (created) {
-    const { data, error } = await supabase.from('store_inventory').insert({
-      store_id: session.storeId,
-      catalog_item_id: item.item_id,
-      sku: makeSku(item.name || item.subject),
-      condition,
-      cost_basis: buy,
-      buy_price: buy,
-      sell_price: sell,
-      in_store_price: sell,
-      name_snapshot: String(item.name || item.subject || 'Card').trim(),
-      status: 'active',
-      is_used: false,
-      is_trade_in: false,
-    }).select('id').single()
-    if (error) throw error
-    inventoryId = data.id
-  } else if (sell != null && existing[0].sell_price == null && existing[0].in_store_price == null) {
-    // An unpriced existing row takes the price given here.
-    await supabase.from('store_inventory').update({ sell_price: sell, in_store_price: sell }).eq('id', inventoryId)
-  }
 
   const { error: moveError } = await supabase.rpc('apply_inventory_movement', {
     p_inventory_id: inventoryId,
@@ -71,5 +57,5 @@ export async function addScannedCardToStock({ session, item, condition = 'Near M
     p_reason: 'scan intake',
   })
   if (moveError) throw moveError
-  return { inventoryId, created }
+  return { inventoryId, created: true }
 }

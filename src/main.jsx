@@ -4313,6 +4313,102 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
   }, [filtered, selectedId])
 
   const selected = filtered.find((item) => item.id === selectedId) || filtered[0] || null
+
+  // Copies of the same card are separate stock records (each with its own
+  // cost, condition and price); the table groups them under one row that
+  // opens to list each copy.
+  const groupedRows = useMemo(() => {
+    const groups = new Map()
+    filtered.forEach((item) => {
+      const catalogueId = item.catalogItemId || item.catalogueItemId || item.catalog_item_id || ''
+      const key = catalogueId ? `catalogue:${catalogueId}` : `name:${String(item.name || item.title || '').toLowerCase()}|${String(item.sku || '').toLowerCase()}`
+      if (!groups.has(key)) groups.set(key, { key, items: [] })
+      groups.get(key).items.push(item)
+    })
+    return [...groups.values()]
+  }, [filtered])
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set())
+  const toggleGroup = (key) => setExpandedGroups((current) => {
+    const next = new Set(current)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return next
+  })
+
+  // One stock record's row (a copy, when nested under its card's group row).
+  const renderInventoryRow = (item, nested = false) => {
+    const available = inventoryStock(item)
+    const cost = Number(item.cost ?? item.buyPrice ?? 0)
+    const inStorePrice = Number(item.inStorePrice || 0)
+    const onlinePrice = Number(item.onlinePrice || 0)
+    const lowStock = available <= 1
+    const unpriced = !item.hasExplicitPrice
+    return (
+      <div
+        className={`inventory-table-row${selected?.id === item.id ? ' selected' : ''}${nested ? ' inventory-copy-row' : ''}`}
+        key={item.id}
+        role="button"
+        tabIndex={0}
+        onClick={() => selectInventoryRow(item)}
+        onKeyDown={(event) => handleInventoryRowKey(event, item)}
+      >
+        <span className="inventory-row-main">
+          <ItemThumb item={item} />
+          <span>
+            <strong>{item.name || item.title}</strong>
+            <small>{[item.category, item.condition, item.grade ? `Grade ${item.grade}` : ''].filter(Boolean).join(' · ')}</small>
+          </span>
+        </span>
+        <span>
+          <strong>{item.sku || '—'}</strong>
+          <small>{item.barcode || item.number || 'No barcode'}</small>
+        </span>
+        <span>
+          <strong>{available}</strong>
+          <small>{Number(item.reserved || 0) ? `${item.reserved} reserved` : `${item.onHand ?? available} on hand`}</small>
+        </span>
+        <span>
+          <strong>{cost > 0 ? money.format(cost) : '—'}</strong>
+          <small>Basis</small>
+        </span>
+        <span>
+          <strong>{inStorePrice > 0 ? money.format(inStorePrice) : '—'}</strong>
+          <small>{item.priceIsSuggested ? 'Suggested' : 'POS'}</small>
+        </span>
+        <span>
+          <strong>{onlinePrice > 0 ? money.format(onlinePrice) : '—'}</strong>
+          <small>Marketplace</small>
+        </span>
+        <span className="inventory-status-stack">
+          <b className={item.listedForSale ? 'inventory-chip' : item.hasOnlineDraft || item.listingApproved ? 'inventory-chip muted' : 'inventory-chip warn'}>
+            {item.listedForSale ? 'Listed' : item.listingApproved ? 'Approved' : item.hasOnlineDraft ? 'Draft' : 'Needs approval'}
+          </b>
+          {lowStock ? <b className="inventory-chip warn">Low</b> : null}
+          {unpriced ? <b className="inventory-chip warn">Unpriced</b> : null}
+        </span>
+        <span className="inventory-row-actions">
+          <button
+            className="inventory-row-more"
+            type="button"
+            aria-label={`Open actions for ${item.name || item.title || item.sku || 'inventory item'}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              selectInventoryRow(item)
+              const rect = event.currentTarget.getBoundingClientRect()
+              setRowMenu(rowMenu?.id === item.id ? null : {
+                id: item.id,
+                left: Math.min(rect.left - 86, window.innerWidth - 130),
+                top: Math.min(rect.bottom + 6, window.innerHeight - 120),
+              })
+            }}
+          >
+            ...
+          </button>
+        </span>
+      </div>
+    )
+  }
+
   const workflowItem = activeWorkflow === 'create'
     ? {
         id: 'new',
@@ -4528,76 +4624,64 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
               <span aria-label="More actions" />
             </div>
             {!filtered.length ? <EmptyState text="No inventory matches the current filters." /> : null}
-            {filtered.map((item) => {
-              const available = inventoryStock(item)
-              const cost = Number(item.cost ?? item.buyPrice ?? 0)
-              const inStorePrice = Number(item.inStorePrice || 0)
-              const onlinePrice = Number(item.onlinePrice || 0)
-              const lowStock = available <= 1
-              const unpriced = !item.hasExplicitPrice
+            {groupedRows.map((group) => {
+              if (group.items.length === 1) return renderInventoryRow(group.items[0])
+              const open = expandedGroups.has(group.key)
+              const first = group.items[0]
+              const range = (values) => {
+                const nums = values.filter((value) => value > 0)
+                if (!nums.length) return '—'
+                const low = Math.min(...nums)
+                const high = Math.max(...nums)
+                return low === high ? money.format(low) : `${money.format(low)}–${money.format(high)}`
+              }
+              const conditions = [...new Set(group.items.map((item) => item.condition).filter(Boolean))]
               return (
-                <div
-                  className={selected?.id === item.id ? 'inventory-table-row selected' : 'inventory-table-row'}
-                  key={item.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => selectInventoryRow(item)}
-                  onKeyDown={(event) => handleInventoryRowKey(event, item)}
-                >
-                  <span className="inventory-row-main">
-                    <ItemThumb item={item} />
-                    <span>
-                      <strong>{item.name || item.title}</strong>
-                      <small>{[item.category, item.condition, item.grade ? `Grade ${item.grade}` : ''].filter(Boolean).join(' · ')}</small>
+                <React.Fragment key={group.key}>
+                  <div
+                    className={`inventory-table-row inventory-group-row${open ? ' open' : ''}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={open}
+                    onClick={() => toggleGroup(group.key)}
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(group.key) } }}
+                  >
+                    <span className="inventory-row-main">
+                      <ItemThumb item={first} />
+                      <span>
+                        <strong>{first.name || first.title}</strong>
+                        <small>{group.items.length} copies · {conditions.join(', ') || 'condition not set'}</small>
+                      </span>
                     </span>
-                  </span>
-                  <span>
-                    <strong>{item.sku || '—'}</strong>
-                    <small>{item.barcode || item.number || 'No barcode'}</small>
-                  </span>
-                  <span>
-                    <strong>{available}</strong>
-                    <small>{Number(item.reserved || 0) ? `${item.reserved} reserved` : `${item.onHand ?? available} on hand`}</small>
-                  </span>
-                  <span>
-                    <strong>{cost > 0 ? money.format(cost) : '—'}</strong>
-                    <small>Basis</small>
-                  </span>
-                  <span>
-                    <strong>{inStorePrice > 0 ? money.format(inStorePrice) : '—'}</strong>
-                    <small>{item.priceIsSuggested ? 'Suggested' : 'POS'}</small>
-                  </span>
-                  <span>
-                    <strong>{onlinePrice > 0 ? money.format(onlinePrice) : '—'}</strong>
-                    <small>Marketplace</small>
-                  </span>
-                  <span className="inventory-status-stack">
-                    <b className={item.listedForSale ? 'inventory-chip' : item.hasOnlineDraft || item.listingApproved ? 'inventory-chip muted' : 'inventory-chip warn'}>
-                      {item.listedForSale ? 'Listed' : item.listingApproved ? 'Approved' : item.hasOnlineDraft ? 'Draft' : 'Needs approval'}
-                    </b>
-                    {lowStock ? <b className="inventory-chip warn">Low</b> : null}
-                    {unpriced ? <b className="inventory-chip warn">Unpriced</b> : null}
-                  </span>
-                  <span className="inventory-row-actions">
-                    <button
-                      className="inventory-row-more"
-                      type="button"
-                      aria-label={`Open actions for ${item.name || item.title || item.sku || 'inventory item'}`}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        selectInventoryRow(item)
-                        const rect = event.currentTarget.getBoundingClientRect()
-                        setRowMenu(rowMenu?.id === item.id ? null : {
-                          id: item.id,
-                          left: Math.min(rect.left - 86, window.innerWidth - 130),
-                          top: Math.min(rect.bottom + 6, window.innerHeight - 120),
-                        })
-                      }}
-                    >
-                      ...
-                    </button>
-                  </span>
-                </div>
+                    <span>
+                      <strong>{new Set(group.items.map((item) => item.sku)).size === 1 ? (first.sku || '—') : 'Various'}</strong>
+                      <small>{first.number || first.barcode || ''}</small>
+                    </span>
+                    <span>
+                      <strong>{group.items.reduce((sum, item) => sum + inventoryStock(item), 0)}</strong>
+                      <small>total</small>
+                    </span>
+                    <span>
+                      <strong>{range(group.items.map((item) => Number(item.cost ?? item.buyPrice ?? 0)))}</strong>
+                      <small>Cost range</small>
+                    </span>
+                    <span>
+                      <strong>{range(group.items.map((item) => Number(item.inStorePrice || 0)))}</strong>
+                      <small>POS</small>
+                    </span>
+                    <span>
+                      <strong>{range(group.items.map((item) => Number(item.onlinePrice || 0)))}</strong>
+                      <small>Marketplace</small>
+                    </span>
+                    <span className="inventory-status-stack">
+                      <b className="inventory-chip muted">{open ? 'Hide copies' : 'Show copies'}</b>
+                    </span>
+                    <span className="inventory-row-actions">
+                      <span className="inventory-group-toggle" aria-hidden="true">{open ? '▾' : '▸'}</span>
+                    </span>
+                  </div>
+                  {open ? group.items.map((item) => renderInventoryRow(item, true)) : null}
+                </React.Fragment>
               )
             })}
           </div>

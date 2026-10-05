@@ -422,18 +422,27 @@ function saleLine(line) {
   }
 }
 
+// A new stock record's SKU: the card number (or name) plus a short unique
+// suffix. SKUs are unique per store, and the card number alone repeats for
+// every copy (and across different cards).
+function uniqueTradeSku(line) {
+  const base = String(line.sku || line.number || line.name || 'ITEM').toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 12) || 'ITEM'
+  return `${base}-${Date.now().toString(36).toUpperCase().slice(-4)}${Math.random().toString(36).toUpperCase().slice(2, 5)}`
+}
+
 function tradeLine(line, payoutMethod) {
   const quantity = Number(line.quantity || 1)
   const offer = Number(line.storeOffer || line.unitPrice || 0)
   const market = Number(line.marketValue || line.sellPrice || offer || 0)
   return {
-    // A searched store item already has a unique inventory row. Increase that
-    // row's quantity instead of trying to insert a duplicate SKU on trade-in.
+    // A searched store item (a specific stock record) gets its quantity
+    // increased. Anything else becomes its own new stock record, so each copy
+    // bought keeps its own cost, condition and price.
     inventory_id: uuidOrNull(line.inventoryId),
     catalog_item_id: uuidOrNull(line.catalogItemId),
     direction: 'in',
     name_snapshot: line.name || line.title || 'Trade-in Item',
-    sku_snapshot: line.sku || null,
+    sku_snapshot: uuidOrNull(line.inventoryId) ? line.sku || null : uniqueTradeSku(line),
     condition: line.condition || null,
     grade: line.grade || null,
     unit_price: roundMoney(offer),
@@ -447,23 +456,6 @@ function tradeLine(line, payoutMethod) {
   }
 }
 
-async function resolveExistingTradeInventoryIds(session, lines) {
-  return Promise.all((lines || []).map(async (line) => {
-    if (uuidOrNull(line.inventoryId) || !line.sku || !session?.storeId) return line
-
-    const { data, error } = await supabase
-      .from('store_inventory')
-      .select('id')
-      .eq('store_id', session.storeId)
-      .eq('sku', line.sku)
-      .eq('status', 'active')
-      .maybeSingle()
-    if (error) throw error
-
-    return data?.id ? { ...line, inventoryId: data.id } : line
-  }))
-}
-
 export async function completeDesktopCheckout(session, draft) {
   if (!session?.storeId || !session?.locationId) {
     throw new Error('No active Supabase store/location is connected for this Register.')
@@ -471,10 +463,7 @@ export async function completeDesktopCheckout(session, draft) {
 
   const customerId = await ensureStoreCustomer(session, draft.customer)
   const saleItems = (draft.items || []).filter((line) => line.direction !== 'incoming').map(saleLine)
-  const tradeDraftItems = await resolveExistingTradeInventoryIds(
-    session,
-    (draft.items || []).filter((line) => line.direction === 'incoming'),
-  )
+  const tradeDraftItems = (draft.items || []).filter((line) => line.direction === 'incoming')
   const tradeItems = tradeDraftItems.map((line) => tradeLine(line, draft.payout?.method))
   const payments = (draft.payments || [])
     .filter((payment) => Math.abs(Number(payment.amount || 0)) > 0)
