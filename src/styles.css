@@ -9067,3 +9067,10 @@ button:disabled {
   color: inherit;
   opacity: 0.85;
 }
+
+/* Inventory detail panel: item header, favourite bar, buttons, then the
+   scrolling details (the favourite bar added a row; the buttons were being
+   drawn under the stock boxes). */
+.inventory-detail-panel {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
