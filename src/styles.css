@@ -8696,3 +8696,38 @@ button:disabled {
   max-height: 96px;
   overflow-y: auto;
 }
+
+/* Inventory: a card's own screen listing each copy */
+.inventory-copies-head {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: flex-start;
+}
+
+.inventory-copies-head button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 900;
+  gap: 6px;
+  padding: 7px 12px;
+}
+
+.inventory-copies-head span {
+  display: grid;
+  gap: 2px;
+}
+
+.inventory-group-row {
+  cursor: pointer;
+}
+
+.inventory-group-toggle {
+  color: #8a6a17;
+  font-size: 22px;
+  font-weight: 900;
+}

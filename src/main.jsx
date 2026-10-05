@@ -4282,6 +4282,9 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
     const term = search.trim().toLowerCase()
     const rows = inventoryRows.filter((item) => {
       const available = inventoryStock(item)
+      // Sold-out records (0 available) only show under the Sold out filter.
+      if (stockFilter === 'soldout') { if (available > 0) return false }
+      else if (available <= 0) return false
       if (stockFilter === 'available' && available <= 0) return false
       if (stockFilter === 'low' && available > 1) return false
       if (stockFilter === 'unpriced' && item.hasExplicitPrice) return false
@@ -4335,13 +4338,13 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
     })
     return [...groups.values()]
   }, [filtered])
-  const [expandedGroups, setExpandedGroups] = useState(() => new Set())
-  const toggleGroup = (key) => setExpandedGroups((current) => {
-    const next = new Set(current)
-    if (next.has(key)) next.delete(key)
-    else next.add(key)
-    return next
-  })
+  // A card with several copies opens its own screen listing each copy.
+  const [openGroupKey, setOpenGroupKey] = useState('')
+  const openGroup = groupedRows.find((group) => group.key === openGroupKey && group.items.length > 1) || null
+  const showGroup = (group) => {
+    setOpenGroupKey(group.key)
+    setSelectedId(group.items[0]?.id || '')
+  }
 
   // One stock record's row (a copy, when nested under its card's group row).
   const renderInventoryRow = (item, nested = false) => {
@@ -4587,6 +4590,7 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
             ['unpriced', 'Unpriced'],
             ['approval', 'Needs Approval'],
             ['listed', 'Listed'],
+            ['soldout', 'Sold out'],
           ].map(([key, label]) => (
             <button className={stockFilter === key ? 'active' : ''} type="button" key={key} onClick={() => setStockFilter(key)}>
               {label}
@@ -4616,10 +4620,20 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
 
       <div className="inventory-detail-layout">
         <section className="inventory-table-panel panel">
-          <div className="inventory-table-head">
-            <span><strong>{filtered.length.toLocaleString()}</strong> matching records</span>
-            <small>{search.trim() ? `Search: ${search.trim()}` : 'Local inventory view'}</small>
-          </div>
+          {openGroup ? (
+            <div className="inventory-table-head inventory-copies-head">
+              <button type="button" onClick={() => setOpenGroupKey('')}><ArrowLeft size={16} /> Back to inventory</button>
+              <span>
+                <strong>{openGroup.items[0].name || openGroup.items[0].title}</strong>
+                <small>{openGroup.items.length} copies · {openGroup.items.reduce((sum, item) => sum + inventoryStock(item), 0)} available</small>
+              </span>
+            </div>
+          ) : (
+            <div className="inventory-table-head">
+              <span><strong>{groupedRows.length.toLocaleString()}</strong> {groupedRows.length === 1 ? 'item' : 'items'} · {filtered.length.toLocaleString()} records</span>
+              <small>{search.trim() ? `Search: ${search.trim()}` : 'Local inventory view'}</small>
+            </div>
+          )}
           <div className="inventory-table">
             <div className="inventory-table-row inventory-table-header">
               <span>Item</span>
@@ -4632,9 +4646,8 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
               <span aria-label="More actions" />
             </div>
             {!filtered.length ? <EmptyState text="No inventory matches the current filters." /> : null}
-            {groupedRows.map((group) => {
+            {openGroup ? openGroup.items.map((item) => renderInventoryRow(item, true)) : groupedRows.map((group) => {
               if (group.items.length === 1) return renderInventoryRow(group.items[0])
-              const open = expandedGroups.has(group.key)
               const first = group.items[0]
               const range = (values) => {
                 const nums = values.filter((value) => value > 0)
@@ -4645,14 +4658,14 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
               }
               const conditions = [...new Set(group.items.map((item) => item.condition).filter(Boolean))]
               return (
-                <React.Fragment key={group.key}>
-                  <div
-                    className={`inventory-table-row inventory-group-row${open ? ' open' : ''}`}
+                <div
+                    key={group.key}
+                    className="inventory-table-row inventory-group-row"
                     role="button"
                     tabIndex={0}
-                    aria-expanded={open}
-                    onClick={() => toggleGroup(group.key)}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(group.key) } }}
+                    title="Open to see each copy"
+                    onClick={() => showGroup(group)}
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showGroup(group) } }}
                   >
                     <span className="inventory-row-main">
                       <ItemThumb item={first} />
@@ -4682,14 +4695,12 @@ function InventoryView({ inventory, isSyncing, onNavigate, onSellItem, onSyncNow
                       <small>Marketplace</small>
                     </span>
                     <span className="inventory-status-stack">
-                      <b className="inventory-chip muted">{open ? 'Hide copies' : 'Show copies'}</b>
+                      <b className="inventory-chip muted">{group.items.length} copies</b>
                     </span>
                     <span className="inventory-row-actions">
-                      <span className="inventory-group-toggle" aria-hidden="true">{open ? '▾' : '▸'}</span>
+                      <span className="inventory-group-toggle" aria-hidden="true">›</span>
                     </span>
                   </div>
-                  {open ? group.items.map((item) => renderInventoryRow(item, true)) : null}
-                </React.Fragment>
               )
             })}
           </div>
