@@ -486,9 +486,15 @@ function App() {
   }
   useEffect(() => { refreshClockStatus() }, [authSession?.storeId, authSession?.type, authSession?.username])
   const needsClockIn = clockStatus.required && !clockStatus.clockedInAt
+  // An organization sign-in doesn't sell: no Register (it starts on MyHR).
+  const isOrgSession = authSession?.type === 'organization'
+  useEffect(() => {
+    if (isOrgSession && activeView === 'register') setActiveView('myhr')
+  }, [isOrgSession, activeView])
 
   function requestNavigate(nextView) {
     if (nextView === activeView) return
+    if (isOrgSession && nextView === 'register') return
     // Not clocked in: only MyHR, and the Register screen (which asks to clock in).
     if (needsClockIn && nextView !== 'myhr' && nextView !== 'register') {
       setActiveView('register')
@@ -898,7 +904,7 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="Main">
-          <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
+          {!isOrgSession ? <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} /> : null}
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
           {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan to Inventory" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
           <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} notReady />
@@ -934,10 +940,12 @@ function App() {
                   <RefreshIcon />
                   {isSyncing ? 'Syncing...' : 'Sync Now'}
                 </button>
-                <button className="primary-action" type="button" onClick={toggleRegister}>
-                  <CircleDollarSign size={18} />
-                  {store.register.status === 'open' ? 'Close Register' : 'Open Register'}
-                </button>
+                {!isOrgSession ? (
+                  <button className="primary-action" type="button" onClick={toggleRegister}>
+                    <CircleDollarSign size={18} />
+                    {store.register.status === 'open' ? 'Close Register' : 'Open Register'}
+                  </button>
+                ) : null}
               </div>
             </header>
 
