@@ -9281,3 +9281,47 @@ button.condition-hint {
   background: #22314b;
 }
 
+
+/* MyHR tiles fill the screen: 4 across, 3 down, sharing the height. */
+.workspace > .myhr {
+  display: flex;
+  flex-direction: column;
+}
+
+.myhr > .myhr-head {
+  flex: 0 0 auto;
+}
+
+.myhr > .myhr-tiles {
+  flex: 1 1 auto;
+  grid-auto-rows: minmax(150px, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-height: 0;
+}
+
+.myhr-tile {
+  align-content: center;
+  justify-items: center;
+  min-height: 0;
+  padding: 20px;
+  text-align: center;
+}
+
+.myhr-tile svg {
+  height: 64px;
+  width: 64px;
+}
+
+.myhr-tile strong {
+  font-size: 19px;
+}
+
+.myhr-tile small {
+  font-size: 13px;
+}
+
+@media (max-width: 1000px) {
+  .myhr > .myhr-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
