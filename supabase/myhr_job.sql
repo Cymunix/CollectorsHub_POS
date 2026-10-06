@@ -1,7 +1,9 @@
 -- MyHR, part 4 (run after myhr_personal_data.sql): Job Information.
 -- Each employee's job and pay (group, subgroup, position, pay type and rate,
 -- hours per pay period, next increase), set by the ORGANIZATION (its owner) and
--- read-only for stores and staff. Who changed it and when is recorded.
+-- read-only for stores and staff. Who changed it and when is recorded. The
+-- position defaults to the role the staff member was created with (e.g.
+-- Cashier) until the organization sets a more specific one. Safe to run again.
 
 CREATE TABLE IF NOT EXISTS public.store_employee_jobs (
   employee_id       uuid PRIMARY KEY REFERENCES public.store_employees(id) ON DELETE CASCADE,
@@ -32,7 +34,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
          COALESCE(NULLIF(btrim(concat_ws(' ', d.form_of_address, e.first_name, e.last_name)), ''), e.username),
          COALESCE(o.name, st.store_name),
          (SELECT l.location_name FROM public.store_locations l WHERE l.store_id = p_store_id ORDER BY l.created_at LIMIT 1),
-         j.employee_group, j.employee_subgroup, j.position_title,
+         j.employee_group, j.employee_subgroup, COALESCE(NULLIF(btrim(j.position_title), ''), initcap(replace(e.role, '_', ' '))),
          j.pay_type, j.pay_rate, j.hours_per_period, j.pay_period, j.next_increase,
          j.changed_by_name, j.changed_at
     FROM public.store_employees e
@@ -90,7 +92,7 @@ BEGIN
   SELECT DISTINCT ON (e.id)
          e.id,
          COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, e.last_name)), ''), e.username, 'Employee'),
-         e.role, e.status, e.personnel_number, s.store_name, j.position_title
+         e.role, e.status, e.personnel_number, s.store_name, COALESCE(NULLIF(btrim(j.position_title), ''), initcap(replace(e.role, '_', ' ')))
     FROM public.store_employees e
     JOIN public.stores s ON s.organization_id = p_org_id
      AND (e.store_id = s.id OR (e.store_id IS NULL AND e.store_owner_id = s.owner_user_id))

@@ -7,8 +7,7 @@ import { loadMyOnboarding } from './lib/myhrPay'
 // (supabase/myhr_onboarding.sql), so nothing is ticked by hand.
 
 export const ORG_TASKS = [
-  ['job', 'Job', 'Position and employee group'],
-  ['pay', 'Pay', 'Pay type, rate and pay period'],
+  ['pay', 'Pay', 'Pay type, rate and pay period'], // position comes from their role at creation
   ['scheduling', 'Scheduling', 'Scheduling role and weekly hours'],
   ['leave', 'Leave entitlements', 'Vacation, sick and other hours for this leave year'],
 ]

@@ -1,8 +1,9 @@
 -- MyHR, part 10 (run after myhr_availability.sql): Onboarding.
 -- A new staff member is set up by both sides; each task counts as done from
--- the real data (nothing to tick by hand):
---   Organization: job (position + group), pay (type, rate, pay period, and
---   hours for hourly), scheduling (role / hour targets saved), leave
+-- the real data (nothing to tick by hand). The job/position is set when the
+-- staff member is created (their role), so it isn't a task:
+--   Organization: pay (type, rate, pay period, and hours for hourly),
+--   scheduling (role / hour targets saved), leave
 --   entitlements (any for the current leave year).
 --   Employee: personal data (name, date of birth, language), address (street,
 --   city, province, postal code), emergency contact (name + phone),
@@ -57,7 +58,6 @@ END $$;
 CREATE OR REPLACE FUNCTION public.myhr_onboarding_of(p_employee_id uuid, p_leave_year_start_month integer)
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT jsonb_build_object(
-    'job', COALESCE(NULLIF(btrim(j.position_title), '') IS NOT NULL AND NULLIF(btrim(j.employee_group), '') IS NOT NULL, false),
     'pay', COALESCE(j.pay_type IS NOT NULL AND j.pay_rate IS NOT NULL AND j.pay_period IS NOT NULL
                     AND (j.pay_type = 'salary' OR j.hours_per_period IS NOT NULL), false),
     'scheduling', COALESCE(p.scheduling_saved_at IS NOT NULL, false),
@@ -108,3 +108,43 @@ GRANT EXECUTE ON FUNCTION public.myhr_save_my_availability_profile(uuid, jsonb) 
 GRANT EXECUTE ON FUNCTION public.myhr_org_save_schedule_profile(uuid, uuid, jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_my_onboarding(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_org_onboarding(uuid) TO authenticated;
+
+-- Scheduling role defaults to the role they were created with (Manager,
+-- Supervisor, Cashier…) until the organization sets one (replaces parts 8
+-- and 9's versions; same signatures).
+CREATE OR REPLACE FUNCTION public.myhr_org_schedule_profile(p_org_id uuid, p_employee_id uuid)
+RETURNS TABLE (schedule_role text, can_cover text[], target_hours numeric, min_hours numeric, max_hours numeric)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF p_org_id IS NULL OR p_org_id NOT IN (SELECT public.user_org_ids()) THEN
+    RAISE EXCEPTION 'Only the organization''s owner can see scheduling settings.';
+  END IF;
+  RETURN QUERY
+  SELECT COALESCE(p.schedule_role, initcap(replace(e.role, '_', ' ')), 'Employee'), COALESCE(p.can_cover, '{}'), p.target_hours, p.min_hours, p.max_hours
+    FROM public.store_employees e
+    LEFT JOIN public.store_employee_schedule_profiles p ON p.employee_id = e.id
+   WHERE e.id = p_employee_id;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.myhr_schedule_staff(p_store_id uuid)
+RETURNS TABLE (id uuid, name text, short_name text, schedule_role text, can_cover text[], target_hours numeric, min_hours numeric, max_hours numeric,
+               availability jsonb, hourly_cost numeric, preferred_hours numeric, most_hours numeric, restrictions text[], availability_note text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can build the schedule.'; END IF;
+  RETURN QUERY
+  SELECT e.id,
+         COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, e.last_name)), ''), e.username, 'Employee'),
+         COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, CASE WHEN e.last_name IS NOT NULL AND e.last_name <> '' THEN left(e.last_name, 1) || '.' END)), ''), e.username, 'Employee'),
+         COALESCE(p.schedule_role, initcap(replace(e.role, '_', ' ')), 'Employee'), COALESCE(p.can_cover, '{}'), p.target_hours, p.min_hours, p.max_hours,
+         COALESCE(p.availability, '{}'::jsonb),
+         CASE WHEN j.pay_type = 'salary' THEN round(j.pay_rate / 2080, 2) ELSE j.pay_rate END,
+         p.preferred_hours, p.most_hours, COALESCE(p.restrictions, '{}'), p.availability_note
+    FROM public.store_employees e
+    LEFT JOIN public.store_employee_schedule_profiles p ON p.employee_id = e.id
+    LEFT JOIN public.store_employee_jobs j ON j.employee_id = e.id
+   WHERE COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active'
+   ORDER BY 2;
+END $$;
+GRANT EXECUTE ON FUNCTION public.myhr_org_schedule_profile(uuid, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.myhr_schedule_staff(uuid) TO authenticated;
