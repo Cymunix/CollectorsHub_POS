@@ -43,6 +43,7 @@ import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
 import StoreScanIntake from './StoreScanIntake'
 import ConditionHint from './ConditionHint'
+import MyHRView from './MyHR'
 import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
 import { analyseRecognizedCard } from './lib/adminData'
@@ -883,7 +884,7 @@ function App() {
           <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} notReady />
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
           <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} notReady />
-          <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => requestNavigate('myhr')} notReady />
+          <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => requestNavigate('myhr')} />
           <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => requestNavigate('settings')} />
         </nav>
 
@@ -1001,6 +1002,7 @@ function App() {
         {activeView === 'transactions' ? <TransactionsView transactions={store.transactions} /> : null}
         {activeView === 'reports' ? <PlaceholderView icon={BarChart3} title="Reports" copy="Daily closeout, stock movement, margin, category performance, and tax summaries will live here." /> : null}
         {activeView === 'settings' ? <SettingsView dataPath={dataPath} /> : null}
+        {activeView === 'myhr' ? <MyHRView session={authSession} /> : null}
       </section>
       {stockToast ? (
         <div className="stock-toast" role="status">
