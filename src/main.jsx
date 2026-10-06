@@ -445,7 +445,7 @@ function App() {
         : item
     ))
     await persist({ ...store, inventory: nextInventory, sync: nextSync })
-    return localPatch
+    return { patch: localPatch, note: saved?.note || '' }
   }
 
   // Add Item: a store's own item (a drink, a snack…) saved to the store's
@@ -4535,9 +4535,10 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
       },
     }))
     try {
-      const saved = (await onUpdateItem?.(itemId, nextPatch)) || shown
+      const result = await onUpdateItem?.(itemId, nextPatch)
+      const saved = result?.patch || shown
       setItemOverrides((current) => ({ ...current, [itemId]: { ...(current[itemId] || {}), ...saved } }))
-      return saved
+      return { ...saved, saveNote: result?.note || '' }
     } catch (error) {
       setItemOverrides((current) => ({ ...current, [itemId]: before }))
       setInventoryNotice(`Couldn't save the change: ${error?.message || error}`)
@@ -4637,7 +4638,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
       quantityAvailable: nextQuantity,
       onHand: Math.max(0, Number(item.onHand ?? inventoryStock(item)) + change),
     })
-    if (saved) setInventoryNotice(`${item.name || item.title || item.sku || 'Item'} stock is now ${inventoryStock(saved)}.`)
+    if (saved) setInventoryNotice(`${saved.saveNote ? `${saved.saveNote} ` : ''}${item.name || item.title || item.sku || 'Item'} stock is now ${inventoryStock(saved)}.`)
   }
 
   function handleInventoryRowKey(event, item) {

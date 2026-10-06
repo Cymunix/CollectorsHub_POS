@@ -129,14 +129,37 @@ export async function saveStoreItemChanges({ session, item, patch }) {
   // A stock change: the +/- amount (stockDelta), or a new on-hand count. The
   // movement goes to the location the stock is held at, and the count it
   // returns (the real one in Supabase) is passed back for the screen.
-  const result = { saved: true, onHand: null }
+  const result = { saved: true, onHand: null, note: '' }
   if ('stockDelta' in patch || 'onHand' in patch) {
-    const delta = 'stockDelta' in patch
+    let delta = 'stockDelta' in patch
       ? Math.round(Number(patch.stockDelta) || 0)
       : Math.round(Number(patch.onHand) - Number(item.onHand ?? item.quantity ?? 0))
+    let locationId = ''
     if (delta) {
-      const locationId = item.locationId || await resolvePrimaryLocation(session.storeId, session.locationId)
+      locationId = item.locationId || await resolvePrimaryLocation(session.storeId, session.locationId)
       if (!locationId) throw new Error('This store has no location to hold stock.')
+    }
+    // Removing stock: check what Supabase actually holds first (this PC's
+    // copy can be out of date, e.g. after a sale on another register), and
+    // never take it below 0.
+    if (delta < 0) {
+      const { data: row, error: readError } = await supabase
+        .from('store_inventory_quantities')
+        .select('quantity')
+        .eq('inventory_id', id)
+        .eq('location_id', locationId)
+        .maybeSingle()
+      if (readError) throw readError
+      const held = Math.max(0, Number(row?.quantity) || 0)
+      if (-delta > held) {
+        result.note = held
+          ? `Only ${held} in stock in Supabase, so ${held} ${held === 1 ? 'was' : 'were'} removed.`
+          : 'Supabase already shows 0 in stock, so there was nothing to remove.'
+        delta = -held
+        result.onHand = held
+      }
+    }
+    if (delta) {
       const { data, error } = await supabase.rpc('apply_inventory_movement', {
         p_inventory_id: id,
         p_location_id: locationId,
