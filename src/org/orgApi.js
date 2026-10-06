@@ -498,7 +498,7 @@ export async function createStoreEmployee({
   if (!firstName?.trim() || !lastName?.trim()) throw new Error('First and last name are required.')
   if (!pin || pin.trim().length < 4) throw new Error('PIN must be at least 4 characters.')
 
-  const { data, error } = await supabase.functions.invoke('create-store-employee', {
+  const { data, error } = await supabase.functions.invoke('dynamic-function', { // the create-store-employee function, deployed as dynamic-function
     body: {
       storeId,
       firstName: firstName.trim(),

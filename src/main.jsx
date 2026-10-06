@@ -2645,7 +2645,7 @@ function RegisterView({
     setIsResolvingReceiptEmail(true)
     setReceiptActionNotice(`Sending receipt to ${recipient}…`)
     try {
-      const { data, error } = await supabase.functions.invoke('send-receipt', {
+      const { data, error } = await supabase.functions.invoke('hyper-api', { // the send-receipt function, deployed as hyper-api
         body: {
           to: recipient,
           storeId: transaction.storeId || authSession?.storeId || '',
