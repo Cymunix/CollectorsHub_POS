@@ -5079,7 +5079,6 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
     const inStorePrice = inStoreDraft ? Number(inStoreDraft) : Number(item.inStorePrice || item.price || suggestedPrice || 0)
     const onlinePrice = onlineDraft ? Number(onlineDraft) : Number(item.onlinePrice || item.inStorePrice || item.price || suggestedPrice || 0)
     onSaveItem({
-      ...(String(editDraft.cost ?? '').trim() !== '' ? { cost: Number(editDraft.cost), buyPrice: Number(editDraft.cost) } : {}),
       category: String(editDraft.category || item.category || ''),
       condition: String(editDraft.condition || item.condition || ''),
       inStorePrice,
@@ -5110,10 +5109,11 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
 
       {mode === 'edit' ? (
         <form className="inventory-workflow-form" onSubmit={saveEdit}>
-          <label>
-            <span>Cost (what the store paid)</span>
-            <input name="cost" type="number" min="0" step="0.01" value={editDraft.cost} onChange={(event) => setEditDraft((current) => ({ ...current, cost: event.target.value }))} />
-          </label>
+          {/* Cost is what the store paid: set when the stock came in, not editable. */}
+          <div className="inventory-readonly-field">
+            <span>Cost</span>
+            <strong>{cost > 0 ? money.format(cost) : '—'}</strong>
+          </div>
           <label>
             <span>In-store price</span>
             <input name="inStorePrice" type="number" min="0" step="0.01" value={editDraft.inStorePrice} onChange={(event) => setEditDraft((current) => ({ ...current, inStorePrice: event.target.value }))} />
