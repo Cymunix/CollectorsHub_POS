@@ -82,7 +82,7 @@ const SAMPLE = {
     form_of_address: 'Mx', initials: 'JS', language: 'English', date_of_birth: '1995-04-12', gender: 'Prefer not to say', marital_status: 'Single', country: 'Canada', phone_area: '902',
     employee_since: '2026-08-31T12:00:00Z', store_name: 'Nordvik Test Store',
     phone: '555-0142', address_line1: '123 Main Street', city: 'Halifax', province: 'Nova Scotia', postal_code: 'B3H 1A1',
-    emergency_name: 'Alex', emergency_relationship: 'Partner', emergency_phone: '902-555-0199',
+    emergency_first_name: 'Alex', emergency_last_name: 'Sample', emergency_phone_area: '902', emergency_phone: '555-0199',
   }],
 }
 supabase.rpc = async (name) => ({ data: SAMPLE[name] ?? null, error: null })

@@ -1,5 +1,5 @@
--- MyHR, part 3 (run after myhr_schedule_profile.sql): the full Personal Data
--- and Addresses screens, and Family Related Data (family members /
+-- MyHR, part 3 (run after myhr_schedule_profile.sql): the full Personal Data,
+-- Addresses and Emergency Contact screens, and Family Related Data (family members /
 -- dependents). Adds name, marital status, birth, address and other personal
 -- fields to the employee's own details, and a personnel number for every
 -- employee (assigned automatically, read-only for staff).
@@ -20,7 +20,10 @@ ALTER TABLE public.store_employee_details
   ADD COLUMN IF NOT EXISTS nationality     text,
   ADD COLUMN IF NOT EXISTS country         text,
   ADD COLUMN IF NOT EXISTS care_of         text,
-  ADD COLUMN IF NOT EXISTS phone_area      text;
+  ADD COLUMN IF NOT EXISTS phone_area      text,
+  ADD COLUMN IF NOT EXISTS emergency_first_name text,
+  ADD COLUMN IF NOT EXISTS emergency_last_name  text,
+  ADD COLUMN IF NOT EXISTS emergency_phone_area text;
 
 -- Personnel numbers: 4000001, 4000002, … (every existing employee gets one now,
 -- new employees on creation).
@@ -54,7 +57,8 @@ RETURNS TABLE (
   emergency_name text, emergency_relationship text, emergency_phone text,
   form_of_address text, middle_name text, initials text, known_as text,
   marital_status text, marital_since date, date_of_birth date, gender text, language text, nationality text,
-  country text, care_of text, phone_area text
+  country text, care_of text, phone_area text,
+  emergency_first_name text, emergency_last_name text, emergency_phone_area text
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT e.first_name, e.last_name, e.email, e.username, e.role, e.status, e.created_at, st.store_name, e.personnel_number,
@@ -62,7 +66,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
          d.emergency_name, d.emergency_relationship, d.emergency_phone,
          d.form_of_address, d.middle_name, d.initials, d.known_as,
          d.marital_status, d.marital_since, d.date_of_birth, d.gender, d.language, d.nationality,
-         d.country, d.care_of, d.phone_area
+         d.country, d.care_of, d.phone_area,
+         d.emergency_first_name, d.emergency_last_name, d.emergency_phone_area
     FROM public.store_employees e
     LEFT JOIN public.stores st ON st.id = p_store_id
     LEFT JOIN public.store_employee_details d ON d.employee_id = e.id
@@ -79,7 +84,8 @@ DECLARE
   v_text text[] := ARRAY['phone','address_line1','address_line2','city','province','postal_code',
                          'emergency_name','emergency_relationship','emergency_phone',
                          'form_of_address','middle_name','initials','known_as',
-                         'marital_status','gender','language','nationality','country','care_of','phone_area'];
+                         'marital_status','gender','language','nationality','country','care_of','phone_area',
+                         'emergency_first_name','emergency_last_name','emergency_phone_area'];
   v_key text;
 BEGIN
   IF v_emp IS NULL THEN RAISE EXCEPTION 'You are not an active employee of this store.'; END IF;

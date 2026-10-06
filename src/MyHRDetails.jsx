@@ -42,7 +42,7 @@ const SCREENS = {
   emergency: {
     title: 'Emergency Contact',
     columns: [[
-      ['Emergency Contact', [['emergency_name', 'Name', 'text', true], ['emergency_relationship', 'Relationship', 'text', true], ['emergency_phone', 'Telephone', 'text', true]]],
+      ['Name', [['emergency_first_name', 'First name', 'text', true], ['emergency_last_name', 'Last name', 'text', true], ['emergency_phone', 'Telephone Number', 'phone', false, 'emergency_phone_area']]],
     ]],
   },
 }
@@ -50,7 +50,7 @@ const SCREENS = {
 const roleText = (role) => String(role || '').replace(/_/g, ' ')
 const editableKeys = (screen) => screen.columns.flat().flatMap(([, fields]) => fields)
   .filter(([, , kind]) => kind !== 'readonly')
-  .flatMap(([key, , kind]) => (kind === 'phone' ? ['phone_area', 'phone'] : [key]))
+  .flatMap(([key, , kind, , areaKey]) => (kind === 'phone' ? [areaKey || 'phone_area', key] : [key]))
 
 export default function MyHRDetails({ storeId, view, onBack }) {
   const [details, setDetails] = useState(null)
@@ -66,6 +66,12 @@ export default function MyHRDetails({ storeId, view, onBack }) {
         if (!live) return
         const base = { ...(loaded || {}) }
         if (!base.country) base.country = 'Canada'
+        // An emergency contact saved before first/last name were separate.
+        if (!base.emergency_first_name && !base.emergency_last_name && base.emergency_name) {
+          const [first, ...rest] = String(base.emergency_name).trim().split(' ')
+          base.emergency_first_name = first
+          base.emergency_last_name = rest.join(' ')
+        }
         setDetails(base)
         setDraft(base)
       })
@@ -120,7 +126,7 @@ export default function MyHRDetails({ storeId, view, onBack }) {
     onBack?.()
   }
 
-  const field = ([key, label, kind = 'text', required]) => {
+  const field = ([key, label, kind = 'text', required, areaKey = 'phone_area']) => {
     let input
     if (kind === 'readonly') {
       input = <input value={draft[key] || ''} readOnly className="readonly" tabIndex={-1} />
@@ -144,8 +150,8 @@ export default function MyHRDetails({ storeId, view, onBack }) {
     } else if (kind === 'phone') {
       input = (
         <span className="myhr-phone">
-          <input value={draft.phone_area || ''} onChange={(event) => set('phone_area', event.target.value)} placeholder="Area" inputMode="tel" aria-label="Area code" />
-          <input value={draft.phone || ''} onChange={(event) => set('phone', event.target.value)} placeholder="Number" inputMode="tel" aria-label="Phone number" />
+          <input value={draft[areaKey] || ''} onChange={(event) => set(areaKey, event.target.value)} placeholder="Area" inputMode="tel" aria-label="Area code" />
+          <input value={draft[key] || ''} onChange={(event) => set(key, event.target.value)} placeholder="Number" inputMode="tel" aria-label="Phone number" />
         </span>
       )
     } else {
