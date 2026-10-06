@@ -40,9 +40,16 @@ function itemLabel(item = {}) {
   return [item.name || item.subject, item.card_number ? `#${item.card_number}` : '', item.release_year].filter(Boolean).join(' · ')
 }
 
+// Cards that are done with (added to stock or skipped).
+const isFinished = (card) => card.status === 'added' || card.status === 'skipped'
+
 export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue = () => {}, onStockChanged = () => {} }) {
-  const [cards, setCards] = useState(savedQueue)
-  const cardsRef = useRef(savedQueue)
+  // Coming back to the screen starts clean: finished cards from last time are
+  // cleared; cards still waiting (identifying, ready, need a look) are kept.
+  const [startQueue] = useState(() => savedQueue.filter((card) => !isFinished(card)))
+  const [cards, setCards] = useState(startQueue)
+  const cardsRef = useRef(startQueue)
+  useEffect(() => { if (startQueue.length !== savedQueue.length) onSaveQueue(startQueue) }, [])
   const [category, setCategory] = useState(() => readScannerPref('storeCategory', 'Sports Cards'))
   const [defaults, setDefaults] = useState(() => ({ condition: 'Near Mint', sellPrice: '', buyPrice: '', ...readScannerPref('storeDefaults', {}) }))
   const [scanner, setScanner] = useState({ state: 'connecting' })
@@ -238,6 +245,15 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     const touched = 'condition' in changes ? { conditionTouched: true } : {}
     save((list) => list.map((card) => (['added', 'adding', 'skipped'].includes(card.status) ? card : { ...card, ...changes, ...touched })))
   }
+
+  // Batch finished (every card added or skipped, by Add all or one at a
+  // time): clear it so the next batch starts at 0.
+  useEffect(() => {
+    if (!cards.length || !cards.every(isFinished)) return
+    const added = cards.filter((card) => card.status === 'added').length
+    setMessage(`Batch finished: ${added} card${added === 1 ? '' : 's'} added to stock.`)
+    save(() => [])
+  }, [cards])
 
   const counts = cards.reduce((acc, card) => ({ ...acc, [card.status]: (acc[card.status] || 0) + 1 }), {})
   const visible = cards.filter((card) => card.status !== 'added' && card.status !== 'skipped')
