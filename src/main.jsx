@@ -37,6 +37,7 @@ import {
   UserPlus,
   Users,
   X,
+  IdCard,
 } from 'lucide-react'
 import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
@@ -882,6 +883,7 @@ function App() {
           <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} notReady />
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
           <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} notReady />
+          <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => requestNavigate('myhr')} notReady />
           <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => requestNavigate('settings')} />
         </nav>
 
