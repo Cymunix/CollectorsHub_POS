@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Search } from 'lucide-react'
 import { loadOrgStaff } from './lib/myhrPay'
 import { OrgJobEditor } from './MyHRJob'
-import { OrgLeaveEntitlements } from './MyHRLeave'
+import { OrgLeaveEntitlements, OrgScheduleProfile } from './MyHRLeave'
 
 // The organization's employees, across all of its stores (org sign-in only).
 // Pick someone to edit their job, pay and leave entitlements; stores can't change these.
@@ -68,6 +68,7 @@ export default function MyHROrgEmployees({ orgId, orgName, onBack, initialSelect
         {selectedId ? (
           <div className="myhr-org-editors">
             <OrgJobEditor orgId={orgId} employeeId={selectedId} onSaved={reload} />
+            <OrgScheduleProfile orgId={orgId} employeeId={selectedId} />
             <OrgLeaveEntitlements orgId={orgId} employeeId={selectedId} />
           </div>
         ) : <p className="myhr-empty">Pick an employee to edit their job, pay and leave entitlements.</p>}

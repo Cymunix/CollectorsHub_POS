@@ -25,7 +25,7 @@ import MyHROrgEmployees from './MyHROrgEmployees'
 
 // Sections with a feature built into the app (open for everyone, with the
 // org's page, if any, underneath).
-const BUILT_SECTIONS = { pay: (session, extras) => <MyHRPay storeId={session?.storeId} onClockChange={extras.onClockChange} onMyHRHome={extras.onHome} /> }
+const BUILT_SECTIONS = { pay: (session, extras) => <MyHRPay storeId={session?.storeId} storeName={extras.storeName} onClockChange={extras.onClockChange} onMyHRHome={extras.onHome} /> }
 
 // MyHR: the employee's own HR hub (pay, time off, training, etc.). The store's
 // organization picks which sections its staff see and writes each section's
@@ -124,7 +124,7 @@ export default function MyHRView({ session, onClockChange }) {
         page={pages[openKey]}
         settings={settings}
         onBack={() => setOpenKey('')}
-        children={(!isOrg && BUILT_SECTIONS[openKey]?.(session, { onClockChange, onHome: () => setOpenKey('') })) || null}
+        children={(!isOrg && BUILT_SECTIONS[openKey]?.(session, { onClockChange, onHome: () => setOpenKey(''), storeName })) || null}
         onSaved={(content) => setSettings((current) => {
           const nextPages = { ...(current?.pages || {}) }
           if (content) nextPages[openKey] = content

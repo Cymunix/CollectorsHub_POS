@@ -8,8 +8,10 @@ import {
   leaveTypeLabel,
   loadMyLeave,
   loadOrgEmployeeAccounts,
+  loadOrgScheduleProfile,
   loadOrgLeaveYear,
   loadMyTimeAccounts,
+  saveOrgScheduleProfile,
   setOrgEntitlement,
   setOrgLeaveYear,
 } from './lib/myhrPay'
@@ -238,6 +240,75 @@ export function OrgLeaveEntitlements({ orgId, employeeId }) {
           </div>
         </form>
       ) : <p className="myhr-empty">Loading…</p>}
+    </section>
+  )
+}
+
+// The organization: one employee's scheduling role, the roles they may also
+// cover (e.g. a Supervisor who can cover Keyholder), and weekly hour targets.
+export function OrgScheduleProfile({ orgId, employeeId }) {
+  const [draft, setDraft] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [problem, setProblem] = useState('')
+
+  useEffect(() => {
+    setNotice('')
+    loadOrgScheduleProfile(orgId, employeeId)
+      .then((row) => setDraft({
+        schedule_role: row?.schedule_role || 'Employee',
+        can_cover: (row?.can_cover || []).join(', '),
+        target_hours: row?.target_hours ?? '',
+        min_hours: row?.min_hours ?? '',
+        max_hours: row?.max_hours ?? '',
+      }))
+      .catch((error) => { setDraft({ schedule_role: 'Employee', can_cover: '', target_hours: '', min_hours: '', max_hours: '' }); setProblem(error?.message || String(error)) })
+  }, [orgId, employeeId])
+
+  if (!draft) return <p className="myhr-empty">Loading…</p>
+  const set = (key) => (event) => setDraft((current) => ({ ...current, [key]: event.target.value }))
+
+  async function save(event) {
+    event.preventDefault()
+    setSaving(true)
+    setProblem('')
+    try {
+      await saveOrgScheduleProfile(orgId, employeeId, {
+        schedule_role: draft.schedule_role,
+        can_cover: String(draft.can_cover).split(',').map((role) => role.trim()).filter(Boolean),
+        target_hours: draft.target_hours === '' ? '' : String(draft.target_hours),
+        min_hours: draft.min_hours === '' ? '' : String(draft.min_hours),
+        max_hours: draft.max_hours === '' ? '' : String(draft.max_hours),
+      })
+      setNotice('Scheduling settings saved.')
+    } catch (error) {
+      setProblem(error?.message || String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="myhr-pay-panel">
+      <h3>Scheduling</h3>
+      <form className="myhr-job-form" onSubmit={save}>
+        <label className="myhr-form-row"><span>Scheduling role:</span>
+          <input list="org-sched-roles" value={draft.schedule_role} onChange={set('schedule_role')} placeholder="e.g. Manager, Supervisor, Employee" />
+        </label>
+        <label className="myhr-form-row"><span>Can also cover:</span>
+          <input list="org-sched-roles" value={draft.can_cover} onChange={set('can_cover')} placeholder="e.g. Keyholder (comma between roles)" />
+        </label>
+        <label className="myhr-form-row"><span>Target hours / week:</span><input type="number" min="0" step="0.5" value={draft.target_hours} onChange={set('target_hours')} /></label>
+        <label className="myhr-form-row"><span>Minimum hours:</span><input type="number" min="0" step="0.5" value={draft.min_hours} onChange={set('min_hours')} /></label>
+        <label className="myhr-form-row"><span>Maximum hours:</span><input type="number" min="0" step="0.5" value={draft.max_hours} onChange={set('max_hours')} /></label>
+        <datalist id="org-sched-roles">{['Manager', 'Supervisor', 'Keyholder', 'Employee', 'Cashier', 'Grader'].map((role) => <option key={role} value={role} />)}</datalist>
+        <div className="myhr-editor-actions">
+          {notice ? <span className="myhr-notice">{notice}</span> : null}
+          <button type="submit" className="gold-button" disabled={saving}>{saving ? 'Saving…' : 'Save scheduling'}</button>
+        </div>
+      </form>
+      <small className="myhr-muted">Store managers use these in the Schedule Builder to check coverage and hours. Staff set their own availability.</small>
+      {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
     </section>
   )
 }

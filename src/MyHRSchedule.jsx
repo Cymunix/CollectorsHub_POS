@@ -1,47 +1,110 @@
 import React, { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
-import { addShift, deleteShift, isoDate, loadMySchedule, loadStoreSchedule, loadStoreStaff, weekStart } from './lib/myhrPay'
+import { ChevronLeft, ChevronRight, MapPin } from 'lucide-react'
+import { isoDate, leaveTypeLabel, loadMyAvailability, loadMyLeave, loadMySchedule, saveMyAvailability } from './lib/myhrPay'
+import { roleColour } from './lib/scheduleRules'
+import ScheduleBuilder from './ScheduleBuilder'
 
-// My Schedule: the employee's shifts for a week (this week by default, with
-// previous/next). Managers also see and build the whole store's week: pick
-// a staff member, day and times, add; remove a shift with the bin.
+// My Schedule: the employee's published shifts for a week (role, location,
+// break, hours, changes since the last publish, time off) and what's coming
+// up; their availability. Managers also get the Schedule Builder tab.
 
+const DAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const timeText = (value) => new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-const dayLabel = (date) => date.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
-const hours = (shift) => (new Date(shift.ends_at) - new Date(shift.starts_at)) / 3600000
+const paidHours = (shift) => Math.max(0, (new Date(shift.ends_at) - new Date(shift.starts_at)) / 3600000 - Number(shift.break_minutes || 0) / 60)
+const hoursText = (value) => `${Math.round(value * 100) / 100}h`
 
-export default function MyHRSchedule({ storeId, isManager }) {
-  const [start, setStart] = useState(() => weekStart(new Date()))
-  const [mine, setMine] = useState([])
-  const [store, setStore] = useState([])
-  const [staff, setStaff] = useState([])
+function mondayOf(date) {
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  day.setDate(day.getDate() - ((day.getDay() + 6) % 7))
+  return day
+}
+
+function Availability({ storeId }) {
+  const [availability, setAvailability] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState('')
   const [problem, setProblem] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [form, setForm] = useState({ employeeId: '', day: isoDate(new Date()), from: '10:00', to: '18:00', note: '' })
+  useEffect(() => { loadMyAvailability(storeId).then((value) => setAvailability(value || {})).catch((error) => { setAvailability({}); setProblem(error?.message || String(error)) }) }, [storeId])
+  if (!availability) return null
+
+  // Per weekday: missing = any time; [] = unavailable; [{from,to}] = only then.
+  const modeOf = (day) => (!Array.isArray(availability[day]) ? 'any' : availability[day].length ? 'hours' : 'none')
+  const setDay = (day, value) => setAvailability((current) => {
+    const next = { ...current }
+    if (value === undefined) delete next[day]
+    else next[day] = value
+    return next
+  })
+
+  async function save() {
+    setSaving(true)
+    setProblem('')
+    try {
+      await saveMyAvailability(storeId, availability)
+      setNotice('Availability saved. Managers see it when building the schedule.')
+    } catch (error) {
+      setProblem(error?.message || String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="myhr-pay-panel">
+      <h3>My availability</h3>
+      <div className="ms-availability">
+        {[1, 2, 3, 4, 5, 6, 0].map((weekday) => {
+          const day = String(weekday)
+          const mode = modeOf(day)
+          const window = availability[day]?.[0] || { from: '09:00', to: '17:00' }
+          return (
+            <div key={day} className="ms-avail-day">
+              <strong>{DAY_LONG[weekday]}</strong>
+              <select value={mode} onChange={(event) => setDay(day, event.target.value === 'any' ? undefined : event.target.value === 'none' ? [] : [window])}>
+                <option value="any">Available any time</option>
+                <option value="hours">Only between…</option>
+                <option value="none">Not available</option>
+              </select>
+              {mode === 'hours' ? (
+                <span className="ms-avail-hours">
+                  <input type="time" value={window.from} onChange={(event) => setDay(day, [{ ...window, from: event.target.value }])} aria-label="From" />
+                  <input type="time" value={window.to} onChange={(event) => setDay(day, [{ ...window, to: event.target.value }])} aria-label="To" />
+                </span>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+      <div className="myhr-editor-actions">
+        {notice ? <span className="myhr-notice">{notice}</span> : null}
+        <button type="button" className="gold-button" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save availability'}</button>
+      </div>
+      {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
+    </section>
+  )
+}
+
+function MyShifts({ storeId, storeName }) {
+  const [start, setStart] = useState(() => mondayOf(new Date()))
+  const [shifts, setShifts] = useState(null)
+  const [upcoming, setUpcoming] = useState([])
+  const [leave, setLeave] = useState([])
+  const [problem, setProblem] = useState('')
 
   const end = new Date(start)
   end.setDate(end.getDate() + 7)
   const days = Array.from({ length: 7 }, (_, index) => { const day = new Date(start); day.setDate(day.getDate() + index); return day })
 
-  async function reload() {
-    try {
-      const [myShifts, storeShifts, people] = await Promise.all([
-        loadMySchedule(storeId, start, end),
-        isManager ? loadStoreSchedule(storeId, start, end) : Promise.resolve([]),
-        isManager && !staff.length ? loadStoreStaff(storeId) : Promise.resolve(null),
-      ])
-      setMine(myShifts)
-      setStore(storeShifts)
-      if (people) {
-        setStaff(people)
-        setForm((current) => ({ ...current, employeeId: current.employeeId || people[0]?.id || '' }))
-      }
-      setProblem('')
-    } catch (error) {
-      setProblem(error?.message || String(error))
-    }
-  }
-  useEffect(() => { reload() }, [storeId, start.getTime(), isManager])
+  useEffect(() => {
+    let live = true
+    const now = new Date()
+    const soon = new Date()
+    soon.setDate(soon.getDate() + 14)
+    Promise.all([loadMySchedule(storeId, start, end), loadMySchedule(storeId, now, soon), loadMyLeave(storeId)])
+      .then(([week, next, myLeave]) => { if (live) { setShifts(week); setUpcoming(next); setLeave(myLeave); setProblem('') } })
+      .catch((error) => { if (live) { setShifts([]); setProblem(error?.message || String(error)) } })
+    return () => { live = false }
+  }, [storeId, start.getTime()])
 
   function moveWeek(weeks) {
     const next = new Date(start)
@@ -49,104 +112,73 @@ export default function MyHRSchedule({ storeId, isManager }) {
     setStart(next)
   }
 
-  async function submit(event) {
-    event.preventDefault()
-    const startsAt = new Date(`${form.day}T${form.from}:00`)
-    let endsAt = new Date(`${form.day}T${form.to}:00`)
-    if (endsAt <= startsAt) endsAt = new Date(endsAt.getTime() + 86400000) // overnight shift
-    if (!form.employeeId) { setProblem('Pick who the shift is for.'); return }
-    setBusy(true)
-    try {
-      await addShift(storeId, { employeeId: form.employeeId, startsAt, endsAt, note: form.note })
-      setForm((current) => ({ ...current, note: '' }))
-      await reload()
-    } catch (error) {
-      setProblem(error?.message || String(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function remove(shiftId) {
-    setBusy(true)
-    try {
-      await deleteShift(storeId, shiftId)
-      await reload()
-    } catch (error) {
-      setProblem(error?.message || String(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onDay = (list, day) => list.filter((shift) => isoDate(new Date(shift.starts_at)) === isoDate(day))
-  const myHours = mine.reduce((sum, shift) => sum + hours(shift), 0)
+  const offOn = (iso) => leave.find((request) => ['approved', 'pending'].includes(request.status) && request.start_date <= iso && request.end_date >= iso)
+  const total = (shifts || []).reduce((sum, shift) => sum + paidHours(shift), 0)
+  const changed = (shifts || []).filter((shift) => shift.changed).length
 
   return (
-    <div className="myhr-schedule">
+    <div className="ms-mine">
       <div className="myhr-week-nav">
         <button type="button" onClick={() => moveWeek(-1)} aria-label="Previous week"><ChevronLeft size={18} /></button>
         <strong>Week of {start.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}</strong>
         <button type="button" onClick={() => moveWeek(1)} aria-label="Next week"><ChevronRight size={18} /></button>
-        <button type="button" className="myhr-week-today" onClick={() => setStart(weekStart(new Date()))}>This week</button>
+        <button type="button" className="myhr-week-today" onClick={() => setStart(mondayOf(new Date()))}>This week</button>
+        <span className="ms-total">{hoursText(total)} scheduled{changed ? <b className="ms-changed"> · {changed} changed</b> : null}</span>
       </div>
       {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
-
+      <div className="ms-week">
+        {days.map((date) => {
+          const iso = isoDate(date)
+          const dayShifts = (shifts || []).filter((shift) => isoDate(new Date(shift.starts_at)) === iso)
+          const off = offOn(iso)
+          return (
+            <div key={iso} className={`ms-day${iso === isoDate(new Date()) ? ' today' : ''}`}>
+              <strong>{DAY_LONG[date.getDay()].slice(0, 3)} {date.getDate()}</strong>
+              {off ? <span className={`ms-off ${off.status}`}>{leaveTypeLabel(off.leave_type)}{off.status === 'pending' ? ' (requested)' : ''}</span> : null}
+              {dayShifts.map((shift) => (
+                <span key={shift.id} className={`ms-shift${shift.changed ? ' changed' : ''}`} style={{ '--role': roleColour(shift.role || 'Employee') }}>
+                  <b>{shift.role || 'Shift'}</b>
+                  <span>{timeText(shift.starts_at)} – {timeText(shift.ends_at)} · {hoursText(paidHours(shift))}</span>
+                  {Number(shift.break_minutes) ? <small>{shift.break_minutes} min break</small> : null}
+                  {shift.note ? <small>{shift.note}</small> : null}
+                  <small className="ms-where"><MapPin size={11} /> {storeName}</small>
+                  {shift.changed ? <em>Changed</em> : null}
+                </span>
+              ))}
+              {shifts && !dayShifts.length && !off ? <small className="myhr-muted">Off</small> : null}
+            </div>
+          )
+        })}
+      </div>
       <section className="myhr-pay-panel">
-        <h3>My shifts <small className="myhr-muted">{myHours ? `${myHours.toFixed(1)} h scheduled` : ''}</small></h3>
-        {mine.length ? (
+        <h3>Coming up (next 2 weeks)</h3>
+        {upcoming.length ? (
           <ul className="myhr-pay-list compact">
-            {mine.map((shift) => (
+            {upcoming.map((shift) => (
               <li key={shift.id}>
-                <span><strong>{dayLabel(new Date(shift.starts_at))}</strong> <small>{timeText(shift.starts_at)} – {timeText(shift.ends_at)}{shift.note ? ` · ${shift.note}` : ''}</small></span>
-                <b>{hours(shift).toFixed(1)} h</b>
+                <span><strong>{new Date(shift.starts_at).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}</strong> <small>{timeText(shift.starts_at)} – {timeText(shift.ends_at)}{shift.role ? ` · ${shift.role}` : ''}{shift.changed ? ' · changed' : ''}</small></span>
+                <b>{hoursText(paidHours(shift))}</b>
               </li>
             ))}
           </ul>
-        ) : <p className="myhr-empty">No shifts scheduled for you this week.</p>}
+        ) : <p className="myhr-empty">No published shifts in the next two weeks.</p>}
       </section>
+    </div>
+  )
+}
 
-      {isManager ? (
-        <section className="myhr-pay-panel">
-          <h3>Store schedule</h3>
-          <form className="myhr-shift-form" onSubmit={submit}>
-            <label>Staff
-              <select value={form.employeeId} onChange={(event) => setForm((current) => ({ ...current, employeeId: event.target.value }))}>
-                {staff.map((person) => <option key={person.id} value={person.id}>{person.name}{person.role ? ` (${String(person.role).replace(/_/g, ' ')})` : ''}</option>)}
-              </select>
-            </label>
-            <label>Day
-              <input type="date" value={form.day} onChange={(event) => setForm((current) => ({ ...current, day: event.target.value }))} />
-            </label>
-            <label>From
-              <input type="time" value={form.from} onChange={(event) => setForm((current) => ({ ...current, from: event.target.value }))} />
-            </label>
-            <label>To
-              <input type="time" value={form.to} onChange={(event) => setForm((current) => ({ ...current, to: event.target.value }))} />
-            </label>
-            <label className="wide">Note (optional)
-              <input value={form.note} onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))} placeholder="e.g. opening, card show" />
-            </label>
-            <button type="submit" className="gold-button" disabled={busy}><Plus size={15} /> Add shift</button>
-          </form>
-
-          <div className="myhr-week-grid">
-            {days.map((day) => (
-              <div key={day.toISOString()} className={`myhr-week-day${isoDate(day) === isoDate(new Date()) ? ' today' : ''}`}>
-                <strong>{day.toLocaleDateString([], { weekday: 'short', day: 'numeric' })}</strong>
-                {onDay(store, day).map((shift) => (
-                  <span key={shift.id} className="myhr-week-shift" title={shift.note || ''}>
-                    <b>{shift.employee_name}</b>
-                    <small>{timeText(shift.starts_at)} – {timeText(shift.ends_at)}</small>
-                    <button type="button" onClick={() => remove(shift.id)} disabled={busy} aria-label={`Remove ${shift.employee_name}'s shift`}><Trash2 size={13} /></button>
-                  </span>
-                ))}
-                {!onDay(store, day).length ? <small className="myhr-muted">No one</small> : null}
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
+export default function MyHRSchedule({ storeId, isManager, storeName = 'Store' }) {
+  const [tab, setTab] = useState('mine')
+  return (
+    <div className="myhr-schedule">
+      <div className="ts-tabs ms-tabs" role="tablist">
+        {[['mine', 'My Schedule'], ['availability', 'My Availability'], ...(isManager ? [['builder', 'Schedule Builder']] : [])].map(([key, label]) => (
+          <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>
+        ))}
+      </div>
+      {tab === 'mine' ? <MyShifts storeId={storeId} storeName={storeName} /> : null}
+      {tab === 'availability' ? <Availability storeId={storeId} /> : null}
+      {tab === 'builder' && isManager ? <ScheduleBuilder storeId={storeId} /> : null}
     </div>
   )
 }

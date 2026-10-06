@@ -65,7 +65,7 @@ const dateText = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString([], { m
 const rangeText = (start, end) => (start === end ? dateText(start) : `${dateText(start)} – ${dateText(end)}`)
 const STATUS_TEXT = { pending: 'Waiting for approval', approved: 'Approved', declined: 'Declined', cancelled: 'Cancelled' }
 
-export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialView = 'home' }) {
+export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, onMyHRHome, initialView = 'home' }) {
   const [view, setView] = useState(initialView)
   const [now, setNow] = useState(Date.now())
   const [entries, setEntries] = useState([])
@@ -320,7 +320,7 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
       </>
     )
   } else if (view === 'schedule') {
-    body = <MyHRSchedule storeId={storeId} isManager={isManager} />
+    body = <MyHRSchedule storeId={storeId} isManager={isManager} storeName={storeName} />
   } else if (view === 'job') {
     body = <MyHRJob storeId={storeId} />
   } else if (view === 'family') {

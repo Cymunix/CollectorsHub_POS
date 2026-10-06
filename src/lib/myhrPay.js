@@ -98,9 +98,6 @@ export const isoDate = (date) => `${date.getFullYear()}-${String(date.getMonth()
 export const loadMySchedule = async (storeId, from, to) => (await call('myhr_my_schedule', { p_store_id: storeId, p_from: from.toISOString(), p_to: to.toISOString() })) || []
 export const loadStoreStaff = async (storeId) => (await call('myhr_store_staff', { p_store_id: storeId })) || []
 export const loadStoreSchedule = async (storeId, from, to) => (await call('myhr_store_schedule', { p_store_id: storeId, p_from: from.toISOString(), p_to: to.toISOString() })) || []
-export const addShift = (storeId, { employeeId, startsAt, endsAt, note }) => call('myhr_add_shift', {
-  p_store_id: storeId, p_employee_id: employeeId, p_starts_at: startsAt.toISOString(), p_ends_at: endsAt.toISOString(), p_note: note || null,
-})
 export const deleteShift = (storeId, shiftId) => call('myhr_delete_shift', { p_store_id: storeId, p_shift_id: shiftId })
 export const loadMyDetails = async (storeId) => {
   const data = await call('myhr_my_details', { p_store_id: storeId })
@@ -181,3 +178,21 @@ export const LEAVE_DESCRIPTIONS = {
   unpaid: 'Unpaid leave',
   other: 'Other leave (explain in the comments)',
 }
+
+// Part 8 (supabase/myhr_schedule_builder.sql): the Schedule Builder.
+export const loadScheduleStaff = async (storeId) => (await call('myhr_schedule_staff', { p_store_id: storeId })) || []
+export const loadCoverageRules = async (storeId) => (await call('myhr_coverage_rules', { p_store_id: storeId })) || []
+export const saveCoverageRule = (storeId, { id, weekday, start, end, role, needed, label }) => call('myhr_save_coverage_rule', {
+  p_store_id: storeId, p_id: id || null, p_weekday: weekday, p_start: start, p_end: end, p_role: role, p_needed: needed, p_label: label || null,
+})
+export const deleteCoverageRule = (storeId, id) => call('myhr_delete_coverage_rule', { p_store_id: storeId, p_id: id })
+export const saveShift = (storeId, { id, employeeId, startsAt, endsAt, role, breakMinutes, note }) => call('myhr_save_shift', {
+  p_store_id: storeId, p_shift_id: id || null, p_employee_id: employeeId, p_starts_at: new Date(startsAt).toISOString(), p_ends_at: new Date(endsAt).toISOString(),
+  p_role: role || null, p_break_minutes: Number(breakMinutes || 0), p_note: note || null,
+})
+export const loadScheduleWeek = async (storeId, weekStart) => firstRow(await call('myhr_schedule_week', { p_store_id: storeId, p_week_start: weekStart }))
+export const publishSchedule = (storeId, weekStart) => call('myhr_publish_schedule', { p_store_id: storeId, p_week_start: weekStart })
+export const loadMyAvailability = async (storeId) => (await call('myhr_my_availability', { p_store_id: storeId })) || {}
+export const saveMyAvailability = (storeId, availability) => call('myhr_save_my_availability', { p_store_id: storeId, p_availability: availability })
+export const loadOrgScheduleProfile = async (orgId, employeeId) => firstRow(await call('myhr_org_schedule_profile', { p_org_id: orgId, p_employee_id: employeeId }))
+export const saveOrgScheduleProfile = (orgId, employeeId, profile) => call('myhr_org_save_schedule_profile', { p_org_id: orgId, p_employee_id: employeeId, p_profile: profile })

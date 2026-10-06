@@ -6,6 +6,7 @@ import ClockInGate from './ClockInGate'
 import MyHRView from './MyHR'
 import MyHRPay from './MyHRPay'
 import MyHROrgEmployees from './MyHROrgEmployees'
+import ScheduleBuilder from './ScheduleBuilder'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
 // data, no sign-in and nothing saved, so they can be looked at and
@@ -55,6 +56,32 @@ const SAMPLE = {
     ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
   ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
   myhr_org_leave_year: 4,
+  myhr_schedule_staff: [
+    { id: 'm1', name: 'Morgan Lee', short_name: 'Morgan L.', schedule_role: 'Manager', can_cover: ['Keyholder'], target_hours: 40, min_hours: 32, max_hours: 44, availability: {}, hourly_cost: 26 },
+    { id: 's1', name: 'Sarah Moss', short_name: 'Sarah M.', schedule_role: 'Supervisor', can_cover: ['Keyholder'], target_hours: 40, max_hours: 44, availability: {}, hourly_cost: 20 },
+    { id: 'j1', name: 'Jake Ray', short_name: 'Jake R.', schedule_role: 'Employee', can_cover: [], target_hours: 25, min_hours: 20, availability: {}, hourly_cost: 16.5 },
+    { id: 'a1', name: 'Alex Kim', short_name: 'Alex K.', schedule_role: 'Employee', can_cover: [], target_hours: 24, availability: { 1: [{ from: '09:00', to: '17:00' }], 2: [{ from: '09:00', to: '17:00' }], 3: [{ from: '09:00', to: '17:00' }], 4: [{ from: '09:00', to: '17:00' }], 5: [{ from: '09:00', to: '17:00' }], 6: [{ from: '09:00', to: '17:00' }] }, hourly_cost: 16 },
+  ],
+  myhr_coverage_rules: [
+    ...[1, 2, 3, 4, 5].map((weekday) => ({ id: 'w' + weekday, weekday, start_time: '10:00:00', end_time: '18:00:00', role: 'Manager', needed: 1, label: null })),
+    ...[1, 2, 3, 4, 5].map((weekday) => ({ id: 'e' + weekday, weekday, start_time: '12:00:00', end_time: '16:00:00', role: 'Employee', needed: 1, label: null })),
+    { id: 's-m', weekday: 6, start_time: '09:00:00', end_time: '17:00:00', role: 'Manager', needed: 1, label: null },
+    { id: 's-e', weekday: 6, start_time: '09:00:00', end_time: '17:00:00', role: 'Employee', needed: 2, label: null },
+    { id: 's-c', weekday: 6, start_time: '17:00:00', end_time: '21:00:00', role: 'Keyholder', needed: 1, label: 'Closing' },
+  ],
+  myhr_store_schedule: () => {
+    const monday = new Date(); monday.setHours(0, 0, 0, 0); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7) + 7)
+    const at = (dayOffset, h, m = 0) => { const date = new Date(monday); date.setDate(monday.getDate() + dayOffset); date.setHours(h, m, 0, 0); return date.toISOString() }
+    const list = []
+    let n = 0
+    const add = (employee_id, d, from, to, role = null, breakMinutes = 30) => list.push({ id: 'sh' + (n += 1), employee_id, starts_at: at(d, from), ends_at: at(d, to), role, break_minutes: breakMinutes })
+    for (const d of [0, 1, 2, 3, 4]) add('m1', d, 10, 18)
+    add('s1', 0, 12, 20, null, 30); add('s1', 1, 9, 21, null, 60); add('s1', 2, 9, 21, null, 60); add('s1', 3, 9, 19); add('s1', 5, 9, 17)
+    add('j1', 0, 12, 16, null, 0); add('j1', 2, 12, 16, null, 0); add('j1', 5, 9, 17)
+    add('a1', 1, 12, 16, null, 0); add('a1', 4, 12, 16, null, 0); add('a1', 4, 13, 17, null, 0); add('a1', 5, 12, 19)
+    return list
+  },
+  myhr_schedule_week: [{ version: 1, published_at: new Date(Date.now() - 86400000).toISOString(), shifts: [] }],
   myhr_team_members: [
     { id: 'e1', name: 'Mx Jordan Sample', first_name: 'Jordan', last_name: 'Sample', is_me: true },
     { id: 'e2', name: 'Casey Lee', first_name: 'Casey', last_name: 'Lee', is_me: false },
@@ -107,20 +134,11 @@ const SAMPLE = {
     { id: 'e3', name: 'Casey Lee', role: 'cashier' },
   ],
   myhr_my_schedule: [
-    { id: 'm1', starts_at: day(monday, 10), ends_at: day(monday, 18) },
-    { id: 'm2', starts_at: day(monday + 2, 12), ends_at: day(monday + 2, 20), note: 'Card night' },
-    { id: 'm3', starts_at: day(monday + 5, 9), ends_at: day(monday + 5, 17) },
+    { id: 'm1', starts_at: day(monday, 10), ends_at: day(monday, 18), role: 'Manager', break_minutes: 30 },
+    { id: 'm2', starts_at: day(monday + 2, 12), ends_at: day(monday + 2, 20), note: 'Card night', role: 'Manager', break_minutes: 30, changed: true },
+    { id: 'm3', starts_at: day(monday + 5, 9), ends_at: day(monday + 5, 17), role: 'Keyholder', break_minutes: 30 },
   ],
-  myhr_store_schedule: [
-    { id: 'm1', employee_name: 'HaydenM8', starts_at: day(monday, 10), ends_at: day(monday, 18) },
-    { id: 'x1', employee_name: 'Jordan Smith', starts_at: day(monday, 12), ends_at: day(monday, 20) },
-    { id: 'x2', employee_name: 'Casey Lee', starts_at: day(monday + 1, 10), ends_at: day(monday + 1, 18) },
-    { id: 'm2', employee_name: 'HaydenM8', starts_at: day(monday + 2, 12), ends_at: day(monday + 2, 20) },
-    { id: 'x3', employee_name: 'Jordan Smith', starts_at: day(monday + 3, 10), ends_at: day(monday + 3, 16) },
-    { id: 'x4', employee_name: 'Casey Lee', starts_at: day(monday + 4, 12), ends_at: day(monday + 4, 20) },
-    { id: 'm3', employee_name: 'HaydenM8', starts_at: day(monday + 5, 9), ends_at: day(monday + 5, 17) },
-    { id: 'x5', employee_name: 'Jordan Smith', starts_at: day(monday + 5, 12), ends_at: day(monday + 5, 20) },
-  ],
+
   myhr_my_job: [{ employee_id: 'e1', personnel_number: '4000001', name: 'Mx Jordan Sample', personnel_area: 'Nordvik Collectibles', business_area: 'Main Store', employee_group: 'Employee', employee_subgroup: 'Part-time hourly', position_title: 'Store Manager', pay_type: 'hourly', pay_rate: 21.5, hours_per_period: 56, pay_period: 'biweekly', next_increase: '2027-01-01', changed_by_name: 'Store owner', changed_at: '2026-09-01T12:00:00Z' }],
   get myhr_org_employee_accounts() { return this.myhr_my_time_accounts },
   myhr_org_staff: [
@@ -158,6 +176,7 @@ function OrgEmployeesPreview() {
 function Preview() {
   let content
   if (screen === 'org-employees') content = <OrgEmployeesPreview />
+  else if (screen === 'builder') content = <ScheduleBuilder storeId={storeId} />
   else if (screen === 'clockin') content = <ClockInGate name="HaydenM8" onClockIn={async () => {}} onOpenMyHR={() => {}} />
   else if (payViews[screen]) content = <MyHRPay storeId={storeId} initialView={payViews[screen]} />
   else content = <MyHRView session={session} />
