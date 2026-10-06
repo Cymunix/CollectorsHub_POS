@@ -1,5 +1,12 @@
 const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } = require('electron')
 const path = require('node:path')
+
+// Live-reload development copy (npm run dev): its own data folder, so it can
+// run next to the installed app without the two overwriting each other's
+// saved data. Both still use the same Supabase.
+if (process.env.NORDVIK_DESKTOP_RENDERER_URL) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'collectorshub-pos-dev'))
+}
 const { appendFile, copyFile, mkdir, readdir, readFile, stat, statfs, unlink, writeFile } = require('node:fs/promises')
 const { existsSync, readFileSync } = require('node:fs')
 const { pathToFileURL } = require('node:url')
