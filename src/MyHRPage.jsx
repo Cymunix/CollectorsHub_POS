@@ -5,10 +5,12 @@ import { cleanMyHRPage, hasMyHRPage, saveMyHRPage } from './lib/myhrSettings'
 // One MyHR section's page, written by the organization: an intro, a notice,
 // a main button (e.g. the payroll portal) and groups of links to forms and
 // guides. Links open in the browser. The org owner can edit it in place.
+// A section with a built feature (children, e.g. the time clock and leave on
+// My Pay) shows it first, with the org's page underneath.
 
 const openLink = (url) => window.open(url, '_blank')
 
-export default function MyHRPage({ section, page, settings, onBack, onSaved }) {
+export default function MyHRPage({ section, page, settings, onBack, onSaved, children = null }) {
   const [draft, setDraft] = useState(null)
   const Icon = section.icon
 
@@ -24,6 +26,9 @@ export default function MyHRPage({ section, page, settings, onBack, onSaved }) {
         <span className="myhr-logo" aria-hidden="true"><Icon size={28} /></span>
         <h2>{section.label}</h2>
       </header>
+
+      {children && !draft ? children : null}
+      {children && !draft && (hasMyHRPage(page) || settings?.canEdit) ? <h3 className="myhr-page-subhead">From {settings?.organizationName || 'your organization'}</h3> : null}
 
       {draft ? (
         <PageEditor
@@ -59,7 +64,7 @@ export default function MyHRPage({ section, page, settings, onBack, onSaved }) {
             </div>
           ))}
         </div>
-      ) : (
+      ) : children ? null : (
         <p className="myhr-empty">
           {settings?.canEdit ? 'This page is empty. Use Edit page to add what your staff need here.' : "Your organization hasn't set up this page yet."}
         </p>

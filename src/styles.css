@@ -9667,3 +9667,241 @@ button.condition-hint {
   font-weight: 800;
   padding: 8px 16px;
 }
+
+/* MyHR: My Pay, Vacation & Leaves */
+.myhr-pay {
+  display: grid;
+  gap: 16px;
+  max-width: 1280px;
+}
+
+.myhr-pay-cards {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(240px, 1.3fr) repeat(2, minmax(150px, 1fr)) minmax(220px, 1.2fr);
+}
+
+.myhr-pay-card {
+  align-content: start;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.myhr-pay-card-label {
+  align-items: center;
+  color: #8a6a17;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 900;
+  gap: 6px;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.myhr-pay-card strong {
+  color: #172235;
+  font-size: 17px;
+}
+
+.myhr-pay-card .myhr-pay-big {
+  font-family: "Space Grotesk", Manrope, sans-serif;
+  font-size: 28px;
+}
+
+.myhr-pay-card small {
+  color: #5b6677;
+  font-weight: 700;
+}
+
+.myhr-clock {
+  border-left: 4px solid #d6a632;
+}
+
+.myhr-clock button,
+.myhr-leave-form button {
+  align-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 800;
+  gap: 6px;
+  justify-self: start;
+  margin-top: 4px;
+  padding: 9px 16px;
+}
+
+.myhr-clock .myhr-clock-out {
+  background: #172235;
+  border-color: #172235;
+  color: #ffffff;
+}
+
+.myhr-pay-totals {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.myhr-pay-totals li {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+}
+
+.myhr-pay-totals li span {
+  color: #34455f;
+  flex: 1;
+  font-weight: 700;
+}
+
+.myhr-pay-columns {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+}
+
+.myhr-pay-panel {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+}
+
+.myhr-pay-panel h3 {
+  color: #172235;
+  font-size: 17px;
+  margin: 0;
+}
+
+.myhr-pay-panel h4 {
+  color: #34455f;
+  font-size: 14px;
+  margin: 6px 0 0;
+}
+
+.myhr-leave-form {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1.1fr 1fr 1fr .6fr;
+}
+
+.myhr-leave-form label {
+  color: #34455f;
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.myhr-leave-form label.wide {
+  grid-column: 1 / -2;
+}
+
+.myhr-leave-form input,
+.myhr-leave-form select {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 9px;
+}
+
+.myhr-pay-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.myhr-pay-list li {
+  align-items: center;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+
+.myhr-pay-list li > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.myhr-pay-list.compact li > span:first-child {
+  display: block;
+}
+
+.myhr-pay-list small {
+  color: #5b6677;
+  font-weight: 600;
+}
+
+.myhr-pay-actions {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.myhr-pay-actions button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 4px;
+  padding: 6px 10px;
+}
+
+.myhr-pay-actions .myhr-approve {
+  background: #e3f6e8;
+  border-color: #9fd3ad;
+  color: #1d6b35;
+}
+
+.myhr-pay-actions .myhr-decline {
+  color: #a12020;
+}
+
+.myhr-status {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+
+.myhr-status.pending { background: #fff4dc; color: #8a5d00; }
+.myhr-status.approved { background: #e3f6e8; color: #1d6b35; }
+.myhr-status.declined { background: #fde8e8; color: #8a1c1c; }
+.myhr-status.cancelled { background: #eef1f5; color: #5b6677; }
+
+.myhr-page-subhead {
+  color: #172235;
+  font-size: 18px;
+  margin: 8px 0 -4px;
+}
+
+@media (max-width: 1200px) {
+  .myhr-pay-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .myhr-pay-columns { grid-template-columns: 1fr; }
+}

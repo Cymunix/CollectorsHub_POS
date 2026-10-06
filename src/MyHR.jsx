@@ -19,6 +19,11 @@ import {
 import { loadStoreName } from './lib/auth'
 import { hasMyHRPage, loadMyHRSettings, saveMyHRSections } from './lib/myhrSettings'
 import MyHRPage from './MyHRPage'
+import MyHRPay from './MyHRPay'
+
+// Sections with a feature built into the app (open for everyone, with the
+// org's page, if any, underneath).
+const BUILT_SECTIONS = { pay: (session) => <MyHRPay storeId={session?.storeId} /> }
 
 // MyHR: the employee's own HR hub (pay, time off, training, etc.). The store's
 // organization picks which sections its staff see and writes each section's
@@ -110,6 +115,7 @@ export default function MyHRView({ session }) {
         page={pages[openKey]}
         settings={settings}
         onBack={() => setOpenKey('')}
+        children={BUILT_SECTIONS[openKey]?.(session) || null}
         onSaved={(content) => setSettings((current) => {
           const nextPages = { ...(current?.pages || {}) }
           if (content) nextPages[openKey] = content
@@ -176,7 +182,7 @@ export default function MyHRView({ session }) {
             }
             // Staff open pages the org has written; the org owner can open any
             // (to write it).
-            const written = hasMyHRPage(pages[section.key])
+            const written = hasMyHRPage(pages[section.key]) || Boolean(BUILT_SECTIONS[section.key])
             const open = written || settings?.canEdit ? () => setOpenKey(section.key) : null
             const waiting = settings ? 'Not set up by your organization yet' : 'Coming soon'
             return (
