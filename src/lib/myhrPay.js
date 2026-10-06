@@ -98,3 +98,21 @@ export const saveFamilyMember = (storeId, { id, relationship, name, dateOfBirth,
   p_store_id: storeId, p_id: id || null, p_relationship: relationship, p_name: name, p_date_of_birth: dateOfBirth || null, p_gender: gender || null,
 })
 export const deleteFamilyMember = (storeId, id) => call('myhr_delete_family_member', { p_store_id: storeId, p_id: id })
+
+// Part 4 (supabase/myhr_job.sql): job information.
+const firstRow = (data) => (Array.isArray(data) ? data[0] : data) || null
+export const loadMyJob = async (storeId) => firstRow(await call('myhr_my_job', { p_store_id: storeId }))
+export const loadStaffJob = async (storeId, employeeId) => firstRow(await call('myhr_staff_job', { p_store_id: storeId, p_employee_id: employeeId }))
+export const saveStaffJob = (storeId, employeeId, job) => call('myhr_save_staff_job', { p_store_id: storeId, p_employee_id: employeeId, p_job: job })
+
+export const PAY_PERIODS = [['weekly', 'Weekly', 52], ['biweekly', 'Bi-weekly', 26], ['semimonthly', 'Semi-monthly', 24], ['monthly', 'Monthly', 12]]
+// Pay for one pay period, and the projected annual pay (null when not enough is set).
+export function payFigures(job) {
+  const rate = Number(job?.pay_rate)
+  const periods = (PAY_PERIODS.find(([key]) => key === job?.pay_period) || [])[2]
+  if (!(rate > 0) || !periods) return { perPeriod: null, annual: null }
+  if (job.pay_type === 'salary') return { perPeriod: rate / periods, annual: rate }
+  const hours = Number(job?.hours_per_period)
+  if (!(hours > 0)) return { perPeriod: null, annual: null }
+  return { perPeriod: rate * hours, annual: rate * hours * periods }
+}

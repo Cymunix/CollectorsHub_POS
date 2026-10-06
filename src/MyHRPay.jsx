@@ -33,6 +33,7 @@ import {
 } from './lib/myhrPay'
 import MyHRDetails from './MyHRDetails'
 import MyHRFamily from './MyHRFamily'
+import MyHRJob from './MyHRJob'
 import MyHRSchedule from './MyHRSchedule'
 
 // My Pay, Vacation & Leaves: an employee self-service directory (personal
@@ -392,6 +393,8 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
     )
   } else if (view === 'schedule') {
     body = <MyHRSchedule storeId={storeId} isManager={isManager} />
+  } else if (view === 'job') {
+    body = <MyHRJob storeId={storeId} />
   } else if (view === 'family') {
     body = <MyHRFamily storeId={storeId} />
   } else if (['personal', 'addresses', 'emergency', 'job'].includes(view)) {

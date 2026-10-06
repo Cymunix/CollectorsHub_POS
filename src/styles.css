@@ -10564,3 +10564,102 @@ button.condition-hint {
   text-align: right;
   width: 110px;
 }
+
+/* MyHR Job Information */
+.myhr-job-page {
+  display: grid;
+  gap: 16px;
+  max-width: 1100px;
+}
+
+.myhr-job {
+  display: grid;
+  gap: 12px;
+}
+
+.myhr-job-grid {
+  align-items: center;
+  display: grid;
+  gap: 8px 14px;
+  grid-template-columns: 170px minmax(0, 1fr) 170px minmax(0, 1.4fr);
+}
+
+.myhr-job-label {
+  color: #34455f;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.myhr-job-value {
+  background: #eef2f7;
+  border: 1px solid #d5dfeb;
+  border-radius: 5px;
+  color: #172235;
+  font-size: 14px;
+  font-weight: 700;
+  min-height: 30px;
+  padding: 5px 9px;
+}
+
+.myhr-job-heading {
+  border-bottom: 1px solid #dbe3ee;
+  color: #172235;
+  font-size: 18px;
+  margin: 10px 0 2px;
+  padding-bottom: 6px;
+}
+
+.myhr-wage-table {
+  border-collapse: collapse;
+  font-size: 14px;
+  width: 100%;
+}
+
+.myhr-wage-table th {
+  background: #eef2f7;
+  border: 1px solid #d5dfeb;
+  color: #34455f;
+  font-weight: 800;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.myhr-wage-table td {
+  border: 1px solid #e2e8f0;
+  color: #172235;
+  font-weight: 600;
+  padding: 7px 9px;
+}
+
+.myhr-wage-table .num {
+  text-align: right;
+}
+
+.myhr-job-form {
+  display: grid;
+  gap: 8px 30px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.myhr-job-form .myhr-form-row {
+  grid-template-columns: 150px minmax(0, 1fr);
+}
+
+.myhr-job-form .myhr-editor-actions {
+  align-items: center;
+  grid-column: 1 / -1;
+}
+
+.myhr-job-form .gold-button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 8px 18px;
+}
+
+@media (max-width: 1100px) {
+  .myhr-job-grid { grid-template-columns: 150px minmax(0, 1fr); }
+  .myhr-job-form { grid-template-columns: 1fr; }
+}
