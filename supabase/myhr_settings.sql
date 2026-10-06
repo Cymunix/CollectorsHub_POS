@@ -38,15 +38,17 @@ END $$;
 
 -- What a store's staff see in MyHR (any signed-in staff of that store, or the
 -- org owner). can_edit: the caller owns the store's organization.
+-- is_test_store: demo stores see every section, whatever the org chose.
 DROP FUNCTION IF EXISTS public.store_myhr_settings(uuid);
 CREATE FUNCTION public.store_myhr_settings(p_store_id uuid)
-RETURNS TABLE (organization_id uuid, organization_name text, enabled_sections text[], section_content jsonb, can_edit boolean)
+RETURNS TABLE (organization_id uuid, organization_name text, enabled_sections text[], section_content jsonb, can_edit boolean, is_test_store boolean)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT o.id,
          o.name,
          m.enabled_sections,
          COALESCE(m.section_content, '{}'::jsonb),
-         (o.owner_user_id = auth.uid())
+         COALESCE(o.owner_user_id = auth.uid(), false),
+         COALESCE(s.is_test_store, false)
     FROM public.stores s
     LEFT JOIN public.organizations o ON o.id = s.organization_id
     LEFT JOIN public.organization_myhr_settings m ON m.organization_id = o.id

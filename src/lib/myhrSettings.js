@@ -14,14 +14,17 @@ export async function loadMyHRSettings(storeId) {
     return null
   }
   const row = Array.isArray(data) ? data[0] : data
-  if (!row?.organization_id) return null
+  if (!row) return null
+  // Demo stores see every section, whatever the organization chose.
+  if (!row.organization_id) return row.is_test_store ? { organizationId: null, organizationName: '', enabledSections: null, pages: {}, canEdit: false, isTestStore: true } : null
   return {
     organizationId: row.organization_id,
     organizationName: row.organization_name || '',
     // null: the org hasn't chosen yet, so every section shows.
-    enabledSections: Array.isArray(row.enabled_sections) ? row.enabled_sections : null,
+    enabledSections: Array.isArray(row.enabled_sections) && !row.is_test_store ? row.enabled_sections : null,
     pages: row.section_content && typeof row.section_content === 'object' ? row.section_content : {},
     canEdit: Boolean(row.can_edit),
+    isTestStore: Boolean(row.is_test_store),
   }
 }
 
