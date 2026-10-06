@@ -10860,3 +10860,337 @@ button.condition-hint {
 @media (max-width: 1100px) {
   .myhr-leave-form.hours { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* MyHR Record Working Times */
+.ts-page {
+  display: grid;
+  gap: 14px;
+  max-width: 1400px;
+}
+
+.ts-toolbar {
+  border: 1px solid #d5dfeb;
+  border-radius: 10px;
+}
+
+.ts-pad {
+  padding: 8px 14px;
+}
+
+.ts-calendar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 12px 14px 6px;
+}
+
+.ts-calendar {
+  align-items: flex-start;
+  background: #ffffff;
+  border: 1px solid #d5dfeb;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.ts-cal-nav {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  color: #172235;
+  cursor: pointer;
+  margin-top: 2px;
+  padding: 2px;
+}
+
+.ts-month {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+}
+
+.ts-month > strong {
+  color: #172235;
+  font-size: 13px;
+}
+
+.ts-month table {
+  border-collapse: separate;
+  border-spacing: 2px;
+  font-size: 12px;
+}
+
+.ts-month th {
+  background: #dbe6f3;
+  color: #34455f;
+  font-weight: 800;
+  padding: 2px 4px;
+}
+
+.ts-month td button {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  height: 22px;
+  min-width: 24px;
+  padding: 0 2px;
+}
+
+.ts-weekno button {
+  color: #5b6677;
+  font-weight: 800;
+}
+
+.ts-month tr.selected .ts-weekno button {
+  background: #172235;
+  border-radius: 3px;
+  color: #ffffff;
+}
+
+.ts-day {
+  background: #ffffff;
+  border-radius: 3px;
+  color: #172235;
+  font-weight: 700;
+}
+
+.ts-day.outside {
+  color: #a3adbb;
+}
+
+.ts-day.pending {
+  background: #f9c97c;
+}
+
+.ts-day.rejected {
+  background: #f39a94;
+}
+
+.ts-day.approved {
+  background: #a9c4e6;
+}
+
+.ts-day.today {
+  outline: 2px solid #1f4f8f;
+  outline-offset: -2px;
+}
+
+.ts-month tr.selected .ts-day:not(.outside) {
+  box-shadow: inset 0 -3px 0 #d6a632;
+}
+
+.ts-status {
+  display: grid;
+  gap: 10px;
+  min-width: 260px;
+}
+
+.ts-status > div {
+  border-bottom: 1px solid #e2e8f0;
+  display: grid;
+  gap: 2px;
+  padding-bottom: 6px;
+}
+
+.ts-status span {
+  color: #5b6677;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ts-status strong {
+  color: #172235;
+}
+
+.ts-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 4px 14px 12px;
+}
+
+.ts-legend span {
+  align-items: center;
+  color: #34455f;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.ts-legend span::before {
+  border-radius: 3px;
+  content: '';
+  display: inline-block;
+  height: 14px;
+  width: 14px;
+}
+
+.ts-legend .pending::before { background: #f9c97c; }
+.ts-legend .rejected::before { background: #f39a94; }
+.ts-legend .approved::before { background: #a9c4e6; }
+.ts-legend .today::before { border: 2px solid #1f4f8f; height: 10px; width: 10px; }
+
+.ts-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px 0;
+}
+
+.ts-tabs button {
+  background: #e9eef5;
+  border: 1px solid #d5dfeb;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  color: #34455f;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 7px 18px;
+}
+
+.ts-tabs button.active {
+  background: #172235;
+  border-color: #172235;
+  color: #ffffff;
+}
+
+.ts-filter {
+  flex-wrap: wrap;
+}
+
+.ts-filter button:first-child,
+.ts-filter button:nth-child(2) {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+.ts-filter select {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+}
+
+.ts-insert {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.ts-insert button {
+  background: #ffffff !important;
+  border-color: #cbd5e1 !important;
+}
+
+.ts-wrap {
+  max-height: none;
+}
+
+.ts-table {
+  font-size: 13px;
+}
+
+.ts-table th {
+  white-space: nowrap;
+}
+
+.ts-table th.today {
+  background: #fff4dc;
+}
+
+.ts-table .num {
+  text-align: right;
+}
+
+.ts-table td.icon {
+  text-align: center;
+  width: 44px;
+}
+
+.ts-table td.icon button {
+  background: none;
+  border: 0;
+  color: #34455f;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.ts-table tr.ts-info td {
+  background: #f3f6fa;
+  color: #34455f;
+  font-weight: 700;
+}
+
+.ts-cell {
+  padding: 3px 4px !important;
+}
+
+.ts-cell input {
+  border: 1px solid #d5dfeb;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  text-align: right;
+  width: 74px;
+}
+
+.ts-cell.edited input {
+  background: #fff4dc;
+  border-color: #d6a632;
+  font-weight: 800;
+}
+
+.ts-table.compact {
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.ts-subhead {
+  color: #172235;
+  margin: 4px 0 8px;
+}
+
+.ts-approval {
+  display: grid !important;
+  gap: 6px;
+}
+
+.ts-approval-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.ts-link {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.ts-remark {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.myhr-pay-list li.ts-approval > .ts-approval-head {
+  display: flex;
+  width: 100%;
+}
+
+.ts-approval-head .myhr-pay-actions {
+  margin-left: auto;
+}

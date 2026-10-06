@@ -155,3 +155,11 @@ export const loadOrgLeaveYear = async (orgId) => Number(await call('myhr_org_lea
 export const setOrgLeaveYear = (orgId, month) => call('myhr_org_set_leave_year', { p_org_id: orgId, p_start_month: month })
 export const loadOrgEmployeeAccounts = async (orgId, employeeId, keyDate) => (await call('myhr_org_employee_accounts', { p_org_id: orgId, p_employee_id: employeeId, p_key_date: keyDate })) || []
 export const setOrgEntitlement = (orgId, employeeId, account, yearStart, hours) => call('myhr_org_set_entitlement', { p_org_id: orgId, p_employee_id: employeeId, p_account: account, p_year_start: yearStart, p_hours: hours })
+
+// Part 6 (supabase/myhr_timesheets.sql): Record Working Times.
+export const loadMyTimesheets = async (storeId, from, to) => (await call('myhr_my_timesheets', { p_store_id: storeId, p_from: from, p_to: to })) || []
+export const saveTimesheet = (storeId, { weekStart, overrides, lines, total, overtime, submit }) => call('myhr_save_timesheet', {
+  p_store_id: storeId, p_week_start: weekStart, p_overrides: overrides, p_lines: lines, p_total: total, p_overtime: overtime, p_submit: Boolean(submit),
+})
+export const loadStoreTimesheets = async (storeId) => (await call('myhr_store_timesheets', { p_store_id: storeId })) || []
+export const decideTimesheet = (storeId, weekId, approve, note) => call('myhr_decide_timesheet', { p_store_id: storeId, p_week_id: weekId, p_approve: approve, p_note: note || null })

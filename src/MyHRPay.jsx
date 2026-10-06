@@ -27,12 +27,13 @@ import {
   loadMyTime,
   loadStoreLeave,
   shiftHours,
-  weekStart,
 } from './lib/myhrPay'
+import { sundayOf } from './lib/timesheet'
 import MyHRDetails from './MyHRDetails'
 import MyHRFamily from './MyHRFamily'
 import MyHRJob from './MyHRJob'
 import { LeaveOverview, LeaveRequestForm } from './MyHRLeave'
+import MyHRTimesheet from './MyHRTimesheet'
 import MyHRSchedule from './MyHRSchedule'
 
 // My Pay, Vacation & Leaves: an employee self-service directory (personal
@@ -78,7 +79,8 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
   // The leave request being edited (null: a new one).
   const [editingLeave, setEditingLeave] = useState(null)
 
-  const thisWeek = weekStart(new Date(now))
+  // Weeks run Sunday to Saturday, like the timesheet.
+  const thisWeek = sundayOf(new Date(now))
   const lastWeek = new Date(thisWeek)
   lastWeek.setDate(lastWeek.getDate() - 7)
 
@@ -189,7 +191,7 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
       <div className="myhr-pay-card">
         <span className="myhr-pay-card-label">This week</span>
         <strong className="myhr-pay-big">{hoursText(weekHours)}</strong>
-        <small>Since Monday</small>
+        <small>Since Sunday</small>
       </div>
       <div className="myhr-pay-card">
         <span className="myhr-pay-card-label">Last week</span>
@@ -294,22 +296,7 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
           {clockCard}
           {weekCards}
         </div>
-        <section className="myhr-pay-panel">
-          <h3>My recent shifts</h3>
-          {entries.length ? (
-            <ul className="myhr-pay-list compact">
-              {entries.slice(0, 30).map((entry) => (
-                <li key={entry.id}>
-                  <span>
-                    <strong>{dayText(entry.clock_in)}</strong>
-                    <small>{timeText(entry.clock_in)} – {entry.clock_out ? timeText(entry.clock_out) : 'now'}</small>
-                  </span>
-                  <b>{hoursText(shiftHours(entry, now))}</b>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="myhr-empty">No shifts in the last two weeks.</p>}
-        </section>
+        <MyHRTimesheet storeId={storeId} isManager={isManager} />
       </>
     )
   } else if (view === 'leaveinfo') {

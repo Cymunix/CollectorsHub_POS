@@ -55,6 +55,20 @@ const SAMPLE = {
     ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
   ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
   myhr_org_leave_year: 4,
+  myhr_my_timesheets: ({ p_from, p_to }) => {
+    const sunday = (offsetWeeks) => { const date = new Date(); date.setHours(12, 0, 0, 0); date.setDate(date.getDate() - date.getDay() + offsetWeeks * 7); return date.toISOString().slice(0, 10) }
+    const weeks = [
+      { week_start: sunday(-5), status: 'approved', processor: 'Store owner' },
+      { week_start: sunday(-4), status: 'approved', processor: 'Store owner' },
+      { week_start: sunday(-3), status: 'rejected', processor: 'Store owner', decision_note: 'Missing Thursday' },
+      { week_start: sunday(-2), status: 'approved', processor: 'Store owner' },
+      { week_start: sunday(-1), status: 'submitted' },
+    ]
+    return weeks.filter((week) => (!p_from || week.week_start >= p_from) && (!p_to || week.week_start <= p_to)).map((week) => ({ id: week.week_start, overrides: {}, ...week }))
+  },
+  myhr_store_timesheets: [
+    { id: 'w1', employee_name: 'Casey Lee', week_start: (() => { const date = new Date(); date.setDate(date.getDate() - date.getDay() - 7); return date.toISOString().slice(0, 10) })(), status: 'submitted', total_hours: 30.5, overtime_hours: 1.5, submitted_lines: [] },
+  ],
   myhr_store_leave: [
     { id: 's1', employee_name: 'Jordan Smith', leave_type: 'vacation', start_date: isoDay(10), end_date: isoDay(12), days: 3, note: 'Family trip', status: 'pending' },
     { id: 's2', employee_name: 'Casey Lee', leave_type: 'personal', start_date: isoDay(4), end_date: isoDay(4), days: 1, status: 'pending' },
@@ -100,7 +114,10 @@ const SAMPLE = {
     emergency_first_name: 'Alex', emergency_last_name: 'Sample', emergency_phone_area: '902', emergency_phone: '555-0199',
   }],
 }
-supabase.rpc = async (name) => ({ data: SAMPLE[name] ?? null, error: null })
+supabase.rpc = async (name, params) => {
+  const value = SAMPLE[name]
+  return { data: typeof value === 'function' ? value(params || {}) : value ?? null, error: null }
+}
 
 const screen = new URLSearchParams(window.location.search).get('screen') || 'myhr'
 const payViews = { pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', addresses: 'addresses', family: 'family', job: 'job', emergency: 'emergency' }
