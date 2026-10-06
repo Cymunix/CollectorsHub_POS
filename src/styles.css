@@ -9436,3 +9436,234 @@ button.condition-hint {
   background: #ffffff;
   border: 2px solid #c3cad6;
 }
+
+/* MyHR section page (written by the organization) */
+.workspace > .myhr-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.myhr-page {
+  align-content: start;
+  display: grid;
+  gap: 16px;
+  padding: 4px 6px 24px 0;
+}
+
+.myhr-page-top {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.myhr-back {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: #8a6a17;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 800;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.myhr-page-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.myhr-page-head h2 {
+  color: #172235;
+  font-family: "Space Grotesk", Manrope, sans-serif;
+  font-size: 28px;
+  margin: 0;
+}
+
+.myhr-page-body {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  display: grid;
+  gap: 16px;
+  max-width: 980px;
+  padding: 22px 24px;
+}
+
+.myhr-main-link {
+  align-items: center;
+  background: #172235;
+  border: 0;
+  border-bottom: 3px solid #d6a632;
+  border-radius: 8px;
+  color: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 800;
+  gap: 8px;
+  justify-self: start;
+  padding: 11px 18px;
+}
+
+.myhr-page-notice {
+  background: #fff4dc;
+  border-left: 4px solid #d6a632;
+  border-radius: 4px;
+  color: #6b4b00;
+  font-weight: 800;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.myhr-page-intro {
+  color: #34455f;
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-line;
+}
+
+.myhr-page-group h3 {
+  color: #172235;
+  font-size: 17px;
+  margin: 0 0 4px;
+}
+
+.myhr-page-group p {
+  color: #5b6677;
+  margin: 0 0 6px;
+  white-space: pre-line;
+}
+
+.myhr-page-group ul {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.myhr-page-group li button {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: #1f4f8f;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 700;
+  gap: 5px;
+  padding: 2px 0;
+  text-align: left;
+}
+
+.myhr-page-group li button:hover {
+  text-decoration: underline;
+}
+
+.myhr-page-editor {
+  background: #ffffff;
+  border: 1px solid #ecd9a4;
+  border-radius: 10px;
+  display: grid;
+  gap: 14px;
+  max-width: 980px;
+  padding: 18px 20px;
+}
+
+.myhr-page-editor label {
+  color: #34455f;
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 5px;
+}
+
+.myhr-page-editor input,
+.myhr-page-editor textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.myhr-editor-pair {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto;
+}
+
+.myhr-editor-pair:has(> :nth-child(2):last-child) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+}
+
+.myhr-editor-group {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px 12px;
+}
+
+.myhr-editor-group legend {
+  color: #8a6a17;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 4px;
+}
+
+.myhr-editor-group > .myhr-editor-pair:first-of-type {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.myhr-editor-add,
+.myhr-editor-remove {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #34455f;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 5px;
+  justify-self: start;
+  padding: 6px 10px;
+}
+
+.myhr-editor-remove {
+  color: #a12020;
+  padding: 7px 9px;
+}
+
+.myhr-editor-problem {
+  color: #a12020;
+  font-weight: 700;
+  margin: 0;
+}
+
+.myhr-editor-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.myhr-editor-actions button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 8px 16px;
+}

@@ -17,15 +17,16 @@ import {
   Wallet,
 } from 'lucide-react'
 import { loadStoreName } from './lib/auth'
-import { loadMyHRSettings, saveMyHRSettings } from './lib/myhrSettings'
+import { hasMyHRPage, loadMyHRSettings, saveMyHRSections } from './lib/myhrSettings'
+import MyHRPage from './MyHRPage'
 
 // MyHR: the employee's own HR hub (pay, time off, training, etc.). The store's
-// organization picks which sections its staff see and supplies its own
-// orientation material; the org owner sets both from here ("Choose sections").
-// A section that isn't built yet is greyed out as "Coming soon".
+// organization picks which sections its staff see and writes each section's
+// page (its payroll portal, forms, guides, orientation…); the org owner does
+// both from here. A section with no page yet is greyed out for staff.
 
 const MYHR_SECTIONS = [
-  { key: 'orientation', label: 'My Orientation', blurb: "Your organization's orientation", icon: RotateCcwSquare },
+  { key: 'orientation', label: 'My Orientation', blurb: 'Getting started with the team', icon: RotateCcwSquare },
   { key: 'pay', label: 'My Pay, Vacation & Leaves', blurb: 'Pay stubs, hours, vacation balance', icon: Wallet },
   { key: 'benefits', label: 'My Benefits', blurb: 'Coverage and employee discount', icon: HeartHandshake },
   { key: 'learning', label: 'My Learning & Development', blurb: 'Training and grading courses', icon: Presentation },
@@ -40,7 +41,6 @@ const MYHR_SECTIONS = [
 ]
 const ALL_KEYS = MYHR_SECTIONS.map((section) => section.key)
 
-const isWebLink = (value) => /^https?:\/\/\S+$/i.test(String(value || '').trim())
 
 export default function MyHRView({ session }) {
   const name = session?.displayName || [session?.firstName, session?.lastName].filter(Boolean).join(' ') || session?.username || 'Employee'
@@ -58,7 +58,8 @@ export default function MyHRView({ session }) {
 
   // The organization's choices (null: none, so every section shows).
   const [settings, setSettings] = useState(null)
-  const [editing, setEditing] = useState(null) // { sections: Set, orientationUrl } while choosing
+  const [editing, setEditing] = useState(null) // { sections: Set } while choosing
+  const [openKey, setOpenKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   useEffect(() => {
@@ -68,15 +69,11 @@ export default function MyHRView({ session }) {
   }, [session?.storeId])
 
   const enabled = new Set(settings?.enabledSections || ALL_KEYS)
-  const orientationUrl = settings?.orientationUrl || ''
-  // What each section does when opened (only the built ones).
-  const openers = {
-    orientation: isWebLink(orientationUrl) ? () => window.open(orientationUrl, '_blank') : null,
-  }
+  const pages = settings?.pages || {}
 
   function startEditing() {
     setNotice('')
-    setEditing({ sections: new Set(enabled), orientationUrl })
+    setEditing({ sections: new Set(enabled) })
   }
 
   function toggleSection(key) {
@@ -89,16 +86,11 @@ export default function MyHRView({ session }) {
   }
 
   async function saveEditing() {
-    const link = editing.orientationUrl.trim()
-    if (link && !isWebLink(link)) {
-      setNotice('The orientation link needs to start with https://')
-      return
-    }
     const enabledSections = ALL_KEYS.filter((key) => editing.sections.has(key))
     setSaving(true)
     try {
-      await saveMyHRSettings({ organizationId: settings.organizationId, enabledSections, orientationUrl: link })
-      setSettings((current) => ({ ...current, enabledSections, orientationUrl: link }))
+      await saveMyHRSections({ organizationId: settings.organizationId, enabledSections })
+      setSettings((current) => ({ ...current, enabledSections }))
       setEditing(null)
       setNotice(`Saved. ${settings.organizationName || 'Your organization'}'s staff now see ${enabledSections.length} section${enabledSections.length === 1 ? '' : 's'}.`)
     } catch (error) {
@@ -109,6 +101,24 @@ export default function MyHRView({ session }) {
   }
 
   const shown = editing ? MYHR_SECTIONS : MYHR_SECTIONS.filter((section) => enabled.has(section.key))
+  const openSection = MYHR_SECTIONS.find((section) => section.key === openKey)
+
+  if (openSection) {
+    return (
+      <MyHRPage
+        section={openSection}
+        page={pages[openKey]}
+        settings={settings}
+        onBack={() => setOpenKey('')}
+        onSaved={(content) => setSettings((current) => {
+          const nextPages = { ...(current?.pages || {}) }
+          if (content) nextPages[openKey] = content
+          else delete nextPages[openKey]
+          return { ...current, pages: nextPages }
+        })}
+      />
+    )
+  }
 
   return (
     <section className="myhr">
@@ -135,14 +145,6 @@ export default function MyHRView({ session }) {
             <strong>Choose what {settings.organizationName || 'your organization'}'s staff see.</strong>
             <small>Click a tile to show or hide it. {editing.sections.size} of {MYHR_SECTIONS.length} shown.</small>
           </span>
-          <label>
-            Orientation link
-            <input
-              value={editing.orientationUrl}
-              onChange={(event) => setEditing((current) => ({ ...current, orientationUrl: event.target.value }))}
-              placeholder="https://… (your orientation document or site)"
-            />
-          </label>
           <button type="button" onClick={() => { setEditing(null); setNotice('') }} disabled={saving}>Cancel</button>
           <button type="button" className="gold-button" onClick={saveEditing} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
@@ -172,8 +174,11 @@ export default function MyHRView({ session }) {
                 </button>
               )
             }
-            const open = openers[section.key]
-            const waiting = section.key === 'orientation' && !open ? 'Not set up by your organization yet' : 'Coming soon'
+            // Staff open pages the org has written; the org owner can open any
+            // (to write it).
+            const written = hasMyHRPage(pages[section.key])
+            const open = written || settings?.canEdit ? () => setOpenKey(section.key) : null
+            const waiting = settings ? 'Not set up by your organization yet' : 'Coming soon'
             return (
               <button
                 key={section.key}
@@ -185,7 +190,7 @@ export default function MyHRView({ session }) {
               >
                 <Icon size={46} strokeWidth={1.6} />
                 <strong>{section.label}</strong>
-                <small>{open ? section.blurb : waiting}</small>
+                <small>{open ? (written ? section.blurb : 'Empty: click to set it up') : waiting}</small>
               </button>
             )
           })}
