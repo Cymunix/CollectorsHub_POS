@@ -56,10 +56,11 @@ const SAMPLE = {
     ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
   ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
   myhr_org_leave_year: 4,
+  myhr_my_availability_profile: { availability: { 1: [{ from: '15:30', to: '22:00' }], 2: [{ from: '15:30', to: '22:00' }], 3: [{ from: '07:00', to: '09:00' }, { from: '15:30', to: '22:00' }], 4: [{ from: '15:30', to: '22:00' }], 5: [{ from: '15:30', to: '22:00' }], 0: [] }, preferred_hours: 18, most_hours: 20, restrictions: ['no_close'], note: 'Student: classes until 3 on weekdays, exams Dec 8–19', updated_at: new Date().toISOString() },
   myhr_schedule_staff: [
     { id: 'm1', name: 'Morgan Lee', short_name: 'Morgan L.', schedule_role: 'Manager', can_cover: ['Keyholder'], target_hours: 40, min_hours: 32, max_hours: 44, availability: {}, hourly_cost: 26 },
     { id: 's1', name: 'Sarah Moss', short_name: 'Sarah M.', schedule_role: 'Supervisor', can_cover: ['Keyholder'], target_hours: 40, max_hours: 44, availability: {}, hourly_cost: 20 },
-    { id: 'j1', name: 'Jake Ray', short_name: 'Jake R.', schedule_role: 'Employee', can_cover: [], target_hours: 25, min_hours: 20, availability: {}, hourly_cost: 16.5 },
+    { id: 'j1', name: 'Jake Ray', short_name: 'Jake R.', schedule_role: 'Employee', can_cover: [], target_hours: 25, min_hours: 20, availability: { 1: [{ from: '15:30', to: '22:00' }], 2: [{ from: '15:30', to: '22:00' }], 3: [{ from: '15:30', to: '22:00' }], 4: [{ from: '15:30', to: '22:00' }], 5: [{ from: '15:30', to: '22:00' }] }, hourly_cost: 16.5, preferred_hours: 18, most_hours: 20, restrictions: ['no_close', 'needs_keyholder'], availability_note: 'Student: classes until 3 on weekdays' },
     { id: 'a1', name: 'Alex Kim', short_name: 'Alex K.', schedule_role: 'Employee', can_cover: [], target_hours: 24, availability: { 1: [{ from: '09:00', to: '17:00' }], 2: [{ from: '09:00', to: '17:00' }], 3: [{ from: '09:00', to: '17:00' }], 4: [{ from: '09:00', to: '17:00' }], 5: [{ from: '09:00', to: '17:00' }], 6: [{ from: '09:00', to: '17:00' }] }, hourly_cost: 16 },
   ],
   myhr_coverage_rules: [
@@ -165,7 +166,7 @@ supabase.rpc = async (name, params) => {
 }
 
 const screen = new URLSearchParams(window.location.search).get('screen') || 'myhr'
-const payViews = { pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', addresses: 'addresses', family: 'family', job: 'job', emergency: 'emergency' }
+const payViews = { availability: 'availability', pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', addresses: 'addresses', family: 'family', job: 'job', emergency: 'emergency' }
 
 function OrgEmployeesPreview() {
   const [ready, setReady] = React.useState(false)

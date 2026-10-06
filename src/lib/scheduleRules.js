@@ -110,6 +110,24 @@ function mergeSlots(slots) {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
+// Opening and closing on a day, from its coverage needs: needs labelled
+// "Opening"/"Closing" if there are any, else the day's first start / last end.
+// null when the day has no needs.
+function openCloseOf(day, rules) {
+  const weekday = new Date(`${day}T00:00:00`).getDay()
+  const dayRules = rules.filter((rule) => Number(rule.weekday) === weekday)
+  if (!dayRules.length) return null
+  const closing = dayRules.filter((rule) => /clos/i.test(rule.label || ''))
+  const opening = dayRules.filter((rule) => /open/i.test(rule.label || ''))
+  const firstStart = Math.min(...dayRules.map((rule) => minutesOf(rule.start_time)))
+  const lastEnd = Math.max(...dayRules.map((rule) => minutesOf(rule.end_time)))
+  const overlaps = (list, from, to) => list.some((rule) => from < minutesOf(rule.end_time) && to > minutesOf(rule.start_time))
+  return {
+    isClosing: (from, to) => (closing.length ? overlaps(closing, from, to) : to >= lastEnd),
+    isOpening: (from, to) => (opening.length ? overlaps(opening, from, to) : from <= firstStart),
+  }
+}
+
 // Everything to warn about for a week. Each warning: { id, kind, day?, employeeId?, text, severity }.
 export function weekWarnings({ days, staff, shifts, rules, leave = [] }) {
   const staffById = Object.fromEntries(staff.map((person) => [person.id, person]))
@@ -167,6 +185,42 @@ export function weekWarnings({ days, staff, shifts, rules, leave = [] }) {
           ? `${name} is only available ${windows.map((window) => `${clock(minutesOf(window.from))}–${clock(minutesOf(window.to))}`).join(', ')} on ${DAY_NAMES[start.getDay()]}s`
           : `${name} is unavailable on ${DAY_NAMES[start.getDay()]}s`
         warnings.push({ id: `avail-${shift.id}`, kind: 'availability', day, employeeId: person.id, shiftId: shift.id, severity: 'warn', text })
+      }
+    }
+
+    // Their own availability profile: most hours, and restrictions.
+    if (person.most_hours != null && hours > Number(person.most_hours)) {
+      warnings.push({ id: `most-${person.id}`, kind: 'hours', employeeId: person.id, severity: 'warn', text: `${name}: ${hours} hrs, but can work at most ${Number(person.most_hours)}` })
+    }
+    const restrictions = new Set(person.restrictions || [])
+    for (const shift of mine) {
+      const day = isoDay(new Date(shift.starts_at))
+      const dayName = DAY_NAMES[new Date(`${day}T00:00:00`).getDay()]
+      const [from, to] = shiftWindowOn(shift, day)
+      const edges = openCloseOf(day, rules)
+      if (restrictions.has('no_close') && edges && edges.isClosing(from, to)) {
+        warnings.push({ id: `close-${shift.id}`, kind: 'restriction', day, employeeId: person.id, shiftId: shift.id, severity: 'warn', text: `${name} can't close (${dayName})` })
+      }
+      if (restrictions.has('no_open') && edges && edges.isOpening(from, to)) {
+        warnings.push({ id: `open-${shift.id}`, kind: 'restriction', day, employeeId: person.id, shiftId: shift.id, severity: 'warn', text: `${name} can't open (${dayName})` })
+      }
+      if (restrictions.has('needs_keyholder') || restrictions.has('not_alone')) {
+        const others = shifts.filter((other) => other.employee_id !== person.id)
+          .map((other) => ({ other, person: staffById[other.employee_id], range: shiftWindowOn(other, day) }))
+        const noKeyholder = []
+        const alone = []
+        for (let t = Math.floor(from / SLOT) * SLOT; t < to; t += SLOT) {
+          const present = others.filter(({ range }) => range[0] <= t && range[1] >= t + SLOT)
+          if (!present.length) alone.push({ t, value: 1 })
+          if (!present.some(({ other, person: coworker }) => canFill('Keyholder', other, coworker) || String(shiftRole(other, coworker)).toLowerCase() === 'manager')) noKeyholder.push({ t, value: 1 })
+        }
+        const ranges = (slots) => mergeSlots(slots).map((segment) => `${clock(segment.from)}–${clock(segment.to)}`).join(', ')
+        if (restrictions.has('needs_keyholder') && noKeyholder.length) {
+          warnings.push({ id: `key-${shift.id}`, kind: 'restriction', day, employeeId: person.id, shiftId: shift.id, severity: 'warn', text: `${name} needs a keyholder on shift: none ${dayName} ${ranges(noKeyholder)}` })
+        }
+        if (restrictions.has('not_alone') && alone.length) {
+          warnings.push({ id: `alone-${shift.id}`, kind: 'restriction', day, employeeId: person.id, shiftId: shift.id, severity: 'warn', text: `${name} can't work alone: alone ${dayName} ${ranges(alone)}` })
+        }
       }
     }
 

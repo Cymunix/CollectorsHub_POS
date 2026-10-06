@@ -13,6 +13,7 @@ import {
   saveShift,
 } from './lib/myhrPay'
 import { canFill, clock, isoDay, roleColour, shiftHours, shiftRole, weekSummary, weekWarnings } from './lib/scheduleRules'
+import { RESTRICTIONS } from './lib/myhrPay'
 
 // Schedule Builder (managers): employees down the side, Monday–Sunday across
 // the top. Drag a shift to move it (hold Ctrl or Alt to copy it), drag its
@@ -30,6 +31,18 @@ const money = new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD
 const minutesOf = (time) => { const [h, m] = String(time).split(':').map(Number); return h * 60 + (m || 0) }
 const hhmm = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
 const hoursText = (value) => `${Math.round(value * 100) / 100}h`
+const RESTRICTION_LABELS = Object.fromEntries(RESTRICTIONS)
+
+// "Mon 3:30 PM–10 PM · Sat not available" (days with limits only).
+function availabilitySummary(person) {
+  const parts = []
+  for (const weekday of [1, 2, 3, 4, 5, 6, 0]) {
+    const windows = person.availability?.[String(weekday)]
+    if (!Array.isArray(windows)) continue
+    parts.push(`${DAY_SHORT[weekday]} ${windows.length ? windows.map((window) => `${clock(minutesOf(window.from))}–${clock(minutesOf(window.to))}`).join(', ') : 'not available'}`)
+  }
+  return parts
+}
 
 function mondayOf(date) {
   const day = new Date(date.getFullYear(), date.getMonth(), date.getDate())
@@ -402,7 +415,14 @@ export default function ScheduleBuilder({ storeId }) {
                       <strong>{person.name}</strong>
                     </span>
                     <small>{person.schedule_role}{person.can_cover?.length ? ` · covers ${person.can_cover.join(', ')}` : ''}</small>
-                    <small className={flagged.length ? 'bad' : ''} title={flagged.map((warning) => warning.text).join('\n')}>{hoursText(hours)}{target != null ? ` / ${hoursText(target)} target` : ''}</small>
+                    <small className={flagged.length ? 'bad' : ''} title={flagged.map((warning) => warning.text).join('\n')}>{hoursText(hours)}{target != null ? ` / ${hoursText(target)} target` : ''}{person.preferred_hours != null ? ` · prefers ${hoursText(Number(person.preferred_hours))}` : ''}</small>
+                    {availabilitySummary(person).length || person.restrictions?.length || person.availability_note ? (
+                      <span className="sb-avail" title={[...availabilitySummary(person), person.most_hours != null ? `At most ${Number(person.most_hours)} hrs/week` : '', person.availability_note || ''].filter(Boolean).join('\n')}>
+                        {availabilitySummary(person).slice(0, 2).map((text) => <small key={text}>{text}</small>)}
+                        {availabilitySummary(person).length > 2 ? <small>+{availabilitySummary(person).length - 2} more</small> : null}
+                        {(person.restrictions || []).map((key) => <b key={key} className="sb-restriction">{RESTRICTION_LABELS[key] || key}</b>)}
+                      </span>
+                    ) : null}
                   </th>
                   {days.map((day) => {
                     const dayShifts = shifts.filter((shift) => shift.employee_id === person.id && isoDay(new Date(shift.starts_at)) === day)

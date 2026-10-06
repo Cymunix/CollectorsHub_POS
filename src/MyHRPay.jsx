@@ -36,6 +36,7 @@ import { LeaveOverview } from './MyHRLeave'
 import MyHRLeaveRequest from './MyHRLeaveRequest'
 import MyHRTimesheet from './MyHRTimesheet'
 import MyHRSchedule from './MyHRSchedule'
+import MyHRAvailability from './MyHRAvailability'
 
 // My Pay, Vacation & Leaves: an employee self-service directory (personal
 // information, job, time, benefits, payment, travel, health & safety). The
@@ -49,12 +50,12 @@ const DIRECTORY = [
   { title: 'My Benefits', icon: HeartHandshake, items: [['benefits', 'Display Benefits/Beneficiaries'], ['dental', 'Health and Dental Application'], ['life', 'Employee Optional Life Application'], ['familylife', 'Spouse and Child Optional Life Application'], ['beneficiary', 'Beneficiary Nomination Form']] },
   { title: 'My Job', icon: BriefcaseBusiness, items: [['job', 'Display Job Information']] },
   { title: 'My Payment', icon: Wallet, items: [['payadvice', 'Pay Advice Inquiry'], ['taxform', 'Tax Form Reprint']] },
-  { title: 'My Time', icon: CalendarClock, items: [['leaveinfo', 'Display Leave Information'], ['time', 'Record Working Time'], ['leave', 'Vacation Leave Request'], ['schedule', 'My Schedule']] },
+  { title: 'My Time', icon: CalendarClock, items: [['leaveinfo', 'Display Leave Information'], ['time', 'Record Working Time'], ['leave', 'Vacation Leave Request'], ['schedule', 'My Schedule'], ['availability', 'Availability']] },
   { title: 'Travel and Expenses', icon: Plane, items: [['trips', 'My Trips and Expenses'], ['travelrequest', 'Create Travel Request'], ['expense', 'Create Expense Claim'], ['personnel', 'Unlock Personnel Number']] },
   { title: 'My Resource Links', icon: Link2, items: [['myhr', 'MyHR'], ['acrobat', 'Adobe Acrobat Reader']] },
   { title: 'My Health and Safety', icon: HeartPulse, items: [['incident', 'Report a Safety Incident, Near Miss or Safety Observation'], ['safetysite', 'Workplace Health & Safety Site']] },
 ]
-const BUILT = new Set(['personal', 'addresses', 'family', 'emergency', 'job', 'leaveinfo', 'time', 'leave', 'schedule', 'myhr', 'acrobat'])
+const BUILT = new Set(['personal', 'addresses', 'family', 'emergency', 'job', 'leaveinfo', 'time', 'leave', 'schedule', 'availability', 'myhr', 'acrobat'])
 const TITLES = Object.fromEntries(DIRECTORY.flatMap((group) => group.items))
 const ACROBAT_URL = 'https://get.adobe.com/reader/'
 
@@ -321,6 +322,8 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
     )
   } else if (view === 'schedule') {
     body = <MyHRSchedule storeId={storeId} isManager={isManager} storeName={storeName} />
+  } else if (view === 'availability') {
+    body = <MyHRAvailability storeId={storeId} />
   } else if (view === 'job') {
     body = <MyHRJob storeId={storeId} />
   } else if (view === 'family') {

@@ -196,3 +196,13 @@ export const loadMyAvailability = async (storeId) => (await call('myhr_my_availa
 export const saveMyAvailability = (storeId, availability) => call('myhr_save_my_availability', { p_store_id: storeId, p_availability: availability })
 export const loadOrgScheduleProfile = async (orgId, employeeId) => firstRow(await call('myhr_org_schedule_profile', { p_org_id: orgId, p_employee_id: employeeId }))
 export const saveOrgScheduleProfile = (orgId, employeeId, profile) => call('myhr_org_save_schedule_profile', { p_org_id: orgId, p_employee_id: employeeId, p_profile: profile })
+
+// Part 9 (supabase/myhr_availability.sql): the employee's availability profile.
+export const loadMyAvailabilityProfile = async (storeId) => (await call('myhr_my_availability_profile', { p_store_id: storeId })) || {}
+export const saveMyAvailabilityProfile = (storeId, profile) => call('myhr_save_my_availability_profile', { p_store_id: storeId, p_profile: profile })
+export const RESTRICTIONS = [
+  ['no_open', "Can't open"],
+  ['no_close', "Can't close"],
+  ['needs_keyholder', 'Needs a keyholder on shift'],
+  ['not_alone', "Can't work alone"],
+]

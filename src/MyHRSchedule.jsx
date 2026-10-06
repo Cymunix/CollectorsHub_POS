@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, MapPin } from 'lucide-react'
-import { isoDate, leaveTypeLabel, loadMyAvailability, loadMyLeave, loadMySchedule, saveMyAvailability } from './lib/myhrPay'
+import { isoDate, leaveTypeLabel, loadMyLeave, loadMySchedule } from './lib/myhrPay'
 import { roleColour } from './lib/scheduleRules'
 import ScheduleBuilder from './ScheduleBuilder'
 
 // My Schedule: the employee's published shifts for a week (role, location,
 // break, hours, changes since the last publish, time off) and what's coming
-// up; their availability. Managers also get the Schedule Builder tab.
+// up (availability has its own screen). Managers also get the Schedule Builder tab.
 
 const DAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const timeText = (value) => new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -17,71 +17,6 @@ function mondayOf(date) {
   const day = new Date(date.getFullYear(), date.getMonth(), date.getDate())
   day.setDate(day.getDate() - ((day.getDay() + 6) % 7))
   return day
-}
-
-function Availability({ storeId }) {
-  const [availability, setAvailability] = useState(null)
-  const [saving, setSaving] = useState(false)
-  const [notice, setNotice] = useState('')
-  const [problem, setProblem] = useState('')
-  useEffect(() => { loadMyAvailability(storeId).then((value) => setAvailability(value || {})).catch((error) => { setAvailability({}); setProblem(error?.message || String(error)) }) }, [storeId])
-  if (!availability) return null
-
-  // Per weekday: missing = any time; [] = unavailable; [{from,to}] = only then.
-  const modeOf = (day) => (!Array.isArray(availability[day]) ? 'any' : availability[day].length ? 'hours' : 'none')
-  const setDay = (day, value) => setAvailability((current) => {
-    const next = { ...current }
-    if (value === undefined) delete next[day]
-    else next[day] = value
-    return next
-  })
-
-  async function save() {
-    setSaving(true)
-    setProblem('')
-    try {
-      await saveMyAvailability(storeId, availability)
-      setNotice('Availability saved. Managers see it when building the schedule.')
-    } catch (error) {
-      setProblem(error?.message || String(error))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <section className="myhr-pay-panel">
-      <h3>My availability</h3>
-      <div className="ms-availability">
-        {[1, 2, 3, 4, 5, 6, 0].map((weekday) => {
-          const day = String(weekday)
-          const mode = modeOf(day)
-          const window = availability[day]?.[0] || { from: '09:00', to: '17:00' }
-          return (
-            <div key={day} className="ms-avail-day">
-              <strong>{DAY_LONG[weekday]}</strong>
-              <select value={mode} onChange={(event) => setDay(day, event.target.value === 'any' ? undefined : event.target.value === 'none' ? [] : [window])}>
-                <option value="any">Available any time</option>
-                <option value="hours">Only between…</option>
-                <option value="none">Not available</option>
-              </select>
-              {mode === 'hours' ? (
-                <span className="ms-avail-hours">
-                  <input type="time" value={window.from} onChange={(event) => setDay(day, [{ ...window, from: event.target.value }])} aria-label="From" />
-                  <input type="time" value={window.to} onChange={(event) => setDay(day, [{ ...window, to: event.target.value }])} aria-label="To" />
-                </span>
-              ) : null}
-            </div>
-          )
-        })}
-      </div>
-      <div className="myhr-editor-actions">
-        {notice ? <span className="myhr-notice">{notice}</span> : null}
-        <button type="button" className="gold-button" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save availability'}</button>
-      </div>
-      {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
-    </section>
-  )
 }
 
 function MyShifts({ storeId, storeName }) {
@@ -172,12 +107,11 @@ export default function MyHRSchedule({ storeId, isManager, storeName = 'Store' }
   return (
     <div className="myhr-schedule">
       <div className="ts-tabs ms-tabs" role="tablist">
-        {[['mine', 'My Schedule'], ['availability', 'My Availability'], ...(isManager ? [['builder', 'Schedule Builder']] : [])].map(([key, label]) => (
+        {[['mine', 'My Schedule'], ...(isManager ? [['builder', 'Schedule Builder']] : [])].map(([key, label]) => (
           <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>
         ))}
       </div>
       {tab === 'mine' ? <MyShifts storeId={storeId} storeName={storeName} /> : null}
-      {tab === 'availability' ? <Availability storeId={storeId} /> : null}
       {tab === 'builder' && isManager ? <ScheduleBuilder storeId={storeId} /> : null}
     </div>
   )
