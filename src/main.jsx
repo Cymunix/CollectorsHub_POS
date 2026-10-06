@@ -37,6 +37,7 @@ import {
   UserPlus,
   Users,
   X,
+  Clock3,
   IdCard,
 } from 'lucide-react'
 import './styles.css'
@@ -53,6 +54,7 @@ import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync
 import { favoriteStockAlerts, loadStoreFavorites, setFavoriteThreshold, setStoreFavorite } from './lib/storeFavorites'
 import { createStoreItem, saveStoreItemChanges } from './lib/storeScan'
 import { printItemLabel } from './lib/printLabel'
+import { clock as clockShift, loadClockStatus } from './lib/myhrPay'
 import { supabase } from './lib/supabaseClient'
 
 const emptyStore = {
@@ -209,6 +211,8 @@ function App() {
   // Store favourites: cards the store always wants in stock (shared by every
   // register of the store), with low / out-of-stock alerts.
   const [favorites, setFavorites] = useState({})
+  // Store staff clock in (MyHR) before using anything but MyHR.
+  const [clockStatus, setClockStatus] = useState({ required: false, clockedInAt: null })
   const [stockToast, setStockToast] = useState(null)
   const alertKeysRef = useRef(null)
   const [appVersion, setAppVersion] = useState('')
@@ -472,8 +476,23 @@ function App() {
     await handleSyncNow()
   }
 
+  async function refreshClockStatus() {
+    if (authSession?.type !== 'store_employee' || !authSession?.storeId) {
+      setClockStatus({ required: false, clockedInAt: null })
+      return
+    }
+    setClockStatus(await loadClockStatus(authSession.storeId))
+  }
+  useEffect(() => { refreshClockStatus() }, [authSession?.storeId, authSession?.type, authSession?.username])
+  const needsClockIn = clockStatus.required && !clockStatus.clockedInAt
+
   function requestNavigate(nextView) {
     if (nextView === activeView) return
+    // Not clocked in: only MyHR, and the Register screen (which asks to clock in).
+    if (needsClockIn && nextView !== 'myhr' && nextView !== 'register') {
+      setActiveView('register')
+      return
+    }
     if (activeView === 'register' && registerHasDraft) {
       const shouldLeave = window.confirm('Leaving will erase the current transaction. Leave Register and erase this transaction?')
       // Native confirm() can leave Electron unable to take keystrokes on Windows.
@@ -936,7 +955,15 @@ function App() {
           </>
         ) : null}
 
-        {activeView === 'register' ? (
+        {activeView === 'register' && needsClockIn ? (
+          <ClockInGate
+            name={authSession?.username || 'there'}
+            onClockIn={async () => { await clockShift(authSession.storeId, 'in'); await refreshClockStatus() }}
+            onOpenMyHR={() => requestNavigate('myhr')}
+          />
+        ) : null}
+
+        {activeView === 'register' && !needsClockIn ? (
           <RegisterView
             authSession={authSession}
             customers={store.customers || []}
@@ -1002,7 +1029,7 @@ function App() {
         {activeView === 'transactions' ? <TransactionsView transactions={store.transactions} /> : null}
         {activeView === 'reports' ? <PlaceholderView icon={BarChart3} title="Reports" copy="Daily closeout, stock movement, margin, category performance, and tax summaries will live here." /> : null}
         {activeView === 'settings' ? <SettingsView dataPath={dataPath} /> : null}
-        {activeView === 'myhr' ? <MyHRView session={authSession} /> : null}
+        {activeView === 'myhr' ? <MyHRView session={authSession} onClockChange={refreshClockStatus} /> : null}
       </section>
       {stockToast ? (
         <div className="stock-toast" role="status">
@@ -1134,6 +1161,45 @@ function describeAuthSession(session) {
   if (session.type === 'platform_admin') return `Admin: ${session.displayName}`
   if (session.type === 'organization') return `Org: ${session.orgName || session.orgCode}`
   return `${session.storeName || 'Store'}: ${session.username || session.role || 'Employee'}`
+}
+
+// Shown in place of the Register until a store employee clocks in.
+function ClockInGate({ name, onClockIn, onOpenMyHR }) {
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState('')
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 15000)
+    return () => clearInterval(timer)
+  }, [])
+
+  async function clockIn() {
+    setBusy(true)
+    setProblem('')
+    try {
+      await onClockIn()
+    } catch (error) {
+      setProblem(error?.message || String(error))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="clock-gate">
+      <div className="clock-gate-card">
+        <span className="clock-gate-icon" aria-hidden="true"><Clock3 size={34} /></span>
+        <h2>Clock in to start your shift</h2>
+        <p>Hi {name}. Clock in before opening the register or using the rest of the POS.</p>
+        <strong className="clock-gate-time">{now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</strong>
+        <small>{now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</small>
+        {problem ? <p className="clock-gate-problem">{problem}</p> : null}
+        <button type="button" className="clock-gate-button" onClick={clockIn} disabled={busy} autoFocus>
+          {busy ? 'Clocking in…' : 'Clock in'}
+        </button>
+        <button type="button" className="clock-gate-link" onClick={onOpenMyHR}>Open MyHR instead (schedule, time off)</button>
+      </div>
+    </section>
+  )
 }
 
 function NavButton({ icon: Icon, label, active, onClick, badge = null, badgeTitle = '', notReady = false }) {

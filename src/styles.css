@@ -9905,3 +9905,400 @@ button.condition-hint {
   .myhr-pay-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .myhr-pay-columns { grid-template-columns: 1fr; }
 }
+
+/* Clock in first (shown in place of the Register) */
+.workspace > .clock-gate {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.clock-gate {
+  align-items: center;
+  display: grid;
+  justify-items: center;
+  padding: 24px;
+}
+
+.clock-gate-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  border-top: 5px solid #d6a632;
+  box-shadow: 0 24px 60px rgba(11, 17, 27, 0.12);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  max-width: 480px;
+  padding: 34px 36px 28px;
+  text-align: center;
+  width: 100%;
+}
+
+.clock-gate-icon {
+  align-items: center;
+  background: #172235;
+  border-radius: 999px;
+  color: #d6a632;
+  display: inline-flex;
+  height: 68px;
+  justify-content: center;
+  margin-bottom: 6px;
+  width: 68px;
+}
+
+.clock-gate-card h2 {
+  color: #172235;
+  font-family: "Space Grotesk", Manrope, sans-serif;
+  font-size: 26px;
+  margin: 0;
+}
+
+.clock-gate-card p {
+  color: #5b6677;
+  font-weight: 700;
+  margin: 0;
+}
+
+.clock-gate-time {
+  color: #172235;
+  font-family: "Space Grotesk", Manrope, sans-serif;
+  font-size: 44px;
+  margin-top: 8px;
+}
+
+.clock-gate-card small {
+  color: #5b6677;
+  font-weight: 700;
+}
+
+.clock-gate-problem {
+  color: #a12020 !important;
+}
+
+.clock-gate-button {
+  background: #d6a632;
+  border: 0;
+  border-radius: 10px;
+  color: #0b111b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 900;
+  margin-top: 14px;
+  padding: 14px 20px;
+  width: 100%;
+}
+
+.clock-gate-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.clock-gate-link {
+  background: none;
+  border: 0;
+  color: #8a6a17;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  margin-top: 4px;
+}
+
+/* My Pay, Vacation & Leaves directory */
+.myhr-directory {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  display: grid;
+  gap: 22px 32px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 22px 24px;
+}
+
+.myhr-directory-group {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.myhr-directory-icon {
+  align-items: center;
+  background: #172235;
+  border-radius: 10px;
+  color: #d6a632;
+  display: inline-flex;
+  height: 52px;
+  justify-content: center;
+  width: 52px;
+}
+
+.myhr-directory-group h3 {
+  color: #172235;
+  font-size: 16px;
+  margin: 2px 0 6px;
+}
+
+.myhr-directory-group ul {
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.myhr-directory-group li button {
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: #1f4f8f;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 2px 4px;
+  text-align: left;
+}
+
+.myhr-directory-group li button:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.myhr-directory-group li button.not-ready {
+  background-image: none !important;
+  opacity: 0.55 !important;
+}
+
+.myhr-approval-alert {
+  background: #fff4dc;
+  border: 1px solid #ecd9a4;
+  border-left: 4px solid #d6a632;
+  border-radius: 8px;
+  color: #6b4b00;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 10px 14px;
+  text-align: left;
+}
+
+.myhr-subnav {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+}
+
+.myhr-subnav h3 {
+  color: #172235;
+  font-size: 20px;
+  margin: 0;
+}
+
+.myhr-pay-cards.three {
+  grid-template-columns: minmax(240px, 1.3fr) repeat(2, minmax(150px, 1fr));
+}
+
+.myhr-pay-cards.one {
+  grid-template-columns: minmax(260px, 420px);
+}
+
+.myhr-muted {
+  color: #5b6677;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Personal / job information */
+.myhr-details {
+  max-width: 760px;
+}
+
+.myhr-facts {
+  display: grid;
+  gap: 8px 18px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+}
+
+.myhr-facts dt {
+  color: #5b6677;
+  font-weight: 700;
+}
+
+.myhr-facts dd {
+  color: #172235;
+  font-weight: 800;
+  margin: 0;
+}
+
+.myhr-facts .capitalize {
+  text-transform: capitalize;
+}
+
+.myhr-details-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.myhr-details-form label {
+  color: #34455f;
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.myhr-details-form input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+}
+
+.myhr-details-form .myhr-editor-actions {
+  align-items: center;
+  grid-column: 1 / -1;
+}
+
+.myhr-details-form .gold-button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 8px 18px;
+}
+
+/* My Schedule */
+.myhr-schedule {
+  display: grid;
+  gap: 14px;
+}
+
+.myhr-week-nav {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.myhr-week-nav button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.myhr-week-nav strong {
+  color: #172235;
+  font-size: 16px;
+}
+
+.myhr-shift-form {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1.4fr 1fr .8fr .8fr;
+}
+
+.myhr-shift-form label {
+  color: #34455f;
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.myhr-shift-form label.wide {
+  grid-column: 1 / -2;
+}
+
+.myhr-shift-form input,
+.myhr-shift-form select {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 9px;
+}
+
+.myhr-shift-form button {
+  align-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 800;
+  gap: 6px;
+  justify-content: center;
+  padding: 9px 14px;
+}
+
+.myhr-week-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.myhr-week-day {
+  align-content: start;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  min-height: 120px;
+  padding: 8px;
+}
+
+.myhr-week-day.today {
+  border-color: #d6a632;
+  box-shadow: inset 0 3px 0 #d6a632;
+}
+
+.myhr-week-day > strong {
+  color: #172235;
+  font-size: 13px;
+}
+
+.myhr-week-shift {
+  background: #172235;
+  border-radius: 6px;
+  color: #ffffff;
+  display: grid;
+  gap: 1px;
+  padding: 6px 24px 6px 8px;
+  position: relative;
+}
+
+.myhr-week-shift b {
+  font-size: 13px;
+}
+
+.myhr-week-shift small {
+  color: #c4ccd8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.myhr-week-shift button {
+  background: none;
+  border: 0;
+  color: #f0a0a0;
+  cursor: pointer;
+  padding: 2px;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+}
+
+@media (max-width: 1100px) {
+  .myhr-directory { grid-template-columns: 1fr; }
+  .myhr-week-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

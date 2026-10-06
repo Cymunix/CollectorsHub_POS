@@ -8,7 +8,7 @@ async function call(name, params) {
   if (error) {
     // The SQL isn't installed yet.
     if (/could not find the function|does not exist/i.test(error.message || '')) {
-      throw new Error('MyHR time and leave isn’t set up in Supabase yet (run supabase/myhr_pay.sql).')
+      throw new Error('MyHR time and leave isn’t set up in Supabase yet (run supabase/myhr_pay.sql, then supabase/myhr_schedule_profile.sql).')
     }
     throw error
   }
@@ -61,3 +61,33 @@ export function daysBetween(start, end) {
 }
 
 export const isoDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+
+// Part 2 (supabase/myhr_schedule_profile.sql): schedule, personal details,
+// clock-in status.
+export const loadMySchedule = async (storeId, from, to) => (await call('myhr_my_schedule', { p_store_id: storeId, p_from: from.toISOString(), p_to: to.toISOString() })) || []
+export const loadStoreStaff = async (storeId) => (await call('myhr_store_staff', { p_store_id: storeId })) || []
+export const loadStoreSchedule = async (storeId, from, to) => (await call('myhr_store_schedule', { p_store_id: storeId, p_from: from.toISOString(), p_to: to.toISOString() })) || []
+export const addShift = (storeId, { employeeId, startsAt, endsAt, note }) => call('myhr_add_shift', {
+  p_store_id: storeId, p_employee_id: employeeId, p_starts_at: startsAt.toISOString(), p_ends_at: endsAt.toISOString(), p_note: note || null,
+})
+export const deleteShift = (storeId, shiftId) => call('myhr_delete_shift', { p_store_id: storeId, p_shift_id: shiftId })
+export const loadMyDetails = async (storeId) => {
+  const data = await call('myhr_my_details', { p_store_id: storeId })
+  return (Array.isArray(data) ? data[0] : data) || null
+}
+export const saveMyDetails = (storeId, details) => call('myhr_save_details', { p_store_id: storeId, p_details: details })
+
+// Whether this user must clock in, and since when they're clocked in. When
+// MyHR isn't installed in Supabase (or anything fails), nobody is held up.
+export async function loadClockStatus(storeId) {
+  if (!storeId) return { required: false, clockedInAt: null }
+  try {
+    const { data, error } = await supabase.rpc('myhr_clock_status', { p_store_id: storeId })
+    if (error) throw error
+    const row = (Array.isArray(data) ? data[0] : data) || {}
+    return { required: Boolean(row.is_employee), clockedInAt: row.clocked_in_at || null }
+  } catch (error) {
+    console.warn('[MyHR] clock status unavailable:', error?.message || error)
+    return { required: false, clockedInAt: null }
+  }
+}

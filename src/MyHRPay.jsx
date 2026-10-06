@@ -1,5 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { CalendarClock, Check, Clock3, LogIn, LogOut, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  BriefcaseBusiness,
+  CalendarClock,
+  Check,
+  Clock3,
+  HeartHandshake,
+  HeartPulse,
+  IdCard,
+  Link2,
+  LogIn,
+  LogOut,
+  Plane,
+  Wallet,
+  X,
+} from 'lucide-react'
 import {
   LEAVE_TYPES,
   amManager,
@@ -16,10 +31,29 @@ import {
   shiftHours,
   weekStart,
 } from './lib/myhrPay'
+import MyHRDetails from './MyHRDetails'
+import MyHRSchedule from './MyHRSchedule'
 
-// My Pay, Vacation & Leaves: the employee's time clock (clock in/out, hours
-// this week and last), leave requests (request, see the status, cancel) and
-// this year's leave; managers also approve or decline the store's requests.
+// My Pay, Vacation & Leaves: an employee self-service directory (personal
+// information, job, time, benefits, payment, travel, health & safety). The
+// built options open here: personal data, addresses, emergency contact, job
+// information, leave information, the time clock (record working time),
+// leave requests (managers approve) and the schedule. The rest are greyed
+// out until built.
+
+const DIRECTORY = [
+  { title: 'Personal Information', icon: IdCard, items: [['personal', 'Personal Data'], ['addresses', 'Addresses'], ['family', 'Family Related Data'], ['emergency', 'Emergency Contact']] },
+  { title: 'My Benefits', icon: HeartHandshake, items: [['benefits', 'Display Benefits/Beneficiaries'], ['dental', 'Health and Dental Application'], ['life', 'Employee Optional Life Application'], ['familylife', 'Spouse and Child Optional Life Application'], ['beneficiary', 'Beneficiary Nomination Form']] },
+  { title: 'My Job', icon: BriefcaseBusiness, items: [['job', 'Display Job Information']] },
+  { title: 'My Payment', icon: Wallet, items: [['payadvice', 'Pay Advice Inquiry'], ['taxform', 'Tax Form Reprint']] },
+  { title: 'My Time', icon: CalendarClock, items: [['leaveinfo', 'Display Leave Information'], ['time', 'Record Working Time'], ['leave', 'Vacation Leave Request'], ['schedule', 'My Schedule']] },
+  { title: 'Travel and Expenses', icon: Plane, items: [['trips', 'My Trips and Expenses'], ['travelrequest', 'Create Travel Request'], ['expense', 'Create Expense Claim'], ['personnel', 'Unlock Personnel Number']] },
+  { title: 'My Resource Links', icon: Link2, items: [['myhr', 'MyHR'], ['acrobat', 'Adobe Acrobat Reader']] },
+  { title: 'My Health and Safety', icon: HeartPulse, items: [['incident', 'Report a Safety Incident, Near Miss or Safety Observation'], ['safetysite', 'Workplace Health & Safety Site']] },
+]
+const BUILT = new Set(['personal', 'addresses', 'emergency', 'job', 'leaveinfo', 'time', 'leave', 'schedule', 'myhr', 'acrobat'])
+const TITLES = Object.fromEntries(DIRECTORY.flatMap((group) => group.items))
+const ACROBAT_URL = 'https://get.adobe.com/reader/'
 
 const hoursText = (hours) => `${hours.toFixed(2)} h`
 const timeText = (value) => new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -28,7 +62,8 @@ const dateText = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString([], { m
 const rangeText = (start, end) => (start === end ? dateText(start) : `${dateText(start)} – ${dateText(end)}`)
 const STATUS_TEXT = { pending: 'Waiting for approval', approved: 'Approved', declined: 'Declined', cancelled: 'Cancelled' }
 
-export default function MyHRPay({ storeId }) {
+export default function MyHRPay({ storeId, onClockChange, onMyHRHome }) {
+  const [view, setView] = useState('home')
   const [now, setNow] = useState(Date.now())
   const [entries, setEntries] = useState([])
   const [requests, setRequests] = useState([])
@@ -90,6 +125,7 @@ export default function MyHRPay({ storeId }) {
     }
     return totals
   }, [requests, year])
+  const pendingApprovals = storeRequests.filter((request) => request.status === 'pending')
 
   async function run(label, action, done) {
     setBusy(label)
@@ -107,6 +143,11 @@ export default function MyHRPay({ storeId }) {
       setBusy('')
     }
   }
+
+  const clockAction = (action) => run('clock', async () => {
+    await clock(storeId, action)
+    onClockChange?.()
+  }, action === 'in' ? 'Clocked in.' : 'Clocked out.')
 
   function setDates(changes) {
     setForm((current) => {
@@ -126,95 +167,202 @@ export default function MyHRPay({ storeId }) {
       .then((sent) => { if (sent) setForm({ type: form.type, start: today, end: today, days: '1', note: '' }) })
   }
 
+  function openItem(key) {
+    if (key === 'myhr') { onMyHRHome?.(); return }
+    if (key === 'acrobat') { window.open(ACROBAT_URL, '_blank'); return }
+    setNotice('')
+    setProblem('')
+    setView(key)
+  }
+
   if (loading) return <p className="myhr-empty">Loading your time and leave…</p>
 
-  return (
-    <div className="myhr-pay">
-      {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
-      {notice ? <p className="myhr-notice">{notice}</p> : null}
-
-      <div className="myhr-pay-cards">
-        <div className="myhr-pay-card myhr-clock">
-          <span className="myhr-pay-card-label"><Clock3 size={16} /> Time clock</span>
-          {open ? (
-            <>
-              <strong>Clocked in since {timeText(open.clock_in)}</strong>
-              <small>{hoursText(shiftHours(open, now))} so far</small>
-              <button type="button" className="myhr-clock-out" disabled={Boolean(busy)} onClick={() => run('clock', () => clock(storeId, 'out'), 'Clocked out.')}>
-                <LogOut size={16} /> {busy === 'clock' ? 'Saving…' : 'Clock out'}
-              </button>
-            </>
-          ) : (
-            <>
-              <strong>Not clocked in</strong>
-              <small>Clock in when your shift starts.</small>
-              <button type="button" className="gold-button" disabled={Boolean(busy)} onClick={() => run('clock', () => clock(storeId, 'in'), 'Clocked in.')}>
-                <LogIn size={16} /> {busy === 'clock' ? 'Saving…' : 'Clock in'}
-              </button>
-            </>
-          )}
-        </div>
-        <div className="myhr-pay-card">
-          <span className="myhr-pay-card-label">This week</span>
-          <strong className="myhr-pay-big">{hoursText(weekHours)}</strong>
-          <small>Since Monday</small>
-        </div>
-        <div className="myhr-pay-card">
-          <span className="myhr-pay-card-label">Last week</span>
-          <strong className="myhr-pay-big">{hoursText(lastWeekHours)}</strong>
-          <small>{dateText(isoDate(lastWeek))} – {dateText(isoDate(new Date(thisWeek.getTime() - 86400000)))}</small>
-        </div>
-        <div className="myhr-pay-card">
-          <span className="myhr-pay-card-label"><CalendarClock size={16} /> Leave in {year}</span>
-          {Object.keys(yearTotals).length ? (
-            <ul className="myhr-pay-totals">
-              {LEAVE_TYPES.filter(([key]) => yearTotals[key]).map(([key, label]) => (
-                <li key={key}>
-                  <span>{label}</span>
-                  <b>{yearTotals[key].approved} day{yearTotals[key].approved === 1 ? '' : 's'}</b>
-                  {yearTotals[key].pending ? <small>+{yearTotals[key].pending} waiting</small> : null}
-                </li>
-              ))}
-            </ul>
-          ) : <small>No leave taken or requested yet.</small>}
-        </div>
+  // ── Pieces ────────────────────────────────────────────────────────────────
+  const clockCard = (
+    <div className="myhr-pay-card myhr-clock">
+      <span className="myhr-pay-card-label"><Clock3 size={16} /> Time clock</span>
+      {open ? (
+        <>
+          <strong>Clocked in since {timeText(open.clock_in)}</strong>
+          <small>{hoursText(shiftHours(open, now))} so far</small>
+          <button type="button" className="myhr-clock-out" disabled={Boolean(busy)} onClick={() => clockAction('out')}>
+            <LogOut size={16} /> {busy === 'clock' ? 'Saving…' : 'Clock out'}
+          </button>
+        </>
+      ) : (
+        <>
+          <strong>Not clocked in</strong>
+          <small>Clock in when your shift starts.</small>
+          <button type="button" className="gold-button" disabled={Boolean(busy)} onClick={() => clockAction('in')}>
+            <LogIn size={16} /> {busy === 'clock' ? 'Saving…' : 'Clock in'}
+          </button>
+        </>
+      )}
+    </div>
+  )
+  const weekCards = (
+    <>
+      <div className="myhr-pay-card">
+        <span className="myhr-pay-card-label">This week</span>
+        <strong className="myhr-pay-big">{hoursText(weekHours)}</strong>
+        <small>Since Monday</small>
       </div>
+      <div className="myhr-pay-card">
+        <span className="myhr-pay-card-label">Last week</span>
+        <strong className="myhr-pay-big">{hoursText(lastWeekHours)}</strong>
+        <small>{dateText(isoDate(lastWeek))} – {dateText(isoDate(new Date(thisWeek.getTime() - 86400000)))}</small>
+      </div>
+    </>
+  )
+  const leaveYearCard = (
+    <div className="myhr-pay-card">
+      <span className="myhr-pay-card-label"><CalendarClock size={16} /> Leave in {year}</span>
+      {Object.keys(yearTotals).length ? (
+        <ul className="myhr-pay-totals">
+          {LEAVE_TYPES.filter(([key]) => yearTotals[key]).map(([key, label]) => (
+            <li key={key}>
+              <span>{label}</span>
+              <b>{yearTotals[key].approved} day{yearTotals[key].approved === 1 ? '' : 's'}</b>
+              {yearTotals[key].pending ? <small>+{yearTotals[key].pending} waiting</small> : null}
+            </li>
+          ))}
+        </ul>
+      ) : <small>No leave taken or requested yet.</small>}
+    </div>
+  )
+  const myRequests = (
+    <>
+      <h4>My requests</h4>
+      {requests.length ? (
+        <ul className="myhr-pay-list">
+          {requests.slice(0, 30).map((request) => {
+            const cancellable = request.status === 'pending' || (request.status === 'approved' && request.start_date > today)
+            return (
+              <li key={request.id}>
+                <span>
+                  <strong>{leaveTypeLabel(request.leave_type)}: {rangeText(request.start_date, request.end_date)}</strong>
+                  <small>{Number(request.days)} day{Number(request.days) === 1 ? '' : 's'}{request.decision_note ? ` · Manager: "${request.decision_note}"` : ''}</small>
+                </span>
+                <span className="myhr-pay-actions">
+                  <b className={`myhr-status ${request.status}`}>{STATUS_TEXT[request.status] || request.status}</b>
+                  {cancellable ? <button type="button" disabled={Boolean(busy)} onClick={() => run(request.id, () => cancelLeave(storeId, request.id), 'Request cancelled.')}>Cancel</button> : null}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : <p className="myhr-empty">You haven't requested any time off.</p>}
+    </>
+  )
+  const approvals = isManager ? (
+    <section className="myhr-pay-panel">
+      <h3>Leave requests to approve</h3>
+      {pendingApprovals.length ? (
+        <ul className="myhr-pay-list">
+          {pendingApprovals.map((request) => (
+            <li key={request.id}>
+              <span>
+                <strong>{request.employee_name}: {leaveTypeLabel(request.leave_type)}</strong>
+                <small>{rangeText(request.start_date, request.end_date)} · {Number(request.days)} day{Number(request.days) === 1 ? '' : 's'}{request.note ? ` · "${request.note}"` : ''}</small>
+              </span>
+              <span className="myhr-pay-actions">
+                <button type="button" className="myhr-approve" disabled={Boolean(busy)} onClick={() => run(request.id, () => decideLeave(storeId, request.id, true), `Approved ${request.employee_name}'s ${leaveTypeLabel(request.leave_type).toLowerCase()}.`)}><Check size={15} /> Approve</button>
+                <button type="button" className="myhr-decline" disabled={Boolean(busy)} onClick={() => run(request.id, () => decideLeave(storeId, request.id, false), `Declined ${request.employee_name}'s request.`)}><X size={15} /> Decline</button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="myhr-empty">Nothing waiting for approval.</p>}
+      {storeRequests.some((request) => request.status === 'approved') ? (
+        <>
+          <h4>Approved time off coming up</h4>
+          <ul className="myhr-pay-list compact">
+            {storeRequests.filter((request) => request.status === 'approved').map((request) => (
+              <li key={request.id}>
+                <span><strong>{request.employee_name}</strong> <small>{leaveTypeLabel(request.leave_type)} · {rangeText(request.start_date, request.end_date)}</small></span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </section>
+  ) : null
 
-      {isManager ? (
+  // ── Views ─────────────────────────────────────────────────────────────────
+  let body = null
+  if (view === 'home') {
+    body = (
+      <>
+        <div className="myhr-pay-cards">
+          {clockCard}
+          {weekCards}
+          {leaveYearCard}
+        </div>
+        {isManager && pendingApprovals.length ? (
+          <button type="button" className="myhr-approval-alert" onClick={() => openItem('leave')}>
+            {pendingApprovals.length} leave request{pendingApprovals.length === 1 ? '' : 's'} waiting for your approval. Review
+          </button>
+        ) : null}
+        <div className="myhr-directory">
+          {DIRECTORY.map((group) => {
+            const Icon = group.icon
+            return (
+              <div className="myhr-directory-group" key={group.title}>
+                <span className="myhr-directory-icon" aria-hidden="true"><Icon size={26} /></span>
+                <div>
+                  <h3>{group.title}</h3>
+                  <ul>
+                    {group.items.map(([key, label]) => (
+                      <li key={key}>
+                        <button type="button" className={BUILT.has(key) ? '' : 'not-ready'} disabled={!BUILT.has(key)} title={BUILT.has(key) ? '' : 'Coming soon'} onClick={() => openItem(key)}>
+                          {label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </>
+    )
+  } else if (view === 'time') {
+    body = (
+      <>
+        <div className="myhr-pay-cards three">
+          {clockCard}
+          {weekCards}
+        </div>
         <section className="myhr-pay-panel">
-          <h3>Leave requests to approve</h3>
-          {storeRequests.filter((request) => request.status === 'pending').length ? (
-            <ul className="myhr-pay-list">
-              {storeRequests.filter((request) => request.status === 'pending').map((request) => (
-                <li key={request.id}>
+          <h3>My recent shifts</h3>
+          {entries.length ? (
+            <ul className="myhr-pay-list compact">
+              {entries.slice(0, 30).map((entry) => (
+                <li key={entry.id}>
                   <span>
-                    <strong>{request.employee_name}: {leaveTypeLabel(request.leave_type)}</strong>
-                    <small>{rangeText(request.start_date, request.end_date)} · {Number(request.days)} day{Number(request.days) === 1 ? '' : 's'}{request.note ? ` · "${request.note}"` : ''}</small>
+                    <strong>{dayText(entry.clock_in)}</strong>
+                    <small>{timeText(entry.clock_in)} – {entry.clock_out ? timeText(entry.clock_out) : 'now'}</small>
                   </span>
-                  <span className="myhr-pay-actions">
-                    <button type="button" className="myhr-approve" disabled={Boolean(busy)} onClick={() => run(request.id, () => decideLeave(storeId, request.id, true), `Approved ${request.employee_name}'s ${leaveTypeLabel(request.leave_type).toLowerCase()}.`)}><Check size={15} /> Approve</button>
-                    <button type="button" className="myhr-decline" disabled={Boolean(busy)} onClick={() => run(request.id, () => decideLeave(storeId, request.id, false), `Declined ${request.employee_name}'s request.`)}><X size={15} /> Decline</button>
-                  </span>
+                  <b>{hoursText(shiftHours(entry, now))}</b>
                 </li>
               ))}
             </ul>
-          ) : <p className="myhr-empty">Nothing waiting for approval.</p>}
-          {storeRequests.some((request) => request.status === 'approved') ? (
-            <>
-              <h4>Approved time off coming up</h4>
-              <ul className="myhr-pay-list compact">
-                {storeRequests.filter((request) => request.status === 'approved').map((request) => (
-                  <li key={request.id}>
-                    <span><strong>{request.employee_name}</strong> <small>{leaveTypeLabel(request.leave_type)} · {rangeText(request.start_date, request.end_date)}</small></span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
+          ) : <p className="myhr-empty">No shifts in the last two weeks.</p>}
         </section>
-      ) : null}
-
-      <div className="myhr-pay-columns">
+      </>
+    )
+  } else if (view === 'leaveinfo') {
+    body = (
+      <>
+        <div className="myhr-pay-cards one">{leaveYearCard}</div>
+        <section className="myhr-pay-panel">{myRequests}</section>
+      </>
+    )
+  } else if (view === 'leave') {
+    body = (
+      <>
+        {approvals}
         <section className="myhr-pay-panel">
           <h3>Request time off</h3>
           <form className="myhr-leave-form" onSubmit={submitLeave}>
@@ -237,46 +385,27 @@ export default function MyHRPay({ storeId }) {
             </label>
             <button type="submit" className="gold-button" disabled={Boolean(busy)}>{busy === 'leave' ? 'Sending…' : 'Send request'}</button>
           </form>
-
-          <h4>My requests</h4>
-          {requests.length ? (
-            <ul className="myhr-pay-list">
-              {requests.slice(0, 30).map((request) => {
-                const cancellable = request.status === 'pending' || (request.status === 'approved' && request.start_date > today)
-                return (
-                  <li key={request.id}>
-                    <span>
-                      <strong>{leaveTypeLabel(request.leave_type)}: {rangeText(request.start_date, request.end_date)}</strong>
-                      <small>{Number(request.days)} day{Number(request.days) === 1 ? '' : 's'}{request.decision_note ? ` · Manager: "${request.decision_note}"` : ''}</small>
-                    </span>
-                    <span className="myhr-pay-actions">
-                      <b className={`myhr-status ${request.status}`}>{STATUS_TEXT[request.status] || request.status}</b>
-                      {cancellable ? <button type="button" disabled={Boolean(busy)} onClick={() => run(request.id, () => cancelLeave(storeId, request.id), 'Request cancelled.')}>Cancel</button> : null}
-                    </span>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : <p className="myhr-empty">You haven't requested any time off.</p>}
+          {myRequests}
         </section>
+      </>
+    )
+  } else if (view === 'schedule') {
+    body = <MyHRSchedule storeId={storeId} isManager={isManager} />
+  } else if (['personal', 'addresses', 'emergency', 'job'].includes(view)) {
+    body = <MyHRDetails storeId={storeId} view={view} />
+  }
 
-        <section className="myhr-pay-panel">
-          <h3>My recent shifts</h3>
-          {entries.length ? (
-            <ul className="myhr-pay-list compact">
-              {entries.slice(0, 20).map((entry) => (
-                <li key={entry.id}>
-                  <span>
-                    <strong>{dayText(entry.clock_in)}</strong>
-                    <small>{timeText(entry.clock_in)} – {entry.clock_out ? timeText(entry.clock_out) : 'now'}</small>
-                  </span>
-                  <b>{hoursText(shiftHours(entry, now))}</b>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="myhr-empty">No shifts in the last two weeks.</p>}
-        </section>
-      </div>
+  return (
+    <div className="myhr-pay">
+      {view !== 'home' ? (
+        <div className="myhr-subnav">
+          <button type="button" className="myhr-back" onClick={() => { setView('home'); setNotice(''); setProblem('') }}><ArrowLeft size={16} /> All options</button>
+          <h3>{TITLES[view]}</h3>
+        </div>
+      ) : null}
+      {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
+      {notice ? <p className="myhr-notice">{notice}</p> : null}
+      {body}
     </div>
   )
 }
