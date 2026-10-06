@@ -63,26 +63,7 @@ export default function MyHRView({ session, readySections = {} }) {
         </div>
       </header>
 
-      <div className="myhr-body">
-        <nav className="myhr-list" aria-label="MyHR sections">
-          {MYHR_SECTIONS.map((section) => {
-            const ready = Boolean(readySections[section.key])
-            return (
-              <button
-                key={section.key}
-                type="button"
-                className={ready ? '' : 'not-ready'}
-                disabled={!ready}
-                title={ready ? section.blurb : 'Coming soon'}
-                onClick={() => readySections[section.key]?.()}
-              >
-                {section.label}
-              </button>
-            )
-          })}
-        </nav>
-
-        <div className="myhr-tiles">
+      <div className="myhr-tiles">
           {MYHR_SECTIONS.map((section) => {
             const Icon = section.icon
             const ready = Boolean(readySections[section.key])
@@ -101,7 +82,6 @@ export default function MyHRView({ session, readySections = {} }) {
               </button>
             )
           })}
-        </div>
       </div>
     </section>
   )
