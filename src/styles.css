@@ -12095,3 +12095,29 @@ button.condition-hint {
   .av-columns { grid-template-columns: 1fr; }
   .av-day { grid-template-columns: 1fr; }
 }
+
+
+/* Organization head office (org sign-in) */
+.workspace > .org-portal {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.org-portal main {
+  display: block;
+  max-width: 1440px;
+}
+
+.org-portal h1 {
+  font-family: "Space Grotesk", Manrope, sans-serif;
+}
+
+.org-portal table th {
+  background: #f3f6fa;
+}
+
+.org-portal table tbody tr:hover td {
+  background: #fafbfd;
+}

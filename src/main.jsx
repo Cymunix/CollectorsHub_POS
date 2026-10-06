@@ -4,7 +4,12 @@ import {
   Archive,
   ArrowLeft,
   ArrowRight,
+  ArrowDownToLine,
   BarChart3,
+  ClipboardList,
+  PartyPopper,
+  Plug,
+  ScrollText,
   Banknote,
   Boxes,
   Building2,
@@ -56,6 +61,7 @@ import { createStoreItem, saveStoreItemChanges } from './lib/storeScan'
 import { printItemLabel } from './lib/printLabel'
 import { clock as clockShift, loadClockStatus } from './lib/myhrPay'
 import ClockInGate from './ClockInGate'
+import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
 import { supabase } from './lib/supabaseClient'
 
 const emptyStore = {
@@ -489,7 +495,7 @@ function App() {
   // An organization sign-in doesn't sell: no Register (it starts on MyHR).
   const isOrgSession = authSession?.type === 'organization'
   useEffect(() => {
-    if (isOrgSession && activeView === 'register') setActiveView('myhr')
+    if (isOrgSession && !activeView.startsWith('org-') && activeView !== 'myhr') setActiveView('org-overview')
   }, [isOrgSession, activeView])
 
   function requestNavigate(nextView) {
@@ -904,7 +910,16 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="Main">
-          {!isOrgSession ? <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} /> : null}
+          {isOrgSession ? (
+            <>
+              {ORG_NAV.map(([id, label]) => (
+                <NavButton key={id} icon={ORG_ICONS[id] || LayoutDashboard} label={label} active={activeView === `org-${id}`} onClick={() => setActiveView(`org-${id}`)} />
+              ))}
+              <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => setActiveView('myhr')} />
+            </>
+          ) : null}
+          {!isOrgSession ? <>
+          <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
           {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan to Inventory" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
           <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} notReady />
@@ -912,12 +927,15 @@ function App() {
           <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} notReady />
           <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => requestNavigate('myhr')} />
           <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => requestNavigate('settings')} />
+          </> : null}
         </nav>
 
         <div className="sidebar-footer">
-          <span className={store.register.status === 'open' ? 'status-pill open' : 'status-pill'}>
-            {store.register.status === 'open' ? 'Register open' : 'Register closed'}
-          </span>
+          {!isOrgSession ? (
+            <span className={store.register.status === 'open' ? 'status-pill open' : 'status-pill'}>
+              {store.register.status === 'open' ? 'Register open' : 'Register closed'}
+            </span>
+          ) : <span className="status-pill">Head office</span>}
           <small>{isSaving ? 'Saving...' : 'Local data saved'}</small>
           <small>{describeAuthSession(authSession)}</small>
           <UpdateCheck compact />
@@ -929,7 +947,7 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'myhr' ? (
+        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
           <>
             <header className="topbar">
               <div>
@@ -1038,6 +1056,9 @@ function App() {
         {activeView === 'transactions' ? <TransactionsView transactions={store.transactions} /> : null}
         {activeView === 'reports' ? <PlaceholderView icon={BarChart3} title="Reports" copy="Daily closeout, stock movement, margin, category performance, and tax summaries will live here." /> : null}
         {activeView === 'settings' ? <SettingsView dataPath={dataPath} /> : null}
+        {activeView.startsWith('org-') && isOrgSession ? (
+          <OrgPortal session={authSession} activeModule={activeView.slice(4)} onModule={(module) => setActiveView(`org-${module}`)} />
+        ) : null}
         {activeView === 'myhr' ? <MyHRView session={authSession} onClockChange={refreshClockStatus} /> : null}
       </section>
       {stockToast ? (
@@ -1170,6 +1191,12 @@ function describeAuthSession(session) {
   if (session.type === 'platform_admin') return `Admin: ${session.displayName}`
   if (session.type === 'organization') return `Org: ${session.orgName || session.orgCode}`
   return `${session.storeName || 'Store'}: ${session.username || session.role || 'Employee'}`
+}
+
+const ORG_ICONS = {
+  overview: LayoutDashboard, stores: Store, locations: MapPin, staff: Users, inventory: Boxes, orders: ClipboardList,
+  sales: CircleDollarSign, tradeins: ArrowDownToLine, promos: PartyPopper, reports: BarChart3, policies: ScrollText,
+  integrations: Plug, settings: Settings,
 }
 
 function NavButton({ icon: Icon, label, active, onClick, badge = null, badgeTitle = '', notReady = false }) {

@@ -7,6 +7,7 @@ import MyHRView from './MyHR'
 import MyHRPay from './MyHRPay'
 import MyHROrgEmployees from './MyHROrgEmployees'
 import ScheduleBuilder from './ScheduleBuilder'
+import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
 // data, no sign-in and nothing saved, so they can be looked at and
@@ -56,6 +57,16 @@ const SAMPLE = {
     ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
   ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
   myhr_org_leave_year: 4,
+  organization_stores: [
+    { store_id: 'st1', store_code: 'NOR001', store_name: 'Nordvik Test Store', status: 'active', region_id: null, notification_region_id: 'ns-northern', primary_province: 'NS', primary_location: 'Main Store', location_count: 1, staff_count: 4, inventory_count: 49 },
+    { store_id: 'st2', store_code: 'NOR002', store_name: 'Nordvik Dartmouth', status: 'setup', region_id: null, notification_region_id: null, primary_province: 'NS', primary_location: null, location_count: 0, staff_count: 0, inventory_count: 0 },
+  ],
+  my_unattached_stores: [],
+  list_org_regions: [],
+  org_sales_kpis: { today: 412.5, transactions_today: 9, week: 2210, month: 8840, net_sales: 8840, gross_sales: 9100, transactions: 214, average_basket: 41.3 },
+  org_order_kpis: { ready_for_pickup: 2, outstanding_layaway: 360, outstanding_preorder: 145, created_today: 1 },
+  org_tradein_kpis: { today: 3, this_week: 11 },
+  org_sales_by_store: [{ store_id: 'st1', store_name: 'Nordvik Test Store', transactions: 9, sales: 412.5, avg_basket: 45.83 }],
   myhr_my_availability_profile: { availability: { 1: [{ from: '15:30', to: '22:00' }], 2: [{ from: '15:30', to: '22:00' }], 3: [{ from: '07:00', to: '09:00' }, { from: '15:30', to: '22:00' }], 4: [{ from: '15:30', to: '22:00' }], 5: [{ from: '15:30', to: '22:00' }], 0: [] }, preferred_hours: 18, most_hours: 20, restrictions: ['no_close'], note: 'Student: classes until 3 on weekdays, exams Dec 8–19', updated_at: new Date().toISOString() },
   myhr_schedule_staff: [
     { id: 'm1', name: 'Morgan Lee', short_name: 'Morgan L.', schedule_role: 'Manager', can_cover: ['Keyholder'], target_hours: 40, min_hours: 32, max_hours: 44, availability: {}, hourly_cost: 26 },
@@ -177,13 +188,14 @@ function OrgEmployeesPreview() {
 function Preview() {
   let content
   if (screen === 'org-employees') content = <OrgEmployeesPreview />
+  else if (screen === 'org') content = <OrgPortal session={{ type: 'organization', orgId: 'org', orgCode: 'ORG-0001', orgName: 'Nordvik Collectibles' }} activeModule={new URLSearchParams(window.location.search).get('module') || 'overview'} />
   else if (screen === 'builder') content = <ScheduleBuilder storeId={storeId} />
   else if (screen === 'clockin') content = <ClockInGate name="HaydenM8" onClockIn={async () => {}} onOpenMyHR={() => {}} />
   else if (payViews[screen]) content = <MyHRPay storeId={storeId} initialView={payViews[screen]} />
   else content = <MyHRView session={session} />
   return (
     <main className="app-shell preview-shell">
-      <aside className="sidebar preview-sidebar"><strong>CollectorsHub POS</strong><small>Preview · sample data</small></aside>
+      <aside className="sidebar preview-sidebar"><strong>CollectorsHub POS</strong><small>Preview · sample data</small>{screen === 'org' ? <nav className="nav-list">{[...ORG_NAV, ['myhr', 'MyHR']].map(([id, label]) => <button key={id} type="button" className={`nav-button${id === 'overview' ? ' active' : ''}`}><span>{label}</span></button>)}</nav> : null}</aside>
       <section className="workspace">{content}</section>
     </main>
   )
