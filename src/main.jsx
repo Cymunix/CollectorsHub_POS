@@ -251,6 +251,9 @@ function App() {
 
   async function persist(nextStore) {
     const mergedStore = { ...nextStore, sync: { ...emptyStore.sync, ...(nextStore.sync || {}) } }
+    // Updated straight away so the next save (even in the same tick) builds
+    // on this one rather than an older copy.
+    storeRef.current = mergedStore
     setStore(mergedStore)
     setSyncStatus(mergedStore.sync)
     if (isTransientStoreSession(authSession)) {
@@ -259,6 +262,9 @@ function App() {
     setIsSaving(true)
     try {
       const savedStore = await desktopApi().saveStore(mergedStore)
+      // A newer save started meanwhile: keep that one on screen.
+      if (storeRef.current !== mergedStore) return savedStore
+      storeRef.current = savedStore
       setStore(savedStore)
       setSyncStatus({ ...emptyStore.sync, ...(savedStore.sync || {}) })
     } finally {
@@ -322,7 +328,7 @@ function App() {
     }
     setSyncStatus(startingSync)
     if (!online) {
-      await persist({ ...store, sync: startingSync })
+      await persist({ ...storeRef.current, sync: startingSync })
       return
     }
 
@@ -341,7 +347,7 @@ function App() {
         context: result.context,
         failedRecords: result.status.failedRecords || [],
       }
-      await persist({ ...store, inventory: result.inventory, customers, sync: nextSync })
+      await persist({ ...storeRef.current, inventory: result.inventory, customers, sync: nextSync })
     } catch (error) {
       console.error('[Desktop Sync] Failed:', error)
       const failedSync = {
@@ -351,7 +357,7 @@ function App() {
         online,
         error: error?.message || 'Sync failed.',
       }
-      await persist({ ...store, sync: failedSync })
+      await persist({ ...storeRef.current, sync: failedSync })
     } finally {
       setIsSyncing(false)
     }
@@ -444,7 +450,7 @@ function App() {
         ? { ...item, ...localPatch, syncedAt: localPatch.syncedAt || new Date().toISOString() }
         : item
     ))
-    await persist({ ...store, inventory: nextInventory, sync: nextSync })
+    await persist({ ...storeRef.current, inventory: nextInventory, sync: nextSync })
     return { patch: localPatch, note: saved?.note || '' }
   }
 
@@ -592,12 +598,12 @@ function App() {
       transient: isTransientStore,
       createdAt: new Date().toISOString(),
     }
-    await persist({ ...store, transactions: [refundTransaction, ...store.transactions] })
+    await persist({ ...storeRef.current, transactions: [refundTransaction, ...(storeRef.current.transactions || [])] })
     return refundTransaction
   }
 
   async function saveScanSessions(nextSessions) {
-    await persist({ ...store, scanSessions: nextSessions })
+    await persist({ ...storeRef.current, scanSessions: nextSessions })
   }
 
   async function toggleRegister() {
@@ -915,7 +921,7 @@ function App() {
             <SyncStatusPanel
               status={syncStatus}
               isSyncing={isSyncing}
-              onDismissError={() => persist({ ...store, sync: { ...syncStatus, error: '' } })}
+              onDismissError={() => persist({ ...storeRef.current, sync: { ...syncStatus, error: '' } })}
             />
 
             <section className="metric-row" aria-label="Store metrics">

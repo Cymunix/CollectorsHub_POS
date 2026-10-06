@@ -9103,3 +9103,12 @@ button.not-ready:disabled {
 .inventory-label-preview .inventory-workflow-actions {
   margin-top: 8px;
 }
+
+/* Scan to Inventory fills the workspace and scrolls (the workspace itself
+   doesn't), so long batches of scanned cards can be scrolled through. */
+.workspace > .store-scan {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}

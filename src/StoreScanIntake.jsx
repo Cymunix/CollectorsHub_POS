@@ -51,7 +51,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   const cardsRef = useRef(startQueue)
   useEffect(() => { if (startQueue.length !== savedQueue.length) onSaveQueue(startQueue) }, [])
   const [category, setCategory] = useState(() => readScannerPref('storeCategory', 'Sports Cards'))
-  const [defaults, setDefaults] = useState(() => ({ condition: 'Near Mint', sellPrice: '', buyPrice: '', ...readScannerPref('storeDefaults', {}) }))
+  const [defaults, setDefaults] = useState(() => {
+    const { condition, ...saved } = readScannerPref('storeDefaults', {})
+    return { sellPrice: '', buyPrice: '', ...saved }
+  })
   const [scanner, setScanner] = useState({ state: 'connecting' })
   const [feed, setFeed] = useState(null)
   const [canonSide, setCanonSide] = useState(null)
@@ -63,7 +66,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   const categoryRef = useRef(category)
   categoryRef.current = category
   // The feeder's listener is set up once, so it reads the batch defaults
-  // (condition, sell and buy price) through a ref to get the current ones.
+  // (sell and buy price) through a ref to get the current ones.
   const defaultsRef = useRef(defaults)
   defaultsRef.current = defaults
 
@@ -115,7 +118,8 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       backImage,
       feed: feedInfo,
       category: categoryRef.current,
-      condition: defaultsRef.current.condition,
+      // Set by the AI once the card is identified; staff can change it.
+      condition: '',
       quantity: 1,
       sellPrice: defaultsRef.current.sellPrice,
       buyPrice: defaultsRef.current.buyPrice,
@@ -219,6 +223,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   }
 
   async function addToStock(card) {
+    if (!card.condition) {
+      patch(card.id, { error: "Pick a condition (the AI didn't suggest one)." })
+      return false
+    }
     patch(card.id, { status: 'adding', error: '' })
     try {
       const outcome = await addScannedCardToStock({ session, item: card.item, condition: card.condition, quantity: card.quantity, sellPrice: card.sellPrice, buyPrice: card.buyPrice })
@@ -240,10 +248,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
 
   function applyDefaultsToWaiting(changes) {
     setDefaults((current) => ({ ...current, ...changes }))
-    // A condition chosen for the batch is staff's call: the AI's suggestion
-    // no longer replaces it.
-    const touched = 'condition' in changes ? { conditionTouched: true } : {}
-    save((list) => list.map((card) => (['added', 'adding', 'skipped'].includes(card.status) ? card : { ...card, ...changes, ...touched })))
+    save((list) => list.map((card) => (['added', 'adding', 'skipped'].includes(card.status) ? card : { ...card, ...changes })))
   }
 
   // Batch finished (every card added or skipped, by Add all or one at a
@@ -278,11 +283,6 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
           <select value={category} onChange={(event) => setCategory(event.target.value)} disabled={busy}>
             <option>Sports Cards</option>
             <option>Trading Cards</option>
-          </select>
-        </label>
-        <label>Condition
-          <select value={defaults.condition} onChange={(event) => applyDefaultsToWaiting({ condition: event.target.value })}>
-            {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
           </select>
         </label>
         <label>Sell price (each)
@@ -343,8 +343,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             {['ready', 'choose', 'unmatched'].includes(card.status) ? (
               <div className="store-scan-card-fields">
                 <span className="store-scan-condition">
-                  <select value={card.condition} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true })}>
+                  <select value={card.condition || ''} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true, error: '' })} title="Condition (set by the AI; change it if needed)">
+                    {!card.condition ? <option value="">Condition…</option> : null}
                     {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+                    {card.condition && !CARD_CONDITIONS.includes(card.condition) ? <option>{card.condition}</option> : null}
                   </select>
                   <ConditionHint suggestion={card.conditionSuggestion} current={card.condition} />
                 </span>
