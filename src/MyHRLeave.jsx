@@ -149,7 +149,7 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 
 // The organization: its leave year (for every store) and one employee's
 // entitlements per time account for the current leave year.
-export function OrgLeaveEntitlements({ orgId, employeeId }) {
+export function OrgLeaveEntitlements({ orgId, employeeId, onSaved }) {
   const [startMonth, setStartMonth] = useState(null)
   const [accounts, setAccounts] = useState(null)
   const [draft, setDraft] = useState({})
@@ -178,6 +178,7 @@ export function OrgLeaveEntitlements({ orgId, employeeId }) {
       await setOrgLeaveYear(orgId, month)
       await reload()
       setNotice(`Leave year now starts on ${MONTHS[month - 1]} 1 for every store.`)
+      onSaved?.()
     } catch (error) {
       setProblem(error?.message || String(error))
     } finally {
@@ -199,6 +200,7 @@ export function OrgLeaveEntitlements({ orgId, employeeId }) {
       }
       await reload()
       setNotice('Entitlements saved.')
+      onSaved?.()
     } catch (error) {
       setProblem(error?.message || String(error))
     } finally {
@@ -246,7 +248,7 @@ export function OrgLeaveEntitlements({ orgId, employeeId }) {
 
 // The organization: one employee's scheduling role, the roles they may also
 // cover (e.g. a Supervisor who can cover Keyholder), and weekly hour targets.
-export function OrgScheduleProfile({ orgId, employeeId }) {
+export function OrgScheduleProfile({ orgId, employeeId, onSaved }) {
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
@@ -281,6 +283,7 @@ export function OrgScheduleProfile({ orgId, employeeId }) {
         max_hours: draft.max_hours === '' ? '' : String(draft.max_hours),
       })
       setNotice('Scheduling settings saved.')
+      onSaved?.()
     } catch (error) {
       setProblem(error?.message || String(error))
     } finally {

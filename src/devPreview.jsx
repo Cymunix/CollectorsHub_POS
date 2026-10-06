@@ -57,6 +57,12 @@ const SAMPLE = {
     ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
   ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
   myhr_org_leave_year: 4,
+  myhr_my_onboarding: { job: true, pay: true, scheduling: false, leave: false, personal: true, address: false, emergency: false, availability: true },
+  myhr_org_onboarding: [
+    { employee_id: 'e1', added_at: '2026-08-31T12:00:00Z', onboarding: { job: true, pay: true, scheduling: true, leave: true, personal: true, address: true, emergency: true, availability: true } },
+    { employee_id: 'e2', added_at: '2026-10-05T12:00:00Z', onboarding: { job: true, pay: false, scheduling: false, leave: false, personal: true, address: false, emergency: false, availability: false } },
+    { employee_id: 'e3', added_at: '2026-10-06T12:00:00Z', onboarding: { job: false, pay: false, scheduling: false, leave: false, personal: false, address: false, emergency: false, availability: false } },
+  ],
   organization_stores: [
     { store_id: 'st1', store_code: 'NOR001', store_name: 'Nordvik Test Store', status: 'active', region_id: null, notification_region_id: 'ns-northern', primary_province: 'NS', primary_location: 'Main Store', location_count: 1, staff_count: 4, inventory_count: 49 },
     { store_id: 'st2', store_code: 'NOR002', store_name: 'Nordvik Dartmouth', status: 'setup', region_id: null, notification_region_id: null, primary_province: 'NS', primary_location: null, location_count: 0, staff_count: 0, inventory_count: 0 },

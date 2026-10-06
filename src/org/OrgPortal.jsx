@@ -5,9 +5,10 @@ import { useEffect, useRef, useState } from 'react'
 import { loadOrganizationStores, myUnattachedStores, attachStoreToOrganization, detachStoreFromOrganization, createStoreFull, createStoreEmployee, ORG_EMPLOYEE_ROLES, listOrgRegions, updateLocationAddress, setStoreNotificationRegion, searchCommunities , orgSalesKpis, orgOrderKpis, orgTradeinKpis, orgSalesByStore, taxForProvince, loadStoreLocations } from './orgApi'
 import { regionsForProvince, defaultRegionIdForProvince, regionNameById, CANADA_PROVINCE_CODES_BY_NAME } from './notificationRegions'
 import {
-  LocationsModule, StaffModule, InventoryModule, OrdersModule, TradeInsModule, SalesModule,
+  LocationsModule, InventoryModule, OrdersModule, TradeInsModule, SalesModule,
   PromotionsEventsModule, PoliciesModule, ReportsModule, IntegrationsModule, OrgSettingsModule,
 } from './OrgModules'
+import MyHROrgEmployees from '../MyHROrgEmployees'
 
 // Normalise whatever the browser's address autofill gives (full name or code) to
 // a 2-letter province code so tax + region derivation work.
@@ -40,6 +41,8 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
   const [wizardOpen, setWizardOpen] = useState(false)
   const [regions, setRegions] = useState([])
   const setActiveModule = onModule
+  // The staff member to open in Staff (e.g. just added).
+  const [focusEmployeeId, setFocusEmployeeId] = useState('')
   // Live head-office numbers (the website showed fixed zeros here).
   const [live, setLive] = useState({ sales: {}, orders: {}, tradeins: {}, salesToday: {} })
   const [scope, setScope] = useState('all')          // region filter (region id | 'all')
@@ -304,7 +307,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
         ) : activeModule === 'locations' && !session.demo ? (
           <LocationsModule orgId={session.orgId} stores={stores} />
         ) : activeModule === 'staff' && !session.demo ? (
-          <StaffModule orgId={session.orgId} stores={stores} />
+          <MyHROrgEmployees orgId={session.orgId} orgName={session.orgName} title="Staff" initialSelectedId={focusEmployeeId} />
         ) : activeModule === 'inventory' && !session.demo ? (
           <InventoryModule orgId={session.orgId} stores={stores} />
         ) : activeModule === 'orders' && !session.demo ? (
@@ -328,7 +331,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
         )}
       </main>
 
-      {staffStore && <StaffModal store={staffStore} onClose={() => setStaffStore(null)} />}
+      {staffStore && <StaffModal store={staffStore} onClose={() => setStaffStore(null)} onSetUp={(employeeId) => { setStaffStore(null); setFocusEmployeeId(employeeId || ''); setActiveModule('staff') }} />}
       {locStore && <LocationsModal store={locStore} onClose={() => setLocStore(null)} />}
       {wizardOpen && <CreateStoreWizard demo={session.demo} onClose={() => setWizardOpen(false)} onCreate={onWizardCreate} />}
     </div>
@@ -611,7 +614,7 @@ function LocationsModal({ store, onClose }) {
 
 const lblSm = { display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#5f7294', marginBottom: 3 }
 
-function StaffModal({ store, onClose }) {
+function StaffModal({ store, onClose, onSetUp }) {
   const [form, setForm] = useState({ firstName: '', lastName: '', role: 'cashier', pin: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -621,7 +624,7 @@ function StaffModal({ store, onClose }) {
     setError(''); setCreated(null); setBusy(true)
     try {
       const emp = await createStoreEmployee({ storeId: store.storeId, firstName: form.firstName, lastName: form.lastName, role: form.role, pin: form.pin })
-      setCreated({ username: emp.username, pin: form.pin })
+      setCreated({ username: emp.username, pin: form.pin, id: emp.id, name: `${form.firstName} ${form.lastName}`.trim() })
       setForm({ firstName: '', lastName: '', role: 'cashier', pin: '' })
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
@@ -638,6 +641,10 @@ function StaffModal({ store, onClose }) {
         {created && (
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: '0.84rem', color: '#15803d' }}>
             Login created. Store code <strong>{store.storeCode}</strong> · username <strong>@{created.username}</strong> · PIN <strong>{created.pin}</strong>. Save these — the PIN isn&apos;t shown again.
+            <div style={{ marginTop: 10, color: '#17253d' }}>
+              Next: set up {created.name || 'their'} job, pay, scheduling and leave. They&apos;ll finish their own part (personal data, address, emergency contact, availability) in MyHR when they sign in.
+            </div>
+            <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={() => onSetUp?.(created.id)}>Set up their job and pay →</button>
           </div>
         )}
 

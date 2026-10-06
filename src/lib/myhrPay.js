@@ -206,3 +206,7 @@ export const RESTRICTIONS = [
   ['needs_keyholder', 'Needs a keyholder on shift'],
   ['not_alone', "Can't work alone"],
 ]
+
+// Part 10 (supabase/myhr_onboarding.sql): onboarding status.
+export const loadMyOnboarding = async (storeId) => (await call('myhr_my_onboarding', { p_store_id: storeId })) || null
+export const loadOrgOnboarding = async (orgId) => Object.fromEntries(((await call('myhr_org_onboarding', { p_org_id: orgId })) || []).map((row) => [row.employee_id, { ...(row.onboarding || {}), addedAt: row.added_at }]))

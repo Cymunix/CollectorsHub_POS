@@ -37,6 +37,7 @@ import MyHRLeaveRequest from './MyHRLeaveRequest'
 import MyHRTimesheet from './MyHRTimesheet'
 import MyHRSchedule from './MyHRSchedule'
 import MyHRAvailability from './MyHRAvailability'
+import { EmployeeOnboardingBanner } from './MyHROnboarding'
 
 // My Pay, Vacation & Leaves: an employee self-service directory (personal
 // information, job, time, benefits, payment, travel, health & safety). The
@@ -267,6 +268,7 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
             {pendingApprovals.length} leave request{pendingApprovals.length === 1 ? '' : 's'} waiting for your approval. Review
           </button>
         ) : null}
+        <EmployeeOnboardingBanner storeId={storeId} onOpen={openItem} />
         <div className="myhr-directory">
           {DIRECTORY.map((group) => {
             const Icon = group.icon

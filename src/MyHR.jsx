@@ -22,10 +22,11 @@ import { hasMyHRPage, loadMyHRSettings, loadOrgMyHRSettings, saveMyHRSections } 
 import MyHRPage from './MyHRPage'
 import MyHRPay from './MyHRPay'
 import MyHROrgEmployees from './MyHROrgEmployees'
+import { EmployeeOnboardingBanner } from './MyHROnboarding'
 
 // Sections with a feature built into the app (open for everyone, with the
 // org's page, if any, underneath).
-const BUILT_SECTIONS = { pay: (session, extras) => <MyHRPay storeId={session?.storeId} storeName={extras.storeName} onClockChange={extras.onClockChange} onMyHRHome={extras.onHome} /> }
+const BUILT_SECTIONS = { pay: (session, extras) => <MyHRPay key={extras.payView || 'home'} storeId={session?.storeId} storeName={extras.storeName} initialView={extras.payView || 'home'} onClockChange={extras.onClockChange} onMyHRHome={extras.onHome} /> }
 
 // MyHR: the employee's own HR hub (pay, time off, training, etc.). The store's
 // organization picks which sections its staff see and writes each section's
@@ -67,6 +68,8 @@ export default function MyHRView({ session, onClockChange }) {
   const [settings, setSettings] = useState(null)
   const [editing, setEditing] = useState(null) // { sections: Set } while choosing
   const [openKey, setOpenKey] = useState('')
+  // Which My Pay screen to open on (from the onboarding checklist).
+  const [payView, setPayView] = useState('')
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   // Signed in as the organization: it manages MyHR and its employees.
@@ -123,8 +126,8 @@ export default function MyHRView({ session, onClockChange }) {
         section={openSection}
         page={pages[openKey]}
         settings={settings}
-        onBack={() => setOpenKey('')}
-        children={(!isOrg && BUILT_SECTIONS[openKey]?.(session, { onClockChange, onHome: () => setOpenKey(''), storeName })) || null}
+        onBack={() => { setOpenKey(''); setPayView('') }}
+        children={(!isOrg && BUILT_SECTIONS[openKey]?.(session, { onClockChange, onHome: () => { setOpenKey(''); setPayView('') }, storeName, payView })) || null}
         onSaved={(content) => setSettings((current) => {
           const nextPages = { ...(current?.pages || {}) }
           if (content) nextPages[openKey] = content
@@ -170,6 +173,9 @@ export default function MyHRView({ session, onClockChange }) {
         </div>
       ) : null}
       {notice ? <p className="myhr-notice">{notice}</p> : null}
+      {!isOrg && session?.storeId && !editing ? (
+        <EmployeeOnboardingBanner storeId={session.storeId} onOpen={(view) => { setPayView(view); setOpenKey('pay') }} />
+      ) : null}
 
       {!shown.length ? (
         <p className="myhr-empty">Your organization hasn't turned on any MyHR sections yet.</p>

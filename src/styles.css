@@ -12121,3 +12121,130 @@ button.condition-hint {
 .org-portal table tbody tr:hover td {
   background: #fafbfd;
 }
+
+/* MyHR onboarding */
+.ob-banner {
+  background: #fffaf0;
+  border: 1px solid #ecd9a4;
+  border-left: 5px solid #d6a632;
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.ob-banner-head {
+  align-items: center;
+  color: #8a6a17;
+  display: flex;
+  gap: 10px;
+}
+
+.ob-banner-head span {
+  display: grid;
+  gap: 2px;
+}
+
+.ob-banner-head strong {
+  color: #172235;
+  font-size: 16px;
+}
+
+.ob-banner-head small {
+  color: #5b6677;
+  font-weight: 700;
+}
+
+.ob-tasks {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.ob-task {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  color: inherit;
+  display: flex;
+  font: inherit;
+  gap: 10px;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+button.ob-task {
+  cursor: pointer;
+}
+
+button.ob-task:hover {
+  border-color: #d6a632;
+}
+
+.ob-task > span {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ob-task strong {
+  color: #172235;
+  font-size: 14px;
+}
+
+.ob-task small {
+  color: #5b6677;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ob-task em {
+  color: #8a6a17;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.ob-task.done {
+  background: #f3faf5;
+  border-color: #cdebd6;
+}
+
+.ob-done { color: #1d6b35; flex: 0 0 auto; }
+.ob-todo { color: #c3cad6; flex: 0 0 auto; }
+
+.ob-panel.complete {
+  border-color: #cdebd6;
+}
+
+.ob-columns {
+  display: grid;
+  gap: 14px;
+}
+
+.ob-columns h4 {
+  color: #34455f;
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+
+.ob-badge {
+  background: #fff4dc;
+  border-radius: 999px;
+  color: #8a5d00;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.ob-badge.done {
+  background: #e3f6e8;
+  color: #1d6b35;
+}
+
+.myhr > .ob-banner {
+  flex: 0 0 auto;
+}
