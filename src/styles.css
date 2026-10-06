@@ -10663,3 +10663,54 @@ button.condition-hint {
   .myhr-job-grid { grid-template-columns: 150px minmax(0, 1fr); }
   .myhr-job-form { grid-template-columns: 1fr; }
 }
+
+/* MyHR: the organization's employees */
+.myhr-org-layout {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+}
+
+.myhr-org-search {
+  align-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #5b6677;
+  display: flex;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.myhr-org-search input {
+  border: 0;
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  padding: 8px 0;
+}
+
+.myhr-org-table tbody tr {
+  cursor: pointer;
+}
+
+.myhr-org-table tbody tr:hover td {
+  background: #f8fafc;
+}
+
+.myhr-org-table tbody tr.selected td {
+  background: #fff4dc;
+}
+
+.myhr-org-table .capitalize {
+  text-transform: capitalize;
+}
+
+.myhr-org-layout .myhr-job-form {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1200px) {
+  .myhr-org-layout { grid-template-columns: 1fr; }
+}

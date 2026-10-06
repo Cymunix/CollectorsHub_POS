@@ -5,6 +5,7 @@ import { supabase } from './lib/supabaseClient'
 import ClockInGate from './ClockInGate'
 import MyHRView from './MyHR'
 import MyHRPay from './MyHRPay'
+import MyHROrgEmployees from './MyHROrgEmployees'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
 // data, no sign-in and nothing saved, so they can be looked at and
@@ -74,7 +75,12 @@ const SAMPLE = {
     { id: 'x5', employee_name: 'Jordan Smith', starts_at: day(monday + 5, 12), ends_at: day(monday + 5, 20) },
   ],
   myhr_my_job: [{ employee_id: 'e1', personnel_number: '4000001', name: 'Mx Jordan Sample', personnel_area: 'Nordvik Collectibles', business_area: 'Main Store', employee_group: 'Employee', employee_subgroup: 'Part-time hourly', position_title: 'Store Manager', pay_type: 'hourly', pay_rate: 21.5, hours_per_period: 56, pay_period: 'biweekly', next_increase: '2027-01-01', changed_by_name: 'Store owner', changed_at: '2026-09-01T12:00:00Z' }],
-  myhr_staff_job: [{ employee_id: 'e1', personnel_number: '4000001', name: 'Mx Jordan Sample', personnel_area: 'Nordvik Collectibles', business_area: 'Main Store', employee_group: 'Employee', employee_subgroup: 'Part-time hourly', position_title: 'Store Manager', pay_type: 'hourly', pay_rate: 21.5, hours_per_period: 56, pay_period: 'biweekly', next_increase: '2027-01-01', changed_by_name: 'Store owner', changed_at: '2026-09-01T12:00:00Z' }],
+  myhr_org_staff: [
+    { id: 'e1', name: 'Jordan Sample', role: 'manager', status: 'active', personnel_number: '4000001', store_name: 'Nordvik Test Store', position_title: 'Store Manager' },
+    { id: 'e2', name: 'Casey Lee', role: 'cashier', status: 'active', personnel_number: '4000002', store_name: 'Nordvik Test Store', position_title: 'Sales Associate' },
+    { id: 'e3', name: 'Sam Patel', role: 'cashier', status: 'active', personnel_number: '4000003', store_name: 'Nordvik Dartmouth', position_title: null },
+  ],
+  myhr_org_staff_job: [{ employee_id: 'e1', personnel_number: '4000001', name: 'Mx Jordan Sample', personnel_area: 'Nordvik Collectibles', business_area: 'Main Store', employee_group: 'Employee', employee_subgroup: 'Part-time hourly', position_title: 'Store Manager', pay_type: 'hourly', pay_rate: 21.5, hours_per_period: 56, pay_period: 'biweekly', next_increase: '2027-01-01', changed_by_name: 'Store owner', changed_at: '2026-09-01T12:00:00Z' }],
   myhr_my_family: [
     { id: 'f1', relationship: 'Father', name: 'Pat Sample', date_of_birth: '1968-02-03', gender: 'Male' },
     { id: 'f2', relationship: 'Mother', name: 'Robin Sample', date_of_birth: '1970-09-21', gender: 'Female' },
@@ -92,9 +98,16 @@ supabase.rpc = async (name) => ({ data: SAMPLE[name] ?? null, error: null })
 const screen = new URLSearchParams(window.location.search).get('screen') || 'myhr'
 const payViews = { pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', addresses: 'addresses', family: 'family', job: 'job', emergency: 'emergency' }
 
+function OrgEmployeesPreview() {
+  const [ready, setReady] = React.useState(false)
+  React.useEffect(() => { setReady(true) }, [])
+  return ready ? <MyHROrgEmployees orgId="org" orgName="Nordvik Collectibles" onBack={() => {}} initialSelectedId="e2" /> : null
+}
+
 function Preview() {
   let content
-  if (screen === 'clockin') content = <ClockInGate name="HaydenM8" onClockIn={async () => {}} onOpenMyHR={() => {}} />
+  if (screen === 'org-employees') content = <OrgEmployeesPreview />
+  else if (screen === 'clockin') content = <ClockInGate name="HaydenM8" onClockIn={async () => {}} onOpenMyHR={() => {}} />
   else if (payViews[screen]) content = <MyHRPay storeId={storeId} initialView={payViews[screen]} />
   else content = <MyHRView session={session} />
   return (

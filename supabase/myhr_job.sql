@@ -1,7 +1,7 @@
 -- MyHR, part 4 (run after myhr_personal_data.sql): Job Information.
 -- Each employee's job and pay (group, subgroup, position, pay type and rate,
--- hours per pay period, next increase), set by the store's managers/owner and
--- read-only for the employee. Who changed it and when is recorded.
+-- hours per pay period, next increase), set by the ORGANIZATION (its owner) and
+-- read-only for stores and staff. Who changed it and when is recorded.
 
 CREATE TABLE IF NOT EXISTS public.store_employee_jobs (
   employee_id       uuid PRIMARY KEY REFERENCES public.store_employees(id) ON DELETE CASCADE,
@@ -58,8 +58,48 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
    WHERE public.myhr_employee_id(p_store_id) IS NOT NULL
 $$;
 
--- Managers: one staff member's job information.
-CREATE OR REPLACE FUNCTION public.myhr_staff_job(p_store_id uuid, p_employee_id uuid)
+-- ── The organization edits employees (not the store) ────────────────────────
+-- Only the organization's owner changes an employee's job and pay. Store
+-- managers and staff read it (staff: their own, through myhr_my_job).
+DROP FUNCTION IF EXISTS public.myhr_staff_job(uuid, uuid);
+DROP FUNCTION IF EXISTS public.myhr_save_staff_job(uuid, uuid, jsonb);
+
+-- The org store an employee works at (their store, or the store of the owner
+-- who added them when they cover all locations).
+CREATE OR REPLACE FUNCTION public.myhr_org_employee_store(p_org_id uuid, p_employee_id uuid)
+RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT s.id
+    FROM public.store_employees e
+    JOIN public.stores s ON s.organization_id = p_org_id
+     AND (e.store_id = s.id OR (e.store_id IS NULL AND e.store_owner_id = s.owner_user_id))
+   WHERE e.id = p_employee_id
+   ORDER BY (e.store_id = s.id) DESC NULLS LAST, s.created_at
+   LIMIT 1
+$$;
+REVOKE ALL ON FUNCTION public.myhr_org_employee_store(uuid, uuid) FROM PUBLIC;
+
+-- Org owner: every employee across the organization's stores.
+CREATE OR REPLACE FUNCTION public.myhr_org_staff(p_org_id uuid)
+RETURNS TABLE (id uuid, name text, role text, status text, personnel_number text, store_name text, position_title text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF p_org_id IS NULL OR p_org_id NOT IN (SELECT public.user_org_ids()) THEN
+    RAISE EXCEPTION 'Only the organization''s owner can manage employees.';
+  END IF;
+  RETURN QUERY
+  SELECT DISTINCT ON (e.id)
+         e.id,
+         COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, e.last_name)), ''), e.username, 'Employee'),
+         e.role, e.status, e.personnel_number, s.store_name, j.position_title
+    FROM public.store_employees e
+    JOIN public.stores s ON s.organization_id = p_org_id
+     AND (e.store_id = s.id OR (e.store_id IS NULL AND e.store_owner_id = s.owner_user_id))
+    LEFT JOIN public.store_employee_jobs j ON j.employee_id = e.id
+   ORDER BY e.id, (e.store_id = s.id) DESC NULLS LAST;
+END $$;
+
+-- Org owner: one employee's job information.
+CREATE OR REPLACE FUNCTION public.myhr_org_staff_job(p_org_id uuid, p_employee_id uuid)
 RETURNS TABLE (
   employee_id uuid, personnel_number text, name text, personnel_area text, business_area text,
   employee_group text, employee_subgroup text, position_title text,
@@ -67,27 +107,28 @@ RETURNS TABLE (
   changed_by_name text, changed_at timestamptz
 )
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_store uuid;
 BEGIN
-  IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can see staff job information.'; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND COALESCE(e.store_id, p_store_id) = p_store_id) THEN
-    RAISE EXCEPTION 'That employee isn''t at this store.';
+  IF p_org_id IS NULL OR p_org_id NOT IN (SELECT public.user_org_ids()) THEN
+    RAISE EXCEPTION 'Only the organization''s owner can manage employees.';
   END IF;
-  RETURN QUERY SELECT * FROM public.myhr_job_row(p_store_id, p_employee_id);
+  v_store := public.myhr_org_employee_store(p_org_id, p_employee_id);
+  IF v_store IS NULL THEN RAISE EXCEPTION 'That employee isn''t in this organization.'; END IF;
+  RETURN QUERY SELECT * FROM public.myhr_job_row(v_store, p_employee_id);
 END $$;
 
--- Managers: set one staff member's job information (only the keys given change).
-CREATE OR REPLACE FUNCTION public.myhr_save_staff_job(p_store_id uuid, p_employee_id uuid, p_job jsonb)
+-- Org owner: set one employee's job information (only the keys given change).
+CREATE OR REPLACE FUNCTION public.myhr_org_save_staff_job(p_org_id uuid, p_employee_id uuid, p_job jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE
-  v_me uuid := public.myhr_employee_id(p_store_id);
-  v_me_name text;
+DECLARE v_org_name text;
 BEGIN
-  IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can change job information.'; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND COALESCE(e.store_id, p_store_id) = p_store_id) THEN
-    RAISE EXCEPTION 'That employee isn''t at this store.';
+  IF p_org_id IS NULL OR p_org_id NOT IN (SELECT public.user_org_ids()) THEN
+    RAISE EXCEPTION 'Only the organization''s owner can change job information.';
   END IF;
-  SELECT COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, e.last_name)), ''), e.username) INTO v_me_name
-    FROM public.store_employees e WHERE e.id = v_me;
+  IF public.myhr_org_employee_store(p_org_id, p_employee_id) IS NULL THEN
+    RAISE EXCEPTION 'That employee isn''t in this organization.';
+  END IF;
+  SELECT o.name INTO v_org_name FROM public.organizations o WHERE o.id = p_org_id;
 
   INSERT INTO public.store_employee_jobs (employee_id) VALUES (p_employee_id) ON CONFLICT (employee_id) DO NOTHING;
   UPDATE public.store_employee_jobs SET
@@ -99,12 +140,13 @@ BEGIN
     hours_per_period  = CASE WHEN p_job ? 'hours_per_period' THEN NULLIF(p_job->>'hours_per_period', '')::numeric ELSE hours_per_period END,
     pay_period        = CASE WHEN p_job ? 'pay_period' THEN NULLIF(btrim(p_job->>'pay_period'), '') ELSE pay_period END,
     next_increase     = CASE WHEN p_job ? 'next_increase' THEN NULLIF(p_job->>'next_increase', '')::date ELSE next_increase END,
-    changed_by        = v_me,
-    changed_by_name   = COALESCE(v_me_name, 'Store owner'),
+    changed_by        = NULL,
+    changed_by_name   = COALESCE(v_org_name, 'Organization'),
     changed_at        = now()
   WHERE employee_id = p_employee_id;
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.myhr_my_job(uuid) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.myhr_staff_job(uuid, uuid) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.myhr_save_staff_job(uuid, uuid, jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.myhr_org_staff(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.myhr_org_staff_job(uuid, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.myhr_org_save_staff_job(uuid, uuid, jsonb) TO authenticated;

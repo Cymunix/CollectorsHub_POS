@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { PAY_PERIODS, amManager, loadMyJob, loadStaffJob, loadStoreStaff, payFigures, saveStaffJob } from './lib/myhrPay'
+import { PAY_PERIODS, loadMyJob, loadOrgStaffJob, payFigures, saveOrgStaffJob } from './lib/myhrPay'
 
-// Job Information: the employee's job and pay, read-only (personnel number,
+// Job Information: the employee's job and pay, read-only in the store (personnel number,
 // name, group/subgroup, area, position, who changed it; pay type and rate,
 // hours per period, next increase, projected annual pay, and the pay-period
-// wage line). Managers can also pick a staff member and set their job info.
+// wage line). Only the organization edits it (OrgJobEditor, from an org sign-in).
 
 const money = new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' })
 const GROUPS = ['', 'Employee', 'Contractor', 'Student', 'Seasonal']
@@ -57,9 +57,8 @@ function JobView({ job }) {
   )
 }
 
-function StaffJobEditor({ storeId }) {
-  const [staff, setStaff] = useState([])
-  const [employeeId, setEmployeeId] = useState('')
+// The organization edits one employee's job and pay.
+export function OrgJobEditor({ orgId, employeeId, onSaved }) {
   const [job, setJob] = useState(null)
   const [draft, setDraft] = useState({})
   const [problem, setProblem] = useState('')
@@ -67,13 +66,11 @@ function StaffJobEditor({ storeId }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    loadStoreStaff(storeId).then((people) => { setStaff(people); setEmployeeId(people[0]?.id || '') }).catch((error) => setProblem(error?.message || String(error)))
-  }, [storeId])
-  useEffect(() => {
     if (!employeeId) return
     setNotice('')
-    loadStaffJob(storeId, employeeId).then((loaded) => { setJob(loaded); setDraft(loaded || {}) }).catch((error) => setProblem(error?.message || String(error)))
-  }, [storeId, employeeId])
+    setProblem('')
+    loadOrgStaffJob(orgId, employeeId).then((loaded) => { setJob(loaded); setDraft(loaded || {}) }).catch((error) => setProblem(error?.message || String(error)))
+  }, [orgId, employeeId])
 
   const set = (key) => (event) => setDraft((current) => ({ ...current, [key]: event.target.value }))
   async function save(event) {
@@ -82,11 +79,12 @@ function StaffJobEditor({ storeId }) {
     setProblem('')
     try {
       const keys = ['employee_group', 'employee_subgroup', 'position_title', 'pay_type', 'pay_rate', 'hours_per_period', 'pay_period', 'next_increase']
-      await saveStaffJob(storeId, employeeId, Object.fromEntries(keys.map((key) => [key, draft[key] ?? ''])))
-      const loaded = await loadStaffJob(storeId, employeeId)
+      await saveOrgStaffJob(orgId, employeeId, Object.fromEntries(keys.map((key) => [key, draft[key] ?? ''])))
+      const loaded = await loadOrgStaffJob(orgId, employeeId)
       setJob(loaded)
       setDraft(loaded || {})
       setNotice('Saved.')
+      onSaved?.()
     } catch (error) {
       setProblem(error?.message || String(error))
     } finally {
@@ -102,12 +100,7 @@ function StaffJobEditor({ storeId }) {
 
   return (
     <section className="myhr-pay-panel">
-      <h3>Edit staff job information</h3>
-      <label className="myhr-form-row"><span>Employee:</span>
-        <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
-          {staff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
-        </select>
-      </label>
+      <h3>Job information{job?.name ? `: ${job.name}` : ''}</h3>
       {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
       {job ? (
         <form className="myhr-job-form" onSubmit={save}>
@@ -135,13 +128,12 @@ function StaffJobEditor({ storeId }) {
 
 export default function MyHRJob({ storeId }) {
   const [job, setJob] = useState(null)
-  const [isManager, setIsManager] = useState(false)
   const [problem, setProblem] = useState('')
 
   useEffect(() => {
     let live = true
-    Promise.all([loadMyJob(storeId), amManager(storeId).catch(() => false)])
-      .then(([mine, manager]) => { if (live) { setJob(mine || {}); setIsManager(manager) } })
+    loadMyJob(storeId)
+      .then((mine) => { if (live) setJob(mine || {}) })
       .catch((error) => { if (live) { setJob({}); setProblem(error?.message || String(error)) } })
     return () => { live = false }
   }, [storeId])
@@ -151,7 +143,7 @@ export default function MyHRJob({ storeId }) {
     <div className="myhr-job-page">
       {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
       <section className="myhr-pay-panel"><JobView job={job} /></section>
-      {isManager ? <StaffJobEditor storeId={storeId} /> : null}
+      <p className="myhr-muted">Job and pay information is managed by {job.personnel_area || 'your organization'}. Contact them if something here is wrong.</p>
     </div>
   )
 }

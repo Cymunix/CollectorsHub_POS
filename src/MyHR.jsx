@@ -12,14 +12,16 @@ import {
   Presentation,
   RotateCcwSquare,
   SlidersHorizontal,
+  Users,
   TrendingUp,
   UsersRound,
   Wallet,
 } from 'lucide-react'
 import { loadStoreName } from './lib/auth'
-import { hasMyHRPage, loadMyHRSettings, saveMyHRSections } from './lib/myhrSettings'
+import { hasMyHRPage, loadMyHRSettings, loadOrgMyHRSettings, saveMyHRSections } from './lib/myhrSettings'
 import MyHRPage from './MyHRPage'
 import MyHRPay from './MyHRPay'
+import MyHROrgEmployees from './MyHROrgEmployees'
 
 // Sections with a feature built into the app (open for everyone, with the
 // org's page, if any, underneath).
@@ -67,11 +69,14 @@ export default function MyHRView({ session, onClockChange }) {
   const [openKey, setOpenKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
+  // Signed in as the organization: it manages MyHR and its employees.
+  const isOrg = session?.type === 'organization'
   useEffect(() => {
     let live = true
-    loadMyHRSettings(session?.storeId).then((loaded) => { if (live) setSettings(loaded) })
+    const load = isOrg ? loadOrgMyHRSettings(session?.orgId, session?.orgName) : loadMyHRSettings(session?.storeId)
+    load.then((loaded) => { if (live) setSettings(loaded) })
     return () => { live = false }
-  }, [session?.storeId])
+  }, [session?.storeId, session?.orgId, isOrg])
 
   const enabled = new Set(settings?.enabledSections || ALL_KEYS)
   const pages = settings?.pages || {}
@@ -108,6 +113,10 @@ export default function MyHRView({ session, onClockChange }) {
   const shown = editing ? MYHR_SECTIONS : MYHR_SECTIONS.filter((section) => enabled.has(section.key))
   const openSection = MYHR_SECTIONS.find((section) => section.key === openKey)
 
+  if (openKey === 'employees' && isOrg) {
+    return <MyHROrgEmployees orgId={session.orgId} orgName={session.orgName} onBack={() => setOpenKey('')} />
+  }
+
   if (openSection) {
     return (
       <MyHRPage
@@ -115,7 +124,7 @@ export default function MyHRView({ session, onClockChange }) {
         page={pages[openKey]}
         settings={settings}
         onBack={() => setOpenKey('')}
-        children={BUILT_SECTIONS[openKey]?.(session, { onClockChange, onHome: () => setOpenKey('') }) || null}
+        children={(!isOrg && BUILT_SECTIONS[openKey]?.(session, { onClockChange, onHome: () => setOpenKey('') })) || null}
         onSaved={(content) => setSettings((current) => {
           const nextPages = { ...(current?.pages || {}) }
           if (content) nextPages[openKey] = content
@@ -132,12 +141,17 @@ export default function MyHRView({ session, onClockChange }) {
         <span className="myhr-logo" aria-hidden="true"><IdCard size={30} /></span>
         <div>
           <h2>MyHR</h2>
-          <p>Human resources for the {storeName} team</p>
+          <p>{isOrg ? `Human resources for ${session?.orgName || 'your organization'}` : `Human resources for the ${storeName} team`}</p>
         </div>
         <div className="myhr-me">
           <strong>{name}</strong>
-          <small>{[role, storeName].filter(Boolean).join(' · ')}</small>
+          <small>{isOrg ? 'Organization' : [role, storeName].filter(Boolean).join(' · ')}</small>
         </div>
+        {isOrg && !editing ? (
+          <button type="button" className="myhr-edit-button" onClick={() => setOpenKey('employees')}>
+            <Users size={16} /> Employees
+          </button>
+        ) : null}
         {settings?.canEdit && !editing ? (
           <button type="button" className="myhr-edit-button" onClick={startEditing}>
             <SlidersHorizontal size={16} /> Choose sections

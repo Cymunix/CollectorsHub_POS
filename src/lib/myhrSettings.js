@@ -70,3 +70,18 @@ export function cleanMyHRPage(page = {}) {
 export function hasMyHRPage(page) {
   return Boolean(page && (page.intro || page.notice || page.button || page.groups?.length))
 }
+
+// From an organization sign-in: the org's own settings (its owner can always edit).
+export async function loadOrgMyHRSettings(orgId, orgName = '') {
+  if (!orgId) return null
+  const { data, error } = await supabase.from('organization_myhr_settings').select('enabled_sections, section_content').eq('organization_id', orgId).maybeSingle()
+  if (error) console.warn('[MyHR] org settings unavailable:', error.message)
+  return {
+    organizationId: orgId,
+    organizationName: orgName,
+    enabledSections: Array.isArray(data?.enabled_sections) ? data.enabled_sections : null,
+    pages: data?.section_content && typeof data.section_content === 'object' ? data.section_content : {},
+    canEdit: true,
+    isOrgSession: true,
+  }
+}

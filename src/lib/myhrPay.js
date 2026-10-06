@@ -102,8 +102,10 @@ export const deleteFamilyMember = (storeId, id) => call('myhr_delete_family_memb
 // Part 4 (supabase/myhr_job.sql): job information.
 const firstRow = (data) => (Array.isArray(data) ? data[0] : data) || null
 export const loadMyJob = async (storeId) => firstRow(await call('myhr_my_job', { p_store_id: storeId }))
-export const loadStaffJob = async (storeId, employeeId) => firstRow(await call('myhr_staff_job', { p_store_id: storeId, p_employee_id: employeeId }))
-export const saveStaffJob = (storeId, employeeId, job) => call('myhr_save_staff_job', { p_store_id: storeId, p_employee_id: employeeId, p_job: job })
+// The organization (its owner) edits employees' job and pay, not the store.
+export const loadOrgStaff = async (orgId) => (await call('myhr_org_staff', { p_org_id: orgId })) || []
+export const loadOrgStaffJob = async (orgId, employeeId) => firstRow(await call('myhr_org_staff_job', { p_org_id: orgId, p_employee_id: employeeId }))
+export const saveOrgStaffJob = (orgId, employeeId, job) => call('myhr_org_save_staff_job', { p_org_id: orgId, p_employee_id: employeeId, p_job: job })
 
 export const PAY_PERIODS = [['weekly', 'Weekly', 52], ['biweekly', 'Bi-weekly', 26], ['semimonthly', 'Semi-monthly', 24], ['monthly', 'Monthly', 12]]
 // Pay for one pay period, and the projected annual pay (null when not enough is set).
