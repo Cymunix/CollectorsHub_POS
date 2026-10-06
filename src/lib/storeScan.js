@@ -145,18 +145,22 @@ export async function saveStoreItemChanges({ session, item, patch }) {
     if (delta < 0) {
       const { data: row, error: readError } = await supabase
         .from('store_inventory_quantities')
-        .select('quantity')
+        .select('quantity, quantity_reserved')
         .eq('inventory_id', id)
         .eq('location_id', locationId)
         .maybeSingle()
       if (readError) throw readError
-      const held = Math.max(0, Number(row?.quantity) || 0)
-      if (-delta > held) {
-        result.note = held
-          ? `Only ${held} in stock in Supabase, so ${held} ${held === 1 ? 'was' : 'were'} removed.`
-          : 'Supabase already shows 0 in stock, so there was nothing to remove.'
-        delta = -held
-        result.onHand = held
+      // Reserved units (on layaway) can't be removed here.
+      const onHand = Math.max(0, Number(row?.quantity) || 0)
+      const reserved = Math.max(0, Number(row?.quantity_reserved) || 0)
+      const removable = Math.max(0, onHand - reserved)
+      if (-delta > removable) {
+        const reservedText = reserved ? ` (${reserved} reserved on layaway)` : ''
+        result.note = removable
+          ? `Only ${removable} could be removed: Supabase holds ${onHand}${reservedText}.`
+          : `Nothing to remove: Supabase holds ${onHand}${reservedText}.`
+        delta = -removable
+        result.onHand = onHand
       }
     }
     if (delta) {
