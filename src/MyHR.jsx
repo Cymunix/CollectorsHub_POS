@@ -64,24 +64,24 @@ export default function MyHRView({ session, readySections = {} }) {
       </header>
 
       <div className="myhr-tiles">
-          {MYHR_SECTIONS.map((section) => {
-            const Icon = section.icon
-            const ready = Boolean(readySections[section.key])
-            return (
-              <button
-                key={section.key}
-                type="button"
-                className={`myhr-tile${ready ? '' : ' not-ready'}`}
-                disabled={!ready}
-                title={ready ? section.blurb : 'Coming soon'}
-                onClick={() => readySections[section.key]?.()}
-              >
-                <Icon size={46} strokeWidth={1.6} />
-                <strong>{section.label}</strong>
-                <small>{ready ? section.blurb : 'Coming soon'}</small>
-              </button>
-            )
-          })}
+        {MYHR_SECTIONS.map((section) => {
+          const Icon = section.icon
+          const ready = Boolean(readySections[section.key])
+          return (
+            <button
+              key={section.key}
+              type="button"
+              className={`myhr-tile${ready ? '' : ' not-ready'}`}
+              disabled={!ready}
+              title={ready ? section.blurb : 'Coming soon'}
+              onClick={() => readySections[section.key]?.()}
+            >
+              <Icon size={46} strokeWidth={1.6} />
+              <strong>{section.label}</strong>
+              <small>{ready ? section.blurb : 'Coming soon'}</small>
+            </button>
+          )
+        })}
       </div>
     </section>
   )
