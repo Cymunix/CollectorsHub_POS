@@ -18,22 +18,21 @@ import {
 import {
   LEAVE_TYPES,
   amManager,
-  cancelLeave,
   clock,
-  daysBetween,
   decideLeave,
   isoDate,
+  leaveHours,
   leaveTypeLabel,
   loadMyLeave,
   loadMyTime,
   loadStoreLeave,
-  requestLeave,
   shiftHours,
   weekStart,
 } from './lib/myhrPay'
 import MyHRDetails from './MyHRDetails'
 import MyHRFamily from './MyHRFamily'
 import MyHRJob from './MyHRJob'
+import { LeaveOverview, LeaveRequestForm } from './MyHRLeave'
 import MyHRSchedule from './MyHRSchedule'
 
 // My Pay, Vacation & Leaves: an employee self-service directory (personal
@@ -76,7 +75,8 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
   const [problem, setProblem] = useState('')
   const [notice, setNotice] = useState('')
   const today = isoDate(new Date())
-  const [form, setForm] = useState({ type: 'vacation', start: today, end: today, days: '1', note: '' })
+  // The leave request being edited (null: a new one).
+  const [editingLeave, setEditingLeave] = useState(null)
 
   const thisWeek = weekStart(new Date(now))
   const lastWeek = new Date(thisWeek)
@@ -122,7 +122,7 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
     for (const request of requests) {
       if (!['approved', 'pending'].includes(request.status) || !String(request.start_date).startsWith(String(year))) continue
       const entry = totals[request.leave_type] || { approved: 0, pending: 0 }
-      entry[request.status] += Number(request.days || 0)
+      entry[request.status] += leaveHours(request)
       totals[request.leave_type] = entry
     }
     return totals
@@ -150,24 +150,6 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
     await clock(storeId, action)
     onClockChange?.()
   }, action === 'in' ? 'Clocked in.' : 'Clocked out.')
-
-  function setDates(changes) {
-    setForm((current) => {
-      const next = { ...current, ...changes }
-      if (next.end < next.start) next.end = next.start
-      const span = daysBetween(next.start, next.end)
-      return { ...next, days: String(span > 0 ? span : 1) }
-    })
-  }
-
-  function submitLeave(event) {
-    event.preventDefault()
-    const days = Number(form.days)
-    if (!(days > 0)) { setProblem('Enter how many days off (e.g. 1 or 0.5).'); return }
-    run('leave', () => requestLeave(storeId, { type: form.type, start: form.start, end: form.end, days, note: form.note }),
-      `${leaveTypeLabel(form.type)} request sent for ${rangeText(form.start, form.end)}.`)
-      .then((sent) => { if (sent) setForm({ type: form.type, start: today, end: today, days: '1', note: '' }) })
-  }
 
   function openItem(key) {
     if (key === 'myhr') { onMyHRHome?.(); return }
@@ -224,37 +206,13 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
           {LEAVE_TYPES.filter(([key]) => yearTotals[key]).map(([key, label]) => (
             <li key={key}>
               <span>{label}</span>
-              <b>{yearTotals[key].approved} day{yearTotals[key].approved === 1 ? '' : 's'}</b>
-              {yearTotals[key].pending ? <small>+{yearTotals[key].pending} waiting</small> : null}
+              <b>{yearTotals[key].approved} h</b>
+              {yearTotals[key].pending ? <small>+{yearTotals[key].pending} h waiting</small> : null}
             </li>
           ))}
         </ul>
       ) : <small>No leave taken or requested yet.</small>}
     </div>
-  )
-  const myRequests = (
-    <>
-      <h4>My requests</h4>
-      {requests.length ? (
-        <ul className="myhr-pay-list">
-          {requests.slice(0, 30).map((request) => {
-            const cancellable = request.status === 'pending' || (request.status === 'approved' && request.start_date > today)
-            return (
-              <li key={request.id}>
-                <span>
-                  <strong>{leaveTypeLabel(request.leave_type)}: {rangeText(request.start_date, request.end_date)}</strong>
-                  <small>{Number(request.days)} day{Number(request.days) === 1 ? '' : 's'}{request.decision_note ? ` · Manager: "${request.decision_note}"` : ''}</small>
-                </span>
-                <span className="myhr-pay-actions">
-                  <b className={`myhr-status ${request.status}`}>{STATUS_TEXT[request.status] || request.status}</b>
-                  {cancellable ? <button type="button" disabled={Boolean(busy)} onClick={() => run(request.id, () => cancelLeave(storeId, request.id), 'Request cancelled.')}>Cancel</button> : null}
-                </span>
-              </li>
-            )
-          })}
-        </ul>
-      ) : <p className="myhr-empty">You haven't requested any time off.</p>}
-    </>
   )
   const approvals = isManager ? (
     <section className="myhr-pay-panel">
@@ -265,7 +223,7 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
             <li key={request.id}>
               <span>
                 <strong>{request.employee_name}: {leaveTypeLabel(request.leave_type)}</strong>
-                <small>{rangeText(request.start_date, request.end_date)} · {Number(request.days)} day{Number(request.days) === 1 ? '' : 's'}{request.note ? ` · "${request.note}"` : ''}</small>
+                <small>{rangeText(request.start_date, request.end_date)}{request.start_time ? ` · ${String(request.start_time).slice(0, 5)}–${String(request.end_time || '').slice(0, 5)}` : ''} · {leaveHours(request)} hours{request.note ? ` · "${request.note}"` : ''}</small>
               </span>
               <span className="myhr-pay-actions">
                 <button type="button" className="myhr-approve" disabled={Boolean(busy)} onClick={() => run(request.id, () => decideLeave(storeId, request.id, true), `Approved ${request.employee_name}'s ${leaveTypeLabel(request.leave_type).toLowerCase()}.`)}><Check size={15} /> Approve</button>
@@ -355,40 +313,21 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
       </>
     )
   } else if (view === 'leaveinfo') {
-    body = (
-      <>
-        <div className="myhr-pay-cards one">{leaveYearCard}</div>
-        <section className="myhr-pay-panel">{myRequests}</section>
-      </>
-    )
+    body = <LeaveOverview storeId={storeId} onNew={() => { setEditingLeave(null); setView('leave') }} onEdit={(request) => { setEditingLeave(request); setView('leave') }} />
   } else if (view === 'leave') {
     body = (
       <>
         {approvals}
-        <section className="myhr-pay-panel">
-          <h3>Request time off</h3>
-          <form className="myhr-leave-form" onSubmit={submitLeave}>
-            <label>Type
-              <select value={form.type} onChange={(event) => setForm((current) => ({ ...current, type: event.target.value }))}>
-                {LEAVE_TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-              </select>
-            </label>
-            <label>From
-              <input type="date" value={form.start} onChange={(event) => setDates({ start: event.target.value })} />
-            </label>
-            <label>To
-              <input type="date" value={form.end} min={form.start} onChange={(event) => setDates({ end: event.target.value })} />
-            </label>
-            <label>Days
-              <input type="number" min="0.5" step="0.5" value={form.days} onChange={(event) => setForm((current) => ({ ...current, days: event.target.value }))} title="Working days off (e.g. leave out days you don't work, or 0.5 for half a day)" />
-            </label>
-            <label className="wide">Note for your manager (optional)
-              <input value={form.note} onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))} placeholder="e.g. family trip" />
-            </label>
-            <button type="submit" className="gold-button" disabled={Boolean(busy)}>{busy === 'leave' ? 'Sending…' : 'Send request'}</button>
-          </form>
-          {myRequests}
-        </section>
+        <LeaveRequestForm
+          key={editingLeave?.id || 'new'}
+          storeId={storeId}
+          editing={editingLeave}
+          onDone={(message) => {
+            setEditingLeave(null)
+            if (message) { setNotice(message); reload() }
+            setView('leaveinfo')
+          }}
+        />
       </>
     )
   } else if (view === 'schedule') {

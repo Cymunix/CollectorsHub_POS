@@ -45,10 +45,16 @@ const SAMPLE = {
     { id: 't5', clock_in: day(-9, 12, 0), clock_out: day(-9, 19, 15) },
   ],
   myhr_my_leave: [
-    { id: 'l1', leave_type: 'vacation', start_date: isoDay(20), end_date: isoDay(24), days: 5, status: 'pending' },
-    { id: 'l2', leave_type: 'sick', start_date: isoDay(-30), end_date: isoDay(-30), days: 1, status: 'approved' },
-    { id: 'l3', leave_type: 'personal', start_date: isoDay(-60), end_date: isoDay(-60), days: 0.5, status: 'approved', decision_note: 'Enjoy the show!' },
+    { id: 'l1', leave_type: 'vacation', start_date: isoDay(20), end_date: isoDay(20), start_time: '09:00:00', end_time: '14:00:00', hours: 5, status: 'pending' },
+    { id: 'l2', leave_type: 'vacation', start_date: isoDay(-7), end_date: isoDay(-7), start_time: '09:00:00', end_time: '14:00:00', hours: 4, status: 'approved', processor: 'Store owner' },
+    { id: 'l3', leave_type: 'medical', start_date: isoDay(-8), end_date: isoDay(-8), start_time: '09:00:00', end_time: '12:00:00', hours: 3, status: 'approved', processor: 'Store owner' },
+    { id: 'l4', leave_type: 'lieu', start_date: isoDay(-18), end_date: isoDay(-18), start_time: '06:30:00', end_time: '07:00:00', hours: 0.5, status: 'approved', processor: 'Store owner' },
   ],
+  myhr_my_time_accounts: [
+    ['banked_overtime', 3.75, 0.5], ['vacation', 76.46, 4], ['carryover_vacation', 8.25, 8.25], ['accumulated_vacation', 17.88, 0],
+    ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
+  ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
+  myhr_org_leave_year: 4,
   myhr_store_leave: [
     { id: 's1', employee_name: 'Jordan Smith', leave_type: 'vacation', start_date: isoDay(10), end_date: isoDay(12), days: 3, note: 'Family trip', status: 'pending' },
     { id: 's2', employee_name: 'Casey Lee', leave_type: 'personal', start_date: isoDay(4), end_date: isoDay(4), days: 1, status: 'pending' },
@@ -75,6 +81,7 @@ const SAMPLE = {
     { id: 'x5', employee_name: 'Jordan Smith', starts_at: day(monday + 5, 12), ends_at: day(monday + 5, 20) },
   ],
   myhr_my_job: [{ employee_id: 'e1', personnel_number: '4000001', name: 'Mx Jordan Sample', personnel_area: 'Nordvik Collectibles', business_area: 'Main Store', employee_group: 'Employee', employee_subgroup: 'Part-time hourly', position_title: 'Store Manager', pay_type: 'hourly', pay_rate: 21.5, hours_per_period: 56, pay_period: 'biweekly', next_increase: '2027-01-01', changed_by_name: 'Store owner', changed_at: '2026-09-01T12:00:00Z' }],
+  get myhr_org_employee_accounts() { return this.myhr_my_time_accounts },
   myhr_org_staff: [
     { id: 'e1', name: 'Jordan Sample', role: 'manager', status: 'active', personnel_number: '4000001', store_name: 'Nordvik Test Store', position_title: 'Store Manager' },
     { id: 'e2', name: 'Casey Lee', role: 'cashier', status: 'active', personnel_number: '4000002', store_name: 'Nordvik Test Store', position_title: 'Sales Associate' },

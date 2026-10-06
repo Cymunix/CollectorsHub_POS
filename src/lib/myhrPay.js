@@ -8,7 +8,7 @@ async function call(name, params) {
   if (error) {
     // The SQL isn't installed yet.
     if (/could not find the function|does not exist/i.test(error.message || '')) {
-      throw new Error('MyHR time and leave isn’t set up in Supabase yet (run supabase/myhr_pay.sql, then supabase/myhr_schedule_profile.sql).')
+      throw new Error('MyHR time and leave isn’t set up in Supabase yet (run the supabase/myhr_*.sql files).')
     }
     throw error
   }
@@ -17,18 +17,49 @@ async function call(name, params) {
 
 export const LEAVE_TYPES = [
   ['vacation', 'Vacation'],
-  ['sick', 'Sick'],
+  ['sick', 'General Illness/Sick'],
+  ['medical', 'Medical/Dental Appointment'],
+  ['family_illness', 'Family Illness'],
+  ['lieu', 'Time in Lieu'],
+  ['statutory', 'Statutory Holiday'],
   ['personal', 'Personal'],
   ['unpaid', 'Unpaid'],
   ['other', 'Other'],
 ]
+
+// Time accounts (entitlements set by the organization), in display order.
+export const TIME_ACCOUNTS = [
+  ['banked_overtime', 'Banked Overtime'],
+  ['vacation', 'Vacation'],
+  ['carryover_vacation', 'Carryover Vacation'],
+  ['accumulated_vacation', 'Accumulated Vacation'],
+  ['sick', 'General Illness/Sick'],
+  ['medical', 'Medical/Dental'],
+  ['family_illness', 'Family Illness'],
+  ['statutory', 'Statutory Holiday'],
+]
+export const accountLabel = (key) => (TIME_ACCOUNTS.find(([value]) => value === key) || [key, key])[1]
 export const leaveTypeLabel = (type) => (LEAVE_TYPES.find(([key]) => key === type) || [type, type])[1]
 
 export const clock = (storeId, action) => call('myhr_clock', { p_store_id: storeId, p_action: action })
 export const loadMyTime = async (storeId, since) => (await call('myhr_my_time', { p_store_id: storeId, p_since: since })) || []
-export const requestLeave = (storeId, { type, start, end, days, note }) => call('myhr_request_leave', {
-  p_store_id: storeId, p_type: type, p_start: start, p_end: end, p_days: days, p_note: note || null,
+// Leave in hours, with start/end times (part 5: supabase/myhr_leave_accounts.sql).
+const leaveParams = ({ type, start, end, startTime, endTime, hours, note }) => ({
+  p_type: type, p_start: start, p_end: end, p_start_time: startTime || null, p_end_time: endTime || null, p_hours: hours, p_note: note || null,
 })
+export const requestLeave = (storeId, request) => call('myhr_request_leave', { p_store_id: storeId, ...leaveParams(request) })
+export const updateLeave = (storeId, requestId, request) => call('myhr_update_leave', { p_store_id: storeId, p_request_id: requestId, ...leaveParams(request) })
+export const loadMyTimeAccounts = async (storeId, keyDate) => (await call('myhr_my_time_accounts', { p_store_id: storeId, p_key_date: keyDate })) || []
+
+// Hours between two times on one day ("09:00", "14:00" → 5).
+export function hoursBetween(startTime, endTime) {
+  if (!startTime || !endTime) return 0
+  const [h1, m1] = startTime.split(':').map(Number)
+  const [h2, m2] = endTime.split(':').map(Number)
+  return Math.max(0, (h2 * 60 + m2 - (h1 * 60 + m1)) / 60)
+}
+// A leave's hours (older requests only have days).
+export const leaveHours = (request) => Number(request?.hours ?? (Number(request?.days || 0) * 8))
 export const loadMyLeave = async (storeId) => (await call('myhr_my_leave', { p_store_id: storeId })) || []
 export const cancelLeave = (storeId, requestId) => call('myhr_cancel_leave', { p_store_id: storeId, p_request_id: requestId })
 export const amManager = async (storeId) => Boolean(await call('myhr_am_manager', { p_store_id: storeId }))
@@ -118,3 +149,9 @@ export function payFigures(job) {
   if (!(hours > 0)) return { perPeriod: null, annual: null }
   return { perPeriod: rate * hours, annual: rate * hours * periods }
 }
+
+// Part 5, the organization: leave year and entitlements.
+export const loadOrgLeaveYear = async (orgId) => Number(await call('myhr_org_leave_year', { p_org_id: orgId })) || 1
+export const setOrgLeaveYear = (orgId, month) => call('myhr_org_set_leave_year', { p_org_id: orgId, p_start_month: month })
+export const loadOrgEmployeeAccounts = async (orgId, employeeId, keyDate) => (await call('myhr_org_employee_accounts', { p_org_id: orgId, p_employee_id: employeeId, p_key_date: keyDate })) || []
+export const setOrgEntitlement = (orgId, employeeId, account, yearStart, hours) => call('myhr_org_set_entitlement', { p_org_id: orgId, p_employee_id: employeeId, p_account: account, p_year_start: yearStart, p_hours: hours })
