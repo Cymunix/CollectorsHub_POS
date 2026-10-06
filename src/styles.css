@@ -9325,3 +9325,114 @@ button.condition-hint {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* MyHR: the organization choosing sections */
+.myhr-head {
+  flex-wrap: wrap;
+}
+
+.myhr-edit-button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #172235;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 800;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.myhr-editbar {
+  align-items: end;
+  background: #fff8e6;
+  border: 1px solid #ecd9a4;
+  border-radius: 8px;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.myhr-editbar > span {
+  display: grid;
+  flex: 1 1 260px;
+  gap: 2px;
+}
+
+.myhr-editbar small {
+  color: #5b6677;
+  font-weight: 700;
+}
+
+.myhr-editbar label {
+  display: grid;
+  flex: 1 1 320px;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.myhr-editbar input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.myhr-editbar button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 8px 14px;
+}
+
+.myhr-notice {
+  color: #1d6b35;
+  flex: 0 0 auto;
+  font-weight: 700;
+  margin: 0;
+}
+
+.myhr-empty {
+  color: #5b6677;
+  font-weight: 700;
+}
+
+.myhr-tile-choose {
+  position: relative;
+}
+
+.myhr-tile-choose.off {
+  background: #e3e7ee;
+  border-bottom-color: #c3cad6;
+  color: #6b7686;
+}
+
+.myhr-tile-choose.off svg {
+  color: #98a2b3;
+}
+
+.myhr-tile-check {
+  align-items: center;
+  background: #d6a632;
+  border-radius: 999px;
+  color: #0b111b;
+  display: inline-flex;
+  height: 26px;
+  justify-content: center;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  width: 26px;
+}
+
+.myhr-tile-choose.off .myhr-tile-check {
+  background: #ffffff;
+  border: 2px solid #c3cad6;
+}
