@@ -55,6 +55,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   const analysingRef = useRef(false)
   const categoryRef = useRef(category)
   categoryRef.current = category
+  // The feeder's listener is set up once, so it reads the batch defaults
+  // (condition, sell and buy price) through a ref to get the current ones.
+  const defaultsRef = useRef(defaults)
+  defaultsRef.current = defaults
 
   useEffect(() => { writeScannerPref('storeCategory', category) }, [category])
   useEffect(() => { writeScannerPref('storeDefaults', defaults) }, [defaults])
@@ -104,10 +108,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       backImage,
       feed: feedInfo,
       category: categoryRef.current,
-      condition: defaults.condition,
+      condition: defaultsRef.current.condition,
       quantity: 1,
-      sellPrice: defaults.sellPrice,
-      buyPrice: defaults.buyPrice,
+      sellPrice: defaultsRef.current.sellPrice,
+      buyPrice: defaultsRef.current.buyPrice,
     }
     save((list) => [card, ...list])
     analyseQueued()
