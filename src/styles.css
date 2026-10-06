@@ -9104,9 +9104,22 @@ button.not-ready:disabled {
   margin-top: 8px;
 }
 
-/* Scan to Inventory fills the workspace and scrolls (the workspace itself
-   doesn't), so long batches of scanned cards can be scrolled through. */
+/* Scan to Inventory fills the workspace: the heading, settings and scan
+   buttons stay put, and only the list of scanned cards scrolls. */
 .workspace > .store-scan {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace > .store-scan > * {
+  flex: 0 0 auto;
+}
+
+.workspace > .store-scan > .store-scan-list {
+  align-content: start;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
