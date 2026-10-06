@@ -5110,10 +5110,6 @@ function InventoryWorkflowPanel({ item, mode, onAdjustStock, onApplyDefaultMarku
 
       {mode === 'edit' ? (
         <form className="inventory-workflow-form" onSubmit={saveEdit}>
-          <div className="inventory-readonly-field">
-            <span>Cost</span>
-            <strong>{cost > 0 ? money.format(cost) : '—'}</strong>
-          </div>
           <label>
             <span>Cost (what the store paid)</span>
             <input name="cost" type="number" min="0" step="0.01" value={editDraft.cost} onChange={(event) => setEditDraft((current) => ({ ...current, cost: event.target.value }))} />
