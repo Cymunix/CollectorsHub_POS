@@ -903,7 +903,7 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' ? (
+        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'myhr' ? (
           <>
             <header className="topbar">
               <div>

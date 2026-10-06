@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   BriefcaseBusiness,
   CalendarClock,
@@ -14,12 +14,13 @@ import {
   UsersRound,
   Wallet,
 } from 'lucide-react'
+import { loadStoreName } from './lib/auth'
 
 // MyHR: the employee's own HR hub (pay, time off, training, etc.). The home
 // screen lists every section; each section opens once it's built, and until
 // then its tile is greyed out as "Coming soon".
 
-export const MYHR_SECTIONS = [
+const MYHR_SECTIONS = [
   { key: 'orientation', label: 'My Orientation', blurb: 'Getting started at the store', icon: RotateCcwSquare },
   { key: 'pay', label: 'My Pay, Vacation & Leaves', blurb: 'Pay stubs, hours, vacation balance', icon: Wallet },
   { key: 'benefits', label: 'My Benefits', blurb: 'Coverage and employee discount', icon: HeartHandshake },
@@ -37,7 +38,16 @@ export const MYHR_SECTIONS = [
 export default function MyHRView({ session, readySections = {} }) {
   const name = session?.displayName || [session?.firstName, session?.lastName].filter(Boolean).join(' ') || session?.username || 'Employee'
   const role = session?.role ? String(session.role).replace(/_/g, ' ') : ''
-  const storeName = session?.storeName || session?.orgName || 'CollectorsHub Store'
+  // Sessions from before the store name was looked up at sign-in say 'Store'.
+  const sessionStore = session?.storeName && session.storeName !== 'Store' ? session.storeName : ''
+  const [lookedUp, setLookedUp] = useState('')
+  useEffect(() => {
+    if (sessionStore || !session?.storeId) return
+    let live = true
+    loadStoreName(session.storeId).then((found) => { if (live) setLookedUp(found) })
+    return () => { live = false }
+  }, [session?.storeId, sessionStore])
+  const storeName = sessionStore || lookedUp || session?.orgName || 'your store'
 
   return (
     <section className="myhr">

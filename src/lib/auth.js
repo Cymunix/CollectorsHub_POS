@@ -106,17 +106,31 @@ export async function signInStaff({ code, username, password }) {
   })
 
   const locationId = await resolveFirstStoreLocation(verified.store_id)
+  // The sign-in check doesn't always return the store's name: look it up.
+  const storeName = verified.store_name || await loadStoreName(verified.store_id)
 
   return {
     type: 'store_employee',
     storeId: verified.store_id,
-    storeName: verified.store_name || 'Store',
+    storeName: storeName || 'Store',
     storeCode: normalizedCode,
     employeeId: verified.employee_id,
     locationId,
     username: normalizedUsername,
     role: verified.role || 'cashier',
     permissions: verified.permissions || {},
+  }
+}
+
+export async function loadStoreName(storeId) {
+  if (!storeId) return ''
+  try {
+    const { data } = await supabase.from('stores').select('store_name').eq('id', storeId).maybeSingle()
+    if (data?.store_name) return data.store_name
+    const { data: profile } = await supabase.rpc('public_store_profile', { p_store_id: storeId })
+    return (Array.isArray(profile) ? profile[0] : profile)?.store_name || ''
+  } catch {
+    return ''
   }
 }
 
