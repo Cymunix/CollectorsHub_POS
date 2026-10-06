@@ -2,7 +2,7 @@
 // website's OrgDashboard (Nordvik-main), without its own sidebar: the POS
 // sidebar lists the modules. Overview numbers are live.
 import { useEffect, useRef, useState } from 'react'
-import { loadOrganizationStores, myUnattachedStores, attachStoreToOrganization, detachStoreFromOrganization, createStoreFull, listStoreEmployees, createStoreEmployee, ORG_EMPLOYEE_ROLES, listOrgRegions, updateLocationAddress, setStoreNotificationRegion, searchCommunities , orgSalesKpis, orgOrderKpis, orgTradeinKpis, orgSalesByStore, taxForProvince, loadStoreLocations } from './orgApi'
+import { loadOrganizationStores, myUnattachedStores, attachStoreToOrganization, detachStoreFromOrganization, createStoreFull, createStoreEmployee, ORG_EMPLOYEE_ROLES, listOrgRegions, updateLocationAddress, setStoreNotificationRegion, searchCommunities , orgSalesKpis, orgOrderKpis, orgTradeinKpis, orgSalesByStore, taxForProvince, loadStoreLocations } from './orgApi'
 import { regionsForProvince, defaultRegionIdForProvince, regionNameById, CANADA_PROVINCE_CODES_BY_NAME } from './notificationRegions'
 import {
   LocationsModule, StaffModule, InventoryModule, OrdersModule, TradeInsModule, SalesModule,
@@ -612,23 +612,10 @@ function LocationsModal({ store, onClose }) {
 const lblSm = { display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#5f7294', marginBottom: 3 }
 
 function StaffModal({ store, onClose }) {
-  const [staff, setStaff] = useState([])
-  const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({ firstName: '', lastName: '', role: 'cashier', pin: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [created, setCreated] = useState(null) // { username, pin }
-  const [reloadKey, setReloadKey] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    const t = setTimeout(async () => {
-      const s = await listStoreEmployees(store.storeId)
-      if (!cancelled) { setStaff(s); setLoading(false) }
-    }, 0)
-    return () => { cancelled = true; clearTimeout(t) }
-  }, [store.storeId, reloadKey])
-
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const add = async () => {
     setError(''); setCreated(null); setBusy(true)
@@ -636,7 +623,6 @@ function StaffModal({ store, onClose }) {
       const emp = await createStoreEmployee({ storeId: store.storeId, firstName: form.firstName, lastName: form.lastName, role: form.role, pin: form.pin })
       setCreated({ username: emp.username, pin: form.pin })
       setForm({ firstName: '', lastName: '', role: 'cashier', pin: '' })
-      setReloadKey(k => k + 1)
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -644,24 +630,10 @@ function StaffModal({ store, onClose }) {
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(9,18,40,0.45)', zIndex: 200, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '48px 20px', overflowY: 'auto' }}>
       <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 16, padding: 22, width: '100%', maxWidth: 520 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <h2 style={{ ...h2, margin: 0 }}>Staff — {store.storeName}</h2>
+          <h2 style={{ ...h2, margin: 0 }}>Add staff — {store.storeName}</h2>
           <button type="button" onClick={onClose} style={{ border: 0, background: 'none', fontSize: '1.3rem', color: '#8292ac', cursor: 'pointer' }}>✕</button>
         </div>
-        <p style={{ fontSize: '0.8rem', color: '#8292ac', marginTop: 0 }}>POS logins for this store. Staff sign in at Store POS with store code <strong>{store.storeCode}</strong>, their username, and PIN.</p>
-
-        {loading ? <div style={empty}>Loading…</div> : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-            {staff.length === 0 ? <div style={{ fontSize: '0.84rem', color: '#8292ac' }}>No staff yet.</div>
-              : staff.map(e => (
-                <div key={e.id} style={{ ...row, padding: '10px 14px' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, color: '#17253d', fontSize: '0.86rem' }}>{e.first_name} {e.last_name}</div>
-                    <div style={{ fontSize: '0.76rem', color: '#8292ac' }}>@{e.username} · {e.role} · {e.status}</div>
-                  </div>
-                </div>
-              ))}
-          </div>
-        )}
+        <p style={{ fontSize: '0.8rem', color: '#8292ac', marginTop: 0 }}>Add a POS login for this store. Staff sign in at Store POS with store code <strong>{store.storeCode}</strong>, their username, and PIN.</p>
 
         {created && (
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: '0.84rem', color: '#15803d' }}>

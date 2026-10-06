@@ -470,7 +470,7 @@ export async function createStoreUnderOrganization(orgId, storeName) {
 
 // ── Store employees (POS logins) ────────────────────────────────────────────
 // Role → POS capability (mirrors ROLE_ACTIONS in pos.js: manager/owner get all).
-export const ORG_EMPLOYEE_ROLES = [['manager', 'Manager'], ['cashier', 'Cashier'], ['assistant_manager', 'Assistant Manager']]
+export const ORG_EMPLOYEE_ROLES = [['manager', 'Manager'], ['assistant_manager', 'Assistant Manager'], ['supervisor', 'Supervisor'], ['cashier', 'Cashier']]
 
 export async function listStoreEmployees(storeId) {
   if (!storeId) return []
