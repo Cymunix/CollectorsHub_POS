@@ -134,22 +134,24 @@ export async function saveStoreItemChanges({ session, item, patch }) {
     let delta = 'stockDelta' in patch
       ? Math.round(Number(patch.stockDelta) || 0)
       : Math.round(Number(patch.onHand) - Number(item.onHand ?? item.quantity ?? 0))
+    // Where the stock is held, per Supabase (not this PC's copy, which can be
+    // out of date): the location with the most stock for this record, else
+    // the store's location for a record with no stock yet.
     let locationId = ''
+    let row = null
     if (delta) {
-      locationId = item.locationId || await resolvePrimaryLocation(session.storeId, session.locationId)
+      const { data: rows, error: readError } = await supabase
+        .from('store_inventory_quantities')
+        .select('location_id, quantity, quantity_reserved')
+        .eq('inventory_id', id)
+      if (readError) throw readError
+      const removable = (r) => Number(r.quantity || 0) - Number(r.quantity_reserved || 0)
+      row = (rows || []).slice().sort((a, b) => removable(b) - removable(a))[0] || null
+      locationId = row?.location_id || item.locationId || await resolvePrimaryLocation(session.storeId, session.locationId)
       if (!locationId) throw new Error('This store has no location to hold stock.')
     }
-    // Removing stock: check what Supabase actually holds first (this PC's
-    // copy can be out of date, e.g. after a sale on another register), and
-    // never take it below 0.
+    // Removing stock: never below 0, and never the units reserved on layaway.
     if (delta < 0) {
-      const { data: row, error: readError } = await supabase
-        .from('store_inventory_quantities')
-        .select('quantity, quantity_reserved')
-        .eq('inventory_id', id)
-        .eq('location_id', locationId)
-        .maybeSingle()
-      if (readError) throw readError
       // Reserved units (on layaway) can't be removed here.
       const onHand = Math.max(0, Number(row?.quantity) || 0)
       const reserved = Math.max(0, Number(row?.quantity_reserved) || 0)
