@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { PAY_PERIODS, loadMyJob, loadOrgStaffJob, payFigures, saveOrgStaffJob } from './lib/myhrPay'
+import { PAY_PERIODS, loadMyJob, loadOrgStaffJob, payFigures, periodToWeeklyHours, saveOrgStaffJob, weeklyToPeriodHours } from './lib/myhrPay'
 
 // Job Information: the employee's job and pay, read-only in the store (personnel number,
 // name, group/subgroup, area, position, who changed it; pay type and rate,
@@ -33,7 +33,7 @@ function JobView({ job }) {
       <h4 className="myhr-job-heading">Salary</h4>
       <div className="myhr-job-grid">
         <span className="myhr-job-label">Pay type</span>{cell(job.pay_type === 'salary' ? 'Salary' : job.pay_type === 'hourly' ? 'Hourly' : '')}
-        <span className="myhr-job-label">Hours/period</span>{cell(job.hours_per_period != null ? `${Number(job.hours_per_period).toFixed(2)} · ${periodLabel(job.pay_period)}` : job.pay_period ? periodLabel(job.pay_period) : '')}
+        <span className="myhr-job-label">Hours</span>{cell(job.hours_per_period != null && job.pay_type !== 'salary' ? `${periodToWeeklyHours(job.hours_per_period, job.pay_period) ?? '?'} / week · ${periodLabel(job.pay_period)} (${Number(job.hours_per_period).toFixed(2)} per pay)` : job.pay_period ? periodLabel(job.pay_period) : '')}
         <span className="myhr-job-label">Pay rate</span>{cell(job.pay_rate != null ? `${money.format(Number(job.pay_rate))} ${job.pay_type === 'salary' ? 'per year' : 'per hour'}` : '')}
         <span className="myhr-job-label">Next increase</span>{cell(job.next_increase ? dateText(job.next_increase) : '')}
         <span className="myhr-job-label" /><span />
@@ -48,7 +48,7 @@ function JobView({ job }) {
               <td>{job.pay_type === 'salary' ? 'Pay Period Salary' : 'Pay Period Wages'}</td>
               <td className="num">{money.format(perPeriod)}</td>
               <td className="num">{job.pay_type === 'salary' ? '' : Number(job.hours_per_period).toFixed(2)}</td>
-              <td>{job.pay_type === 'salary' ? '' : `hours × ${money.format(Number(job.pay_rate))}`}</td>
+              <td>{job.pay_type === 'salary' ? '' : `hours per pay (${periodToWeeklyHours(job.hours_per_period, job.pay_period) ?? '?'} h/week) × ${money.format(Number(job.pay_rate))}`}</td>
             </tr>
           ) : <tr><td colSpan={4} className="myhr-muted">No pay set up yet.</td></tr>}
         </tbody>
@@ -56,6 +56,9 @@ function JobView({ job }) {
     </div>
   )
 }
+
+// A loaded job with its hours per week (hours are stored per pay period).
+const withWeekly = (job) => ({ ...(job || {}), hours_per_week: job?.hours_per_period != null ? (periodToWeeklyHours(job.hours_per_period, job.pay_period) ?? '') : '' })
 
 // The organization edits one employee's job and pay.
 export function OrgJobEditor({ orgId, employeeId, onSaved }) {
@@ -69,20 +72,24 @@ export function OrgJobEditor({ orgId, employeeId, onSaved }) {
     if (!employeeId) return
     setNotice('')
     setProblem('')
-    loadOrgStaffJob(orgId, employeeId).then((loaded) => { setJob(loaded); setDraft(loaded || {}) }).catch((error) => setProblem(error?.message || String(error)))
+    loadOrgStaffJob(orgId, employeeId).then((loaded) => { setJob(loaded); setDraft(withWeekly(loaded)) }).catch((error) => setProblem(error?.message || String(error)))
   }, [orgId, employeeId])
 
   const set = (key) => (event) => setDraft((current) => ({ ...current, [key]: event.target.value }))
+  // The draft as saved: hours per week turned into hours per pay period.
+  const asSaved = (current) => ({ ...current, hours_per_period: current.pay_type === 'salary' ? (current.hours_per_period ?? '') : (weeklyToPeriodHours(current.hours_per_week ?? '', current.pay_period) ?? '') })
   async function save(event) {
     event.preventDefault()
+    if (draft.pay_type !== 'salary' && String(draft.hours_per_week ?? '') !== '' && !draft.pay_period) { setProblem('Pick the pay period too, so hours per week can be turned into hours per pay.'); return }
     setSaving(true)
     setProblem('')
     try {
       const keys = ['employee_group', 'employee_subgroup', 'position_title', 'pay_type', 'pay_rate', 'hours_per_period', 'pay_period', 'next_increase']
-      await saveOrgStaffJob(orgId, employeeId, Object.fromEntries(keys.map((key) => [key, draft[key] ?? ''])))
+      const saved = asSaved(draft)
+      await saveOrgStaffJob(orgId, employeeId, Object.fromEntries(keys.map((key) => [key, saved[key] ?? ''])))
       const loaded = await loadOrgStaffJob(orgId, employeeId)
       setJob(loaded)
-      setDraft(loaded || {})
+      setDraft(withWeekly(loaded))
       setNotice('Saved.')
       onSaved?.()
     } catch (error) {
@@ -110,7 +117,7 @@ export function OrgJobEditor({ orgId, employeeId, onSaved }) {
           <label className="myhr-form-row"><span>Pay type:</span>{select('pay_type', [['', ''], ['hourly', 'Hourly'], ['salary', 'Salary']])}</label>
           <label className="myhr-form-row"><span>{draft.pay_type === 'salary' ? 'Annual salary:' : 'Hourly rate:'}</span><input type="number" min="0" step="0.01" value={draft.pay_rate ?? ''} onChange={set('pay_rate')} /></label>
           <label className="myhr-form-row"><span>Pay period:</span>{select('pay_period', [['', ''], ...PAY_PERIODS.map(([key, label]) => [key, label])])}</label>
-          <label className="myhr-form-row"><span>Hours per period:</span><input type="number" min="0" step="0.25" value={draft.hours_per_period ?? ''} onChange={set('hours_per_period')} /></label>
+          <label className="myhr-form-row"><span>Hours per week:</span><input type="number" min="0" max="80" step="0.25" value={draft.hours_per_week ?? ''} onChange={set('hours_per_week')} placeholder="e.g. 35" disabled={draft.pay_type === 'salary'} /></label>
           <label className="myhr-form-row"><span>Next increase:</span><input type="date" value={draft.next_increase || ''} onChange={set('next_increase')} /></label>
           <div className="myhr-editor-actions">
             {notice ? <span className="myhr-notice">{notice}</span> : null}
@@ -119,8 +126,8 @@ export function OrgJobEditor({ orgId, employeeId, onSaved }) {
         </form>
       ) : null}
       {job ? (() => {
-        const { perPeriod, annual } = payFigures(draft)
-        return <p className="myhr-muted">{perPeriod != null ? `With these settings: ${money.format(perPeriod)} per pay period, ${money.format(annual)} projected per year.` : 'Set the pay type, rate, pay period and hours to see the pay per period.'}</p>
+        const { perPeriod, annual } = payFigures(asSaved(draft))
+        return <p className="myhr-muted">{perPeriod != null ? (draft.pay_type === 'salary' ? `With these settings: ${money.format(perPeriod)} per pay period, ${money.format(annual)} per year.` : `With these settings: ${draft.hours_per_week} h/week × ${money.format(Number(draft.pay_rate))} = ${money.format(Number(draft.hours_per_week) * Number(draft.pay_rate))}/week · ${money.format(perPeriod)} per pay period · ${money.format(Number(draft.hours_per_week) * Number(draft.pay_rate) * 52)} per year.`) : 'Set the pay type, rate, pay period and hours per week to see the pay.'}</p>
       })() : null}
     </section>
   )

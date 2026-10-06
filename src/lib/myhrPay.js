@@ -142,9 +142,12 @@ export function payFigures(job) {
   const periods = (PAY_PERIODS.find(([key]) => key === job?.pay_period) || [])[2]
   if (!(rate > 0) || !periods) return { perPeriod: null, annual: null }
   if (job.pay_type === 'salary') return { perPeriod: rate / periods, annual: rate }
-  const hours = Number(job?.hours_per_period)
-  if (!(hours > 0)) return { perPeriod: null, annual: null }
-  return { perPeriod: rate * hours, annual: rate * hours * periods }
+  // Hourly: from hours per week (52 weeks a year), so semi-monthly and
+  // monthly pay come out exactly.
+  const weekly = Number(job?.hours_per_week ?? periodToWeeklyHours(job?.hours_per_period, job?.pay_period))
+  if (!(weekly > 0)) return { perPeriod: null, annual: null }
+  const annual = rate * weekly * 52
+  return { perPeriod: annual / periods, annual, weekly }
 }
 
 // Part 5, the organization: leave year and entitlements.
@@ -210,3 +213,19 @@ export const RESTRICTIONS = [
 // Part 10 (supabase/myhr_onboarding.sql): onboarding status.
 export const loadMyOnboarding = async (storeId) => (await call('myhr_my_onboarding', { p_store_id: storeId })) || null
 export const loadOrgOnboarding = async (orgId) => Object.fromEntries(((await call('myhr_org_onboarding', { p_org_id: orgId })) || []).map((row) => [row.employee_id, { ...(row.onboarding || {}), addedAt: row.added_at }]))
+
+// Hours are entered per week; pay is per pay period. Weeks in one pay period:
+// weekly 1, bi-weekly 2, semi-monthly 52/24, monthly 52/12.
+export function weeksPerPeriod(payPeriod) {
+  const periods = (PAY_PERIODS.find(([key]) => key === payPeriod) || [])[2]
+  return periods ? 52 / periods : null
+}
+export const weeklyToPeriodHours = (hoursPerWeek, payPeriod) => {
+  const weeks = weeksPerPeriod(payPeriod)
+  const hours = Number(hoursPerWeek)
+  return weeks && hoursPerWeek !== '' && Number.isFinite(hours) ? Math.round(hours * weeks * 100) / 100 : null
+}
+export const periodToWeeklyHours = (hoursPerPeriod, payPeriod) => {
+  const weeks = weeksPerPeriod(payPeriod)
+  return weeks && hoursPerPeriod != null ? Math.round((Number(hoursPerPeriod) / weeks) * 100) / 100 : null
+}
