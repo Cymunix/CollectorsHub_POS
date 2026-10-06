@@ -7,6 +7,7 @@ import MyHRView from './MyHR'
 import MyHRPay from './MyHRPay'
 import MyHROrgEmployees from './MyHROrgEmployees'
 import ScheduleBuilder from './ScheduleBuilder'
+import StoreHoursModal from './org/StoreHours'
 import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
@@ -57,6 +58,8 @@ const SAMPLE = {
     ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
   ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
   myhr_org_leave_year: 4,
+  org_location_hours: [{ location_id: 'loc1', location_name: 'Main Store', store_id: 'st1', store_name: 'Nordvik Test Store', opening_hours: { 1: { open: '10:00', close: '18:00' }, 2: { open: '10:00', close: '18:00' }, 3: { open: '10:00', close: '18:00' }, 4: { open: '10:00', close: '20:00' }, 5: { open: '10:00', close: '20:00' }, 6: { open: '10:00', close: '17:00' }, 0: null } }],
+  store_opening_hours: { 1: { open: '10:00', close: '18:00' }, 2: { open: '10:00', close: '18:00' }, 3: { open: '10:00', close: '18:00' }, 4: { open: '10:00', close: '20:00' }, 5: { open: '10:00', close: '20:00' }, 6: { open: '10:00', close: '17:00' }, 0: null },
   myhr_my_onboarding: { pay: true, scheduling: false, leave: false, personal: true, address: false, emergency: false, availability: true },
   myhr_org_onboarding: [
     { employee_id: 'e1', added_at: '2026-08-31T12:00:00Z', onboarding: { pay: true, scheduling: true, leave: true, personal: true, address: true, emergency: true, availability: true } },
@@ -195,6 +198,7 @@ function Preview() {
   let content
   if (screen === 'org-employees') content = <OrgEmployeesPreview />
   else if (screen === 'org') content = <OrgPortal session={{ type: 'organization', orgId: 'org', orgCode: 'ORG-0001', orgName: 'Nordvik Collectibles' }} activeModule={new URLSearchParams(window.location.search).get('module') || 'overview'} />
+  else if (screen === 'store-hours') content = <StoreHoursModal orgId="org" store={{ storeId: 'st1', storeName: 'Nordvik Test Store' }} onClose={() => {}} />
   else if (screen === 'builder') content = <ScheduleBuilder storeId={storeId} />
   else if (screen === 'clockin') content = <ClockInGate name="HaydenM8" onClockIn={async () => {}} onOpenMyHR={() => {}} />
   else if (payViews[screen]) content = <MyHRPay storeId={storeId} initialView={payViews[screen]} />

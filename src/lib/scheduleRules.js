@@ -110,12 +110,20 @@ function mergeSlots(slots) {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-// Opening and closing on a day, from its coverage needs: needs labelled
-// "Opening"/"Closing" if there are any, else the day's first start / last end.
-// null when the day has no needs.
-function openCloseOf(day, rules) {
+// Opening and closing on a day: coverage needs labelled "Opening"/"Closing"
+// if there are any, else the store's opening hours (set by the organization),
+// else the day's first coverage start / last end. null when none of those exist.
+function openCloseOf(day, rules, storeHours = {}) {
   const weekday = new Date(`${day}T00:00:00`).getDay()
   const dayRules = rules.filter((rule) => Number(rule.weekday) === weekday)
+  const hours = storeHours?.[String(weekday)]
+  const labelled = dayRules.some((rule) => /clos|open/i.test(rule.label || ''))
+  if (!labelled && hours && hours.open && hours.close) {
+    return {
+      isClosing: (from, to) => to >= minutesOf(hours.close),
+      isOpening: (from) => from <= minutesOf(hours.open),
+    }
+  }
   if (!dayRules.length) return null
   const closing = dayRules.filter((rule) => /clos/i.test(rule.label || ''))
   const opening = dayRules.filter((rule) => /open/i.test(rule.label || ''))
@@ -129,7 +137,7 @@ function openCloseOf(day, rules) {
 }
 
 // Everything to warn about for a week. Each warning: { id, kind, day?, employeeId?, text, severity }.
-export function weekWarnings({ days, staff, shifts, rules, leave = [] }) {
+export function weekWarnings({ days, staff, shifts, rules, leave = [], storeHours = {} }) {
   const staffById = Object.fromEntries(staff.map((person) => [person.id, person]))
   const warnings = []
   const coverage = {}
@@ -197,7 +205,7 @@ export function weekWarnings({ days, staff, shifts, rules, leave = [] }) {
       const day = isoDay(new Date(shift.starts_at))
       const dayName = DAY_NAMES[new Date(`${day}T00:00:00`).getDay()]
       const [from, to] = shiftWindowOn(shift, day)
-      const edges = openCloseOf(day, rules)
+      const edges = openCloseOf(day, rules, storeHours)
       if (restrictions.has('no_close') && edges && edges.isClosing(from, to)) {
         warnings.push({ id: `close-${shift.id}`, kind: 'restriction', day, employeeId: person.id, shiftId: shift.id, severity: 'warn', text: `${name} can't close (${dayName})` })
       }

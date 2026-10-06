@@ -9,6 +9,7 @@ import {
   PromotionsEventsModule, PoliciesModule, ReportsModule, IntegrationsModule, OrgSettingsModule,
 } from './OrgModules'
 import MyHROrgEmployees from '../MyHROrgEmployees'
+import StoreHoursModal from './StoreHours'
 
 // Normalise whatever the browser's address autofill gives (full name or code) to
 // a 2-letter province code so tax + region derivation work.
@@ -50,6 +51,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
   const [statusFilter, setStatusFilter] = useState('all')
   const [attentionFilter, setAttentionFilter] = useState(null)  // no_location | no_staff | no_inventory | null
   const [menu, setMenu] = useState(null)  // { storeId, top, left } — fixed-positioned popover
+  const [hoursStore, setHoursStore] = useState(null)  // store whose opening hours are open
   const [locStore, setLocStore] = useState(null)  // store whose Locations modal (official address) is open
 
   useEffect(() => {
@@ -179,6 +181,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
                     <td style={etd}><span style={statusBadge(s.status)}>{(s.status || 'active').replace(/_/g, ' ')}</span></td>
                     <td style={{ ...etd, textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {!s.demo && <button type="button" onClick={() => setStaffStore(s)} style={{ ...ent.rowGhost, marginLeft: 0 }}>Staff</button>}
+                      {!s.demo && <button type="button" onClick={() => setHoursStore(s)} style={ent.rowGhost}>Hours</button>}
                       <button type="button" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu(menu?.storeId === s.storeId ? null : { storeId: s.storeId, top: r.bottom + 4, left: Math.max(8, r.right - 200) }) }} style={ent.rowGhost}>More ▾</button>
                     </td>
                   </tr>
@@ -333,6 +336,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
 
       {staffStore && <StaffModal store={staffStore} onClose={() => setStaffStore(null)} onSetUp={(employeeId) => { setStaffStore(null); setFocusEmployeeId(employeeId || ''); setActiveModule('staff') }} />}
       {locStore && <LocationsModal store={locStore} onClose={() => setLocStore(null)} />}
+      {hoursStore && <StoreHoursModal orgId={session.orgId} store={hoursStore} onClose={() => setHoursStore(null)} />}
       {wizardOpen && <CreateStoreWizard demo={session.demo} onClose={() => setWizardOpen(false)} onCreate={onWizardCreate} />}
     </div>
   )

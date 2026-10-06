@@ -14,6 +14,7 @@ import {
 } from './lib/myhrPay'
 import { canFill, clock, isoDay, roleColour, shiftHours, shiftRole, weekSummary, weekWarnings } from './lib/scheduleRules'
 import { RESTRICTIONS } from './lib/myhrPay'
+import { dayHours, loadStoreOpeningHours } from './lib/storeHours'
 
 // Schedule Builder (managers): employees down the side, Monday–Sunday across
 // the top. Drag a shift to move it (hold Ctrl or Alt to copy it), drag its
@@ -169,6 +170,7 @@ export default function ScheduleBuilder({ storeId }) {
   const [shifts, setShifts] = useState([])
   const [rules, setRules] = useState([])
   const [leave, setLeave] = useState([])
+  const [storeHours, setStoreHours] = useState({})
   const [published, setPublished] = useState(null)
   const [selectedId, setSelectedId] = useState('')
   const [editor, setEditor] = useState(null)
@@ -195,8 +197,9 @@ export default function ScheduleBuilder({ storeId }) {
   useEffect(() => {
     let live = true
     setLoading(true)
-    Promise.all([loadScheduleStaff(storeId), loadStoreSchedule(storeId, weekStart, weekEnd), loadCoverageRules(storeId), loadStoreLeave(storeId).catch(() => []), loadScheduleWeek(storeId, weekKey)])
-      .then(([people, weekShifts, needs, away, publishedWeek]) => {
+    Promise.all([loadScheduleStaff(storeId), loadStoreSchedule(storeId, weekStart, weekEnd), loadCoverageRules(storeId), loadStoreLeave(storeId).catch(() => []), loadScheduleWeek(storeId, weekKey), loadStoreOpeningHours(storeId)])
+      .then(([people, weekShifts, needs, away, publishedWeek, hours]) => {
+        if (live) setStoreHours(hours || {})
         if (!live) return
         setStaff(people)
         setShifts(weekShifts)
@@ -211,7 +214,7 @@ export default function ScheduleBuilder({ storeId }) {
   }, [storeId, weekKey])
 
   const staffById = useMemo(() => Object.fromEntries(staff.map((person) => [person.id, person])), [staff])
-  const { warnings, coverage } = useMemo(() => weekWarnings({ days, staff, shifts, rules, leave }), [weekKey, staff, shifts, rules, leave])
+  const { warnings, coverage } = useMemo(() => weekWarnings({ days, staff, shifts, rules, leave, storeHours }), [weekKey, staff, shifts, rules, leave, storeHours])
   const summary = useMemo(() => weekSummary({ staff, shifts, warnings }), [staff, shifts, warnings])
   const roles = useMemo(() => [...new Set([...DEFAULT_ROLES, ...staff.map((person) => person.schedule_role), ...staff.flatMap((person) => person.can_cover || []), ...rules.map((rule) => rule.role)].filter(Boolean))], [staff, rules])
 
@@ -382,7 +385,7 @@ export default function ScheduleBuilder({ storeId }) {
               <th className="sb-person-head">Employee</th>
               {days.map((day) => {
                 const date = new Date(`${day}T00:00:00`)
-                return <th key={day} data-day={day} className={`${day === isoDay(new Date()) ? 'today' : ''}${highlight?.day === day && !highlight.employeeId ? ' flash' : ''}`}>{DAY_SHORT[date.getDay()]} {date.getDate()}</th>
+                return <th key={day} data-day={day} className={`${day === isoDay(new Date()) ? 'today' : ''}${highlight?.day === day && !highlight.employeeId ? ' flash' : ''}`}>{DAY_SHORT[date.getDay()]} {date.getDate()}{Object.keys(storeHours).length ? <small className="sb-hours">{dayHours(storeHours, date.getDay()) ? `${clock(minutesOf(dayHours(storeHours, date.getDay()).open)).replace(':00', '')} – ${clock(minutesOf(dayHours(storeHours, date.getDay()).close)).replace(':00', '')}` : 'Closed'}</small> : null}</th>
               })}
             </tr>
             <tr className="sb-coverage-row">
