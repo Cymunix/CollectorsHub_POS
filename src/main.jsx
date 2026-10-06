@@ -55,6 +55,7 @@ import { favoriteStockAlerts, loadStoreFavorites, setFavoriteThreshold, setStore
 import { createStoreItem, saveStoreItemChanges } from './lib/storeScan'
 import { printItemLabel } from './lib/printLabel'
 import { clock as clockShift, loadClockStatus } from './lib/myhrPay'
+import ClockInGate from './ClockInGate'
 import { supabase } from './lib/supabaseClient'
 
 const emptyStore = {
@@ -1161,45 +1162,6 @@ function describeAuthSession(session) {
   if (session.type === 'platform_admin') return `Admin: ${session.displayName}`
   if (session.type === 'organization') return `Org: ${session.orgName || session.orgCode}`
   return `${session.storeName || 'Store'}: ${session.username || session.role || 'Employee'}`
-}
-
-// Shown in place of the Register until a store employee clocks in.
-function ClockInGate({ name, onClockIn, onOpenMyHR }) {
-  const [busy, setBusy] = useState(false)
-  const [problem, setProblem] = useState('')
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 15000)
-    return () => clearInterval(timer)
-  }, [])
-
-  async function clockIn() {
-    setBusy(true)
-    setProblem('')
-    try {
-      await onClockIn()
-    } catch (error) {
-      setProblem(error?.message || String(error))
-      setBusy(false)
-    }
-  }
-
-  return (
-    <section className="clock-gate">
-      <div className="clock-gate-card">
-        <span className="clock-gate-icon" aria-hidden="true"><Clock3 size={34} /></span>
-        <h2>Clock in to start your shift</h2>
-        <p>Hi {name}. Clock in before opening the register or using the rest of the POS.</p>
-        <strong className="clock-gate-time">{now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</strong>
-        <small>{now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</small>
-        {problem ? <p className="clock-gate-problem">{problem}</p> : null}
-        <button type="button" className="clock-gate-button" onClick={clockIn} disabled={busy} autoFocus>
-          {busy ? 'Clocking in…' : 'Clock in'}
-        </button>
-        <button type="button" className="clock-gate-link" onClick={onOpenMyHR}>Open MyHR instead (schedule, time off)</button>
-      </div>
-    </section>
-  )
 }
 
 function NavButton({ icon: Icon, label, active, onClick, badge = null, badgeTitle = '', notReady = false }) {
