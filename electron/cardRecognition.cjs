@@ -574,7 +574,7 @@ const IDENTIFY_SCHEMA = {
   properties: {
     ...Object.fromEntries(IDENTIFY_FIELDS.map((key) => [key, CARD_SCHEMA.properties[key]])),
     suggested_condition: { type: ['string', 'null'], enum: [...CARD_CONDITIONS, null] },
-    condition_notes: { type: 'array', items: { type: 'string' } },
+    condition_notes: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4 },
   },
   required: [...IDENTIFY_FIELDS, 'suggested_condition', 'condition_notes'],
   additionalProperties: false,

@@ -9125,3 +9125,55 @@ button.not-ready:disabled {
   overflow-y: auto;
   padding-right: 6px;
 }
+
+/* Condition "why" popover (ConditionHint) */
+button.condition-hint {
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.condition-hint.open {
+  background: #d6a632;
+  color: #0b111b;
+}
+
+.condition-hint-popover {
+  background: #0f1828;
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(11, 17, 27, 0.32);
+  color: #f4f6f8;
+  display: grid;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 6px;
+  line-height: 1.35;
+  padding: 10px 12px;
+  position: fixed;
+  text-align: left;
+  text-transform: none;
+  z-index: 400;
+}
+
+.condition-hint-popover strong {
+  color: #f0c75e;
+  font-size: 13px;
+}
+
+.condition-hint-popover ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 16px;
+}
+
+.condition-hint-popover em {
+  color: #f0c75e;
+  font-style: normal;
+}
+
+.condition-hint-popover small {
+  color: #a9b4c4;
+  font-size: 11px;
+  font-weight: 600;
+}
