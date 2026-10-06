@@ -32,7 +32,8 @@ import { sundayOf } from './lib/timesheet'
 import MyHRDetails from './MyHRDetails'
 import MyHRFamily from './MyHRFamily'
 import MyHRJob from './MyHRJob'
-import { LeaveOverview, LeaveRequestForm } from './MyHRLeave'
+import { LeaveOverview } from './MyHRLeave'
+import MyHRLeaveRequest from './MyHRLeaveRequest'
 import MyHRTimesheet from './MyHRTimesheet'
 import MyHRSchedule from './MyHRSchedule'
 
@@ -304,17 +305,18 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
   } else if (view === 'leave') {
     body = (
       <>
-        {approvals}
-        <LeaveRequestForm
+        <MyHRLeaveRequest
           key={editingLeave?.id || 'new'}
           storeId={storeId}
           editing={editingLeave}
+          onEditRequest={(request) => setEditingLeave(request)}
           onDone={(message) => {
             setEditingLeave(null)
             if (message) { setNotice(message); reload() }
             setView('leaveinfo')
           }}
         />
+        {approvals}
       </>
     )
   } else if (view === 'schedule') {

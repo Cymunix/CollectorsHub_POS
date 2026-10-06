@@ -11194,3 +11194,161 @@ button.condition-hint {
 .ts-approval-head .myhr-pay-actions {
   margin-left: auto;
 }
+
+/* MyHR Leave Request: team calendar */
+.lr-page {
+  display: grid;
+  gap: 14px;
+  max-width: 1400px;
+}
+
+.lr-tabs {
+  border-bottom: 1px solid #d5dfeb;
+  padding-bottom: 0;
+}
+
+.lr-filter {
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.lr-filter select {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  margin-left: 6px;
+  padding: 4px 6px;
+}
+
+.lr-refresh {
+  color: #5b6677;
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.lr-refresh .ts-link {
+  color: #1f4f8f;
+  font-weight: 800;
+  text-decoration: underline;
+}
+
+.lr-grid-wrap {
+  overflow-x: auto;
+  padding: 10px 14px 4px;
+}
+
+.lr-grid {
+  border-collapse: collapse;
+  font-size: 11px;
+  min-width: 100%;
+}
+
+.lr-grid th,
+.lr-grid td {
+  border: 1px solid #dde4ee;
+  text-align: center;
+}
+
+.lr-grid thead th {
+  background: #f3f6fa;
+  color: #34455f;
+  font-weight: 800;
+  line-height: 1.25;
+  padding: 3px 2px;
+}
+
+.lr-grid thead th.lr-month {
+  font-size: 13px;
+}
+
+.lr-grid .lr-name {
+  background: #ffffff;
+  border-left: 0;
+  color: #172235;
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 170px;
+  padding: 0 10px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lr-grid tbody tr.me .lr-name {
+  color: #8a6a17;
+}
+
+.lr-grid td {
+  height: 26px;
+  min-width: 26px;
+}
+
+.lr-grid th.today,
+.lr-grid td.today {
+  box-shadow: inset 2px 0 0 #e8a33a, inset -2px 0 0 #e8a33a;
+}
+
+.lr-grid thead th.today {
+  background: #ffd27a;
+}
+
+.lr-grid td.sent { background: #f4b6c2; }
+.lr-grid td.absent { background: #8fb0e8; }
+.lr-grid td.off { background: #d7dbe1; }
+.lr-grid td.holiday { background: #f4ee8c; }
+.lr-grid td.multiple { background: #c8d6f0; }
+
+.lr-legend .sent::before { background: #f4b6c2; }
+.lr-legend .absent::before { background: #8fb0e8; }
+.lr-legend .off::before { background: #d7dbe1; }
+.lr-legend .holiday::before { background: #f4ee8c; }
+.lr-legend .multiple::before { background: #c8d6f0; }
+
+.lr-details {
+  padding: 14px 22px 18px;
+}
+
+.lr-description {
+  color: #34455f;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.lr-pair {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+}
+
+.lr-comments {
+  align-items: start;
+}
+
+.lr-comments textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 9px;
+  resize: vertical;
+}
+
+.lr-details .myhr-form-row input.readonly {
+  background: #eef2f7;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #34455f;
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 9px;
+}
+
+.myhr-form-row > span.lr-description {
+  text-align: left;
+}
+
+.myhr-sap-filter .lr-refresh button.ts-link {
+  background: none;
+  border: 0;
+  padding: 0;
+}

@@ -163,3 +163,21 @@ export const saveTimesheet = (storeId, { weekStart, overrides, lines, total, ove
 })
 export const loadStoreTimesheets = async (storeId) => (await call('myhr_store_timesheets', { p_store_id: storeId })) || []
 export const decideTimesheet = (storeId, weekId, approve, note) => call('myhr_decide_timesheet', { p_store_id: storeId, p_week_id: weekId, p_approve: approve, p_note: note || null })
+
+// Part 7 (supabase/myhr_team_calendar.sql): team calendar and approvers.
+export const loadTeamMembers = async (storeId) => (await call('myhr_team_members', { p_store_id: storeId })) || []
+export const loadTeamAbsences = async (storeId, from, to) => (await call('myhr_team_absences', { p_store_id: storeId, p_from: from, p_to: to })) || []
+export const loadTeamShiftDays = async (storeId, from, to) => (await call('myhr_team_shift_days', { p_store_id: storeId, p_from: from, p_to: to })) || []
+export const loadStoreApprovers = async (storeId) => ((await call('myhr_store_approvers', { p_store_id: storeId })) || []).map((row) => row.name).filter(Boolean)
+
+export const LEAVE_DESCRIPTIONS = {
+  vacation: 'Vacation',
+  sick: 'General illness or a sick day',
+  medical: 'Medical or dental appointment',
+  family_illness: 'Caring for a sick family member',
+  lieu: 'Time off instead of overtime pay (banked overtime)',
+  statutory: 'Statutory holiday',
+  personal: 'Personal day',
+  unpaid: 'Unpaid leave',
+  other: 'Other leave (explain in the comments)',
+}

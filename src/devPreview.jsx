@@ -55,6 +55,33 @@ const SAMPLE = {
     ['sick', 71.35, 2.5], ['medical', 20.39, 3], ['family_illness', 25.49, 0], ['statutory', 18.42, 11],
   ].map(([account, entitlement, used]) => ({ account, year_start: '2026-04-01', year_end: '2027-03-31', entitlement_hours: entitlement, used_hours: used, remainder_hours: Math.round((entitlement - used) * 100) / 100 })),
   myhr_org_leave_year: 4,
+  myhr_team_members: [
+    { id: 'e1', name: 'Mx Jordan Sample', first_name: 'Jordan', last_name: 'Sample', is_me: true },
+    { id: 'e2', name: 'Casey Lee', first_name: 'Casey', last_name: 'Lee', is_me: false },
+    { id: 'e3', name: 'Sam Patel', first_name: 'Sam', last_name: 'Patel', is_me: false },
+    { id: 'e4', name: 'Riley Morgan', first_name: 'Riley', last_name: 'Morgan', is_me: false },
+  ],
+  myhr_team_absences: [
+    { employee_id: 'e1', start_date: isoDay(20), end_date: isoDay(20), status: 'pending', leave_type: 'vacation' },
+    { employee_id: 'e3', start_date: isoDay(15), end_date: isoDay(19), status: 'approved', leave_type: null },
+    { employee_id: 'e2', start_date: isoDay(4), end_date: isoDay(4), status: 'pending', leave_type: null },
+    { employee_id: 'e4', start_date: isoDay(-5), end_date: isoDay(30), status: 'approved', leave_type: null },
+  ],
+  myhr_team_shift_days: ({ p_from }) => {
+    const out = []
+    const start = new Date(p_from + 'T00:00:00')
+    for (let d = 0; d < 31; d += 1) {
+      const date = new Date(start); date.setDate(start.getDate() + d)
+      if (date.getMonth() !== start.getMonth()) break
+      const iso = date.toISOString().slice(0, 10)
+      const dow = date.getDay()
+      if (dow !== 0 && dow !== 1) { out.push({ employee_id: 'e1', day: iso }); out.push({ employee_id: 'e2', day: iso }) }
+      if (dow >= 3) out.push({ employee_id: 'e3', day: iso })
+      if (dow !== 6) out.push({ employee_id: 'e4', day: iso })
+    }
+    return out
+  },
+  myhr_store_approvers: [{ name: 'Store owner' }],
   myhr_my_timesheets: ({ p_from, p_to }) => {
     const sunday = (offsetWeeks) => { const date = new Date(); date.setHours(12, 0, 0, 0); date.setDate(date.getDate() - date.getDay() + offsetWeeks * 7); return date.toISOString().slice(0, 10) }
     const weeks = [
