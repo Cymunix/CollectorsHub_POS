@@ -513,7 +513,7 @@ export async function createStoreEmployee({
   if (error || data?.error) {
     // The function isn't deployed in Supabase (404, or the request never got through).
     if (!data?.error && (/failed to send a request/i.test(error?.message || '') || error?.context?.status === 404)) {
-      throw new Error('Adding staff needs the "create-store-employee" Edge Function, which isn’t deployed in Supabase yet.')
+      throw new Error('Adding staff needs the staff Edge Function (deployed as "dynamic-function"), and Supabase can’t find it.')
     }
     let message = data?.error || error?.message || 'Could not create the employee account.'
     if (!data?.error && error?.context?.json) {
