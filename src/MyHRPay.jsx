@@ -32,6 +32,7 @@ import {
   weekStart,
 } from './lib/myhrPay'
 import MyHRDetails from './MyHRDetails'
+import MyHRFamily from './MyHRFamily'
 import MyHRSchedule from './MyHRSchedule'
 
 // My Pay, Vacation & Leaves: an employee self-service directory (personal
@@ -51,7 +52,7 @@ const DIRECTORY = [
   { title: 'My Resource Links', icon: Link2, items: [['myhr', 'MyHR'], ['acrobat', 'Adobe Acrobat Reader']] },
   { title: 'My Health and Safety', icon: HeartPulse, items: [['incident', 'Report a Safety Incident, Near Miss or Safety Observation'], ['safetysite', 'Workplace Health & Safety Site']] },
 ]
-const BUILT = new Set(['personal', 'addresses', 'emergency', 'job', 'leaveinfo', 'time', 'leave', 'schedule', 'myhr', 'acrobat'])
+const BUILT = new Set(['personal', 'addresses', 'family', 'emergency', 'job', 'leaveinfo', 'time', 'leave', 'schedule', 'myhr', 'acrobat'])
 const TITLES = Object.fromEntries(DIRECTORY.flatMap((group) => group.items))
 const ACROBAT_URL = 'https://get.adobe.com/reader/'
 
@@ -391,8 +392,10 @@ export default function MyHRPay({ storeId, onClockChange, onMyHRHome, initialVie
     )
   } else if (view === 'schedule') {
     body = <MyHRSchedule storeId={storeId} isManager={isManager} />
+  } else if (view === 'family') {
+    body = <MyHRFamily storeId={storeId} />
   } else if (['personal', 'addresses', 'emergency', 'job'].includes(view)) {
-    body = <MyHRDetails storeId={storeId} view={view} />
+    body = <MyHRDetails storeId={storeId} view={view} onBack={() => setView('home')} />
   }
 
   return (

@@ -73,17 +73,22 @@ const SAMPLE = {
     { id: 'm3', employee_name: 'HaydenM8', starts_at: day(monday + 5, 9), ends_at: day(monday + 5, 17) },
     { id: 'x5', employee_name: 'Jordan Smith', starts_at: day(monday + 5, 12), ends_at: day(monday + 5, 20) },
   ],
+  myhr_my_family: [
+    { id: 'f1', relationship: 'Father', name: 'Pat Sample', date_of_birth: '1968-02-03', gender: 'Male' },
+    { id: 'f2', relationship: 'Mother', name: 'Robin Sample', date_of_birth: '1970-09-21', gender: 'Female' },
+  ],
   myhr_my_details: [{
-    first_name: 'Hayden', last_name: '', email: 'staff@example.com', username: 'HaydenM8', role: 'manager', status: 'active',
+    first_name: 'Jordan', last_name: 'Sample', email: 'staff@example.com', username: 'HaydenM8', role: 'manager', status: 'active', personnel_number: '4000001',
+    form_of_address: 'Mx', initials: 'JS', language: 'English', date_of_birth: '1995-04-12', gender: 'Prefer not to say', marital_status: 'Single', country: 'Canada', phone_area: '902',
     employee_since: '2026-08-31T12:00:00Z', store_name: 'Nordvik Test Store',
-    phone: '902-555-0142', address_line1: '123 Main Street', city: 'Halifax', province: 'NS', postal_code: 'B3H 1A1',
+    phone: '555-0142', address_line1: '123 Main Street', city: 'Halifax', province: 'Nova Scotia', postal_code: 'B3H 1A1',
     emergency_name: 'Alex', emergency_relationship: 'Partner', emergency_phone: '902-555-0199',
   }],
 }
 supabase.rpc = async (name) => ({ data: SAMPLE[name] ?? null, error: null })
 
 const screen = new URLSearchParams(window.location.search).get('screen') || 'myhr'
-const payViews = { pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', job: 'job', emergency: 'emergency' }
+const payViews = { pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', addresses: 'addresses', family: 'family', job: 'job', emergency: 'emergency' }
 
 function Preview() {
   let content

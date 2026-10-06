@@ -91,3 +91,10 @@ export async function loadClockStatus(storeId) {
     return { required: false, clockedInAt: null }
   }
 }
+
+// Part 3 (supabase/myhr_personal_data.sql): family members / dependents.
+export const loadMyFamily = async (storeId) => (await call('myhr_my_family', { p_store_id: storeId })) || []
+export const saveFamilyMember = (storeId, { id, relationship, name, dateOfBirth, gender }) => call('myhr_save_family_member', {
+  p_store_id: storeId, p_id: id || null, p_relationship: relationship, p_name: name, p_date_of_birth: dateOfBirth || null, p_gender: gender || null,
+})
+export const deleteFamilyMember = (storeId, id) => call('myhr_delete_family_member', { p_store_id: storeId, p_id: id })

@@ -10302,3 +10302,265 @@ button.condition-hint {
   .myhr-directory { grid-template-columns: 1fr; }
   .myhr-week-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
+
+/* MyHR forms (Personal Data, Addresses, Emergency Contact) */
+.myhr-form {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  display: grid;
+  gap: 14px;
+  max-width: 1100px;
+  padding: 0 0 18px;
+}
+
+.myhr-form-toolbar {
+  align-items: center;
+  background: #eef2f7;
+  border-bottom: 1px solid #dbe3ee;
+  border-radius: 10px 10px 0 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.myhr-form-toolbar button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #172235;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 5px;
+  padding: 6px 12px;
+}
+
+.myhr-form-toolbar button:first-child {
+  background: #d6a632;
+  border-color: #d6a632;
+}
+
+.myhr-form-columns {
+  display: grid;
+  gap: 10px 40px;
+  padding: 4px 22px 0;
+}
+
+.myhr-form-columns.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.myhr-form-columns.cols-1 {
+  max-width: 640px;
+}
+
+.myhr-form-column {
+  align-content: start;
+  display: grid;
+  gap: 18px;
+}
+
+.myhr-form-section {
+  border: 0;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.myhr-form-section legend {
+  border-bottom: 1px solid #dbe3ee;
+  color: #172235;
+  font-size: 15px;
+  font-weight: 900;
+  margin-bottom: 8px;
+  padding: 0 0 6px;
+  width: 100%;
+}
+
+.myhr-form-row {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+
+.myhr-form-row > span {
+  color: #34455f;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.myhr-required {
+  color: #b3261e;
+  margin-right: 4px;
+}
+
+.myhr-form-row input,
+.myhr-form-row select {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  min-width: 0;
+  padding: 6px 9px;
+}
+
+.myhr-form-row input:focus,
+.myhr-form-row select:focus {
+  background: #fffbea;
+  border-color: #d6a632;
+  outline: none;
+}
+
+.myhr-form-row input.readonly {
+  background: #eef2f7;
+  color: #5b6677;
+}
+
+.myhr-phone {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(70px, .6fr) minmax(0, 1.4fr);
+}
+
+.myhr-form > .myhr-editor-problem,
+.myhr-form > .myhr-muted {
+  padding: 0 22px;
+}
+
+@media (max-width: 1100px) {
+  .myhr-form-columns.cols-2 { grid-template-columns: 1fr; }
+}
+
+/* MyHR Family Related Data */
+.myhr-family {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  max-width: 720px;
+  padding: 0 0 16px;
+}
+
+.myhr-family-head {
+  align-items: center;
+  background: #eef2f7;
+  border-bottom: 1px solid #dbe3ee;
+  border-radius: 10px 10px 0 0;
+  display: flex;
+  gap: 24px;
+  padding: 10px 16px;
+}
+
+.myhr-family-head strong {
+  color: #172235;
+}
+
+.myhr-family-add {
+  position: relative;
+}
+
+.myhr-family-add > button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 4px;
+  padding: 5px 10px;
+}
+
+.myhr-family-menu {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(11, 17, 27, 0.16);
+  display: grid;
+  left: 0;
+  min-width: 190px;
+  padding: 4px;
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 20;
+}
+
+.myhr-family-menu button {
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.myhr-family-menu button:hover {
+  background: #eef2f7;
+}
+
+.myhr-family > .myhr-editor-problem,
+.myhr-family > .myhr-empty {
+  padding: 0 16px;
+}
+
+.myhr-family-form {
+  background: #fffbea;
+  border: 1px solid #ecd9a4;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin: 0 16px;
+  padding: 12px 14px;
+}
+
+.myhr-family-form .myhr-form-row {
+  grid-template-columns: 130px minmax(0, 1fr);
+}
+
+.myhr-family-member {
+  padding: 0 16px;
+}
+
+.myhr-family-member-head {
+  align-items: center;
+  border-bottom: 1px solid #dbe3ee;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+}
+
+.myhr-family-member-head h4 {
+  color: #172235;
+  font-size: 15px;
+  margin: 0;
+}
+
+.myhr-family-member-head button {
+  background: none;
+  border: 0;
+  color: #5b6677;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.myhr-facts.compact {
+  gap: 4px 12px;
+}
+
+.myhr-facts.compact dt {
+  text-align: right;
+  width: 110px;
+}
