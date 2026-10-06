@@ -961,7 +961,7 @@ button:disabled {
   color: inherit;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(220px, 1.6fr) minmax(110px, .75fr) 78px 94px 104px 104px 120px 34px;
+  grid-template-columns: minmax(220px, 1.6fr) 118px minmax(110px, .75fr) 78px 94px 104px 104px 120px 34px;
   min-height: 64px;
   padding: 8px 10px;
   position: relative;
@@ -1310,7 +1310,7 @@ button:disabled {
   }
 
   .inventory-table-row {
-    grid-template-columns: minmax(210px, 1.5fr) minmax(100px, .7fr) 74px 86px 96px 96px 112px 28px;
+    grid-template-columns: minmax(200px, 1.4fr) 108px minmax(96px, .7fr) 70px 82px 92px 92px 108px 28px;
   }
 }
 

@@ -4454,8 +4454,12 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
           <ItemThumb item={item} />
           <span>
             <strong>{item.name || item.title}</strong>
-            <small>{[item.category, item.condition, item.grade ? `Grade ${item.grade}` : ''].filter(Boolean).join(' · ')}</small>
+            <small>{item.category || ''}</small>
           </span>
+        </span>
+        <span className="inventory-condition">
+          <strong>{item.grade ? `${item.gradingCompany ? `${item.gradingCompany} ` : 'Grade '}${item.grade}` : (item.rawCondition || item.condition || '—')}</strong>
+          {item.grade && item.rawCondition ? <small>{item.rawCondition}</small> : null}
         </span>
         <span>
           <strong>{item.sku || '—'}</strong>
@@ -4764,6 +4768,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
           <div className="inventory-table">
             <div className="inventory-table-row inventory-table-header">
               <span>Item</span>
+              <span>Condition</span>
               <span>SKU</span>
               <span>Available</span>
               <span>Cost</span>
@@ -4783,7 +4788,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
                 const high = Math.max(...nums)
                 return low === high ? money.format(low) : `${money.format(low)}–${money.format(high)}`
               }
-              const conditions = [...new Set(group.items.map((item) => item.condition).filter(Boolean))]
+              const conditions = [...new Set(group.items.map((item) => (item.grade ? `${item.gradingCompany ? `${item.gradingCompany} ` : 'Grade '}${item.grade}` : item.rawCondition || item.condition)).filter(Boolean))]
               return (
                 <div
                     key={group.key}
@@ -4798,8 +4803,12 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
                       <ItemThumb item={first} />
                       <span>
                         <strong>{first.name || first.title}</strong>
-                        <small>{group.items.length} copies · {conditions.join(', ') || 'condition not set'}</small>
+                        <small>{group.items.length} copies{first.category ? ` · ${first.category}` : ''}</small>
                       </span>
+                    </span>
+                    <span className="inventory-condition">
+                      <strong>{conditions.length > 1 ? 'Mixed' : conditions[0] || '—'}</strong>
+                      {conditions.length > 1 ? <small title={conditions.join(', ')}>{conditions.join(', ')}</small> : null}
                     </span>
                     <span>
                       <strong>{new Set(group.items.map((item) => item.sku)).size === 1 ? (first.sku || '—') : 'Various'}</strong>
