@@ -52,6 +52,13 @@ import ScanCentre from './scan/ScanCentre'
 import CustomersView from './customers/CustomersView'
 import TransactionsView from './transactions/TransactionsView'
 import PawnView from './pawn/PawnView'
+import ReportsView from './reports/ReportsView'
+import PersonalSettings from './settings/PersonalSettings'
+import { DEFAULT_PREFERENCES, applyPreferences, loadPreferences, mfaNeeded, mfaVerify } from './lib/personalSettings'
+import { deviceLanguage, setLanguage } from './i18n/runtime'
+
+// The sign-in screen uses the last language chosen on this computer.
+setLanguage(deviceLanguage())
 import ConditionHint from './ConditionHint'
 import MyHRView from './MyHR'
 import UpdateCheck from './UpdateCheck'
@@ -220,6 +227,10 @@ function App() {
   const [customerFocus, setCustomerFocus] = useState('')
   // A pawn loan to open in Pawn & Loans (from a customer's profile).
   const [pawnFocus, setPawnFocus] = useState('')
+  // Filters to open Transactions with (a report drill-down).
+  const [transactionsFocus, setTransactionsFocus] = useState(null)
+  // Two-step sign-in: the password was right; waiting for the authenticator code.
+  const [mfaPending, setMfaPending] = useState(null)
   const registerToggleRef = useRef(false)
   const [registerHasDraft, setRegisterHasDraft] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -721,7 +732,22 @@ function App() {
           password: staffDraft.password,
         })
 
-      setAuthSession(session)
+      const factorId = await mfaNeeded().catch(() => null)
+      if (factorId) {
+        setMfaPending({ session, factorId })
+        return
+      }
+      completeLogin(session)
+    } catch (error) {
+      setLoginError(error?.message || 'Could not sign in.')
+    } finally {
+      setIsAuthenticating(false)
+    }
+  }
+
+  function completeLogin(session) {
+    setMfaPending(null)
+    setAuthSession(session)
       if (isTransientStoreSession(session)) {
         const transientStore = {
           ...emptyStore,
@@ -745,11 +771,8 @@ function App() {
       }
       setIsAuthenticated(true)
       setLoginDraft({ orgCode: '', username: '', password: '' })
-    } catch (error) {
-      setLoginError(error?.message || 'Could not sign in.')
-    } finally {
-      setIsAuthenticating(false)
-    }
+      // The employee's own display preferences (text size, motion) follow their account.
+      loadPreferences().then(applyPreferences).catch(() => {})
   }
 
   // Keeps the Supabase sign-in alive while the app is open: renews on window
@@ -800,6 +823,8 @@ function App() {
       setAuthExpired(false)
       setAuthSession(null)
       setIsAuthenticated(false)
+      setMfaPending(null)
+      applyPreferences({ ...DEFAULT_PREFERENCES, language: deviceLanguage() })
       if (wasTransientStore) {
         const resetStore = { ...emptyStore, meta: store.meta }
         setStore(resetStore)
@@ -896,6 +921,7 @@ function App() {
 
   if (!isAuthenticated) {
     return (
+      <>
       <LoginScreen
         draft={loginDraft}
         error={loginError}
@@ -910,6 +936,13 @@ function App() {
         }}
         onSubmit={handleLogin}
       />
+      {mfaPending ? (
+        <MfaPrompt
+          onVerify={async (code) => { await mfaVerify(mfaPending.factorId, code); completeLogin(mfaPending.session) }}
+          onCancel={async () => { setMfaPending(null); await signOutSupabase().catch(() => {}) }}
+        />
+      ) : null}
+      </>
     )
   }
 
@@ -961,7 +994,7 @@ function App() {
           {authSession?.storeId ? <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} /> : null}
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
           {storeFeatures.pawns_loans ? <NavButton icon={HandCoins} label="Pawns & Loans" active={activeView === 'pawns'} onClick={() => requestNavigate('pawns')} /> : null}
-          <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} notReady />
+          <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} />
           <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => requestNavigate('myhr')} />
           <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => requestNavigate('settings')} />
           </> : null}
@@ -984,7 +1017,7 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'customers' && activeView !== 'pawns' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
+        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'customers' && activeView !== 'pawns' && activeView !== 'reports' && activeView !== 'settings' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
           <>
             <header className="topbar">
               <div>
@@ -1137,7 +1170,9 @@ function App() {
         ) : null}
         {activeView === 'transactions' ? (
           <TransactionsView
+            key={transactionsFocus?.at || 'transactions'}
             session={authSession}
+            initialFilters={transactionsFocus}
             online={syncStatus?.online !== false && (typeof navigator === 'undefined' || navigator.onLine)}
             receiptBranding={receiptBranding}
             renderReceipt={(receipt) => <ReceiptDocument transaction={receipt} />}
@@ -1145,8 +1180,15 @@ function App() {
             onOpenCustomer={(customerId) => { setCustomerFocus(customerId); requestNavigate('customers') }}
           />
         ) : null}
-        {activeView === 'reports' ? <PlaceholderView icon={BarChart3} title="Reports" copy="Daily closeout, stock movement, margin, category performance, and tax summaries will live here." /> : null}
-        {activeView === 'settings' ? <SettingsView dataPath={dataPath} /> : null}
+        {activeView === 'reports' ? (
+          <ReportsView
+            session={authSession}
+            online={syncStatus?.online !== false && (typeof navigator === 'undefined' || navigator.onLine)}
+            pendingChanges={Number(syncStatus?.pendingLocalChanges || 0)}
+            onOpenTransactions={(filters) => { setTransactionsFocus({ ...filters, at: Date.now() }); requestNavigate('transactions') }}
+          />
+        ) : null}
+        {activeView === 'settings' ? <PersonalSettings session={authSession} dataPath={dataPath} onLogout={handleLogout} updateCheck={<UpdateCheck />} /> : null}
         {activeView.startsWith('org-') && isOrgSession ? (
           <OrgPortal session={authSession} activeModule={activeView.slice(4)} onModule={(module) => setActiveView(`org-${module}`)} />
         ) : null}
@@ -5542,6 +5584,29 @@ function ItemThumb({ item }) {
     <span className="item-thumb">
       {item.imageUrl || item.image ? <img src={item.imageUrl || item.image} alt="" loading="lazy" /> : <Boxes size={22} />}
     </span>
+  )
+}
+
+function MfaPrompt({ onVerify, onCancel }) {
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState('')
+  async function submit(event) {
+    event.preventDefault()
+    setBusy(true)
+    setProblem('')
+    try { await onVerify(code) } catch (error) { setProblem(error?.message || 'That code didn\'t work.') } finally { setBusy(false) }
+  }
+  return (
+    <div className="register-modal cu-modal ps-mfa-prompt" role="dialog" aria-modal="true" aria-labelledby="mfa-title">
+      <form onSubmit={submit}>
+        <h2 id="mfa-title">Two-step sign-in</h2>
+        <p>Enter the 6-digit code from your authenticator app.</p>
+        <input autoFocus inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} maxLength={8} aria-label="Code" />
+        {problem ? <p className="cs-error">{problem}</p> : null}
+        <div className="cs-actions"><button type="button" onClick={onCancel}>Cancel</button><button type="submit" className="gold-button" disabled={busy || code.replace(/\s/g, '').length < 6}>{busy ? 'Checking…' : 'Sign in'}</button></div>
+      </form>
+    </div>
   )
 }
 

@@ -13,6 +13,7 @@ import StoreHoursModal from './StoreHours'
 import BuybackRulesModal from './BuybackRules'
 import StoreFeaturesModal from './StoreFeatures'
 import PawnSettings from '../pawn/PawnSettings'
+import ReportAccess from '../reports/ReportAccess'
 
 // Normalise whatever the browser's address autofill gives (full name or code) to
 // a 2-letter province code so tax + region derivation work.
@@ -58,6 +59,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
   const [idRulesStore, setIdRulesStore] = useState(null) // store whose buyback ID rules are open
   const [featuresStore, setFeaturesStore] = useState(null) // store whose optional features are open
   const [pawnStore, setPawnStore] = useState(null) // store whose pawn settings are open
+  const [reportStore, setReportStore] = useState(null) // store whose report access is open
   const [locStore, setLocStore] = useState(null)  // store whose Locations modal (official address) is open
 
   useEffect(() => {
@@ -191,6 +193,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
                       {!s.demo && <button type="button" onClick={() => setIdRulesStore(s)} style={ent.rowGhost}>ID rules</button>}
                       {!s.demo && <button type="button" onClick={() => setFeaturesStore(s)} style={ent.rowGhost}>Features</button>}
                       {!s.demo && <button type="button" onClick={() => setPawnStore(s)} style={ent.rowGhost}>Pawn</button>}
+                      {!s.demo && <button type="button" onClick={() => setReportStore(s)} style={ent.rowGhost}>Reports</button>}
                       <button type="button" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu(menu?.storeId === s.storeId ? null : { storeId: s.storeId, top: r.bottom + 4, left: Math.max(8, r.right - 200) }) }} style={ent.rowGhost}>More ▾</button>
                     </td>
                   </tr>
@@ -348,6 +351,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
       {hoursStore && <StoreHoursModal orgId={session.orgId} store={hoursStore} onClose={() => setHoursStore(null)} />}
       {idRulesStore && <BuybackRulesModal orgId={session.orgId} store={idRulesStore} onClose={() => setIdRulesStore(null)} />}
       {featuresStore && <StoreFeaturesModal orgId={session.orgId} store={featuresStore} onClose={() => setFeaturesStore(null)} />}
+      {reportStore && <ReportAccess store={reportStore} onClose={() => setReportStore(null)} />}
       {pawnStore && <div className="org-pawn-overlay" role="dialog" aria-modal="true"><PawnSettings storeId={pawnStore.storeId} backLabel="Back to stores" onBack={() => setPawnStore(null)} /></div>}
       {wizardOpen && <CreateStoreWizard demo={session.demo} onClose={() => setWizardOpen(false)} onCreate={onWizardCreate} />}
     </div>

@@ -19,17 +19,18 @@ const RANGES = [['today', 'Today'], ['yesterday', 'Yesterday'], ['7d', 'Last 7 d
 
 const Pill = ({ value, map, tone }) => <span className={`tx-pill ${tone || value}`}>{map[value] || value}</span>
 
-export default function TransactionsView({ session, online = true, receiptBranding, renderReceipt, onOpenCustomer, localTransactions = [] }) {
+export default function TransactionsView({ session, online = true, receiptBranding, renderReceipt, onOpenCustomer, localTransactions = [], initialFilters = null }) {
   const storeId = session?.storeId
   const [summary, setSummary] = useState(null)
   const [data, setData] = useState(null)
   const [problem, setProblem] = useState('')
   const [filter, setFilter] = useState('all')
-  const [search, setSearch] = useState('')
-  const [range, setRange] = useState('30d')
-  const [from, setFrom] = useState(todayIso())
-  const [to, setTo] = useState(todayIso())
-  const [employeeId, setEmployeeId] = useState('')
+  // Opened from a report: start with its period and filters.
+  const [search, setSearch] = useState(initialFilters?.search || '')
+  const [range, setRange] = useState(initialFilters?.from ? 'custom' : '30d')
+  const [from, setFrom] = useState(initialFilters?.from || todayIso())
+  const [to, setTo] = useState(initialFilters?.to || todayIso())
+  const [employeeId, setEmployeeId] = useState(initialFilters?.employeeId || '')
   const [payment, setPayment] = useState('')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(0)
