@@ -74,6 +74,9 @@ END $$;
 
 -- Managers: staff with their scheduling profile and an hourly cost (for the
 -- labour total; salaried staff are counted at salary / 2080 hours).
+-- Drop first because this function's OUT row type has grown since the base
+-- schedule profile migration.
+DROP FUNCTION IF EXISTS public.myhr_schedule_staff(uuid);
 CREATE OR REPLACE FUNCTION public.myhr_schedule_staff(p_store_id uuid)
 RETURNS TABLE (id uuid, name text, short_name text, schedule_role text, can_cover text[], target_hours numeric, min_hours numeric, max_hours numeric, availability jsonb, hourly_cost numeric)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
@@ -144,8 +147,19 @@ BEGIN
   DELETE FROM public.store_coverage_rules WHERE id = p_id AND store_id = p_store_id;
 END $$;
 
+CREATE OR REPLACE FUNCTION public.myhr_clear_coverage_rules(p_store_id uuid)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_count integer;
+BEGIN
+  IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can change coverage needs.'; END IF;
+  DELETE FROM public.store_coverage_rules WHERE store_id = p_store_id;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END $$;
+
 -- ── Shifts: role and break; editing ─────────────────────────────────────────
 ALTER TABLE public.store_shifts
+  ALTER COLUMN employee_id DROP NOT NULL,
   ADD COLUMN IF NOT EXISTS role          text,
   ADD COLUMN IF NOT EXISTS break_minutes integer NOT NULL DEFAULT 0 CHECK (break_minutes BETWEEN 0 AND 240);
 
@@ -157,10 +171,10 @@ BEGIN
   IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can see the store schedule.'; END IF;
   RETURN QUERY
   SELECT s.id, s.employee_id,
-         COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, e.last_name)), ''), e.username, 'Employee'),
+         COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, e.last_name)), ''), e.username, 'Open shift'),
          s.starts_at, s.ends_at, s.note, s.role, s.break_minutes
     FROM public.store_shifts s
-    JOIN public.store_employees e ON e.id = s.employee_id
+    LEFT JOIN public.store_employees e ON e.id = s.employee_id
    WHERE s.store_id = p_store_id AND s.starts_at < p_to AND s.ends_at > p_from
    ORDER BY s.starts_at, 3;
 END $$;
@@ -172,10 +186,12 @@ RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_id uuid;
 BEGIN
   IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can schedule shifts.'; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active') THEN
+  IF p_employee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active') THEN
     RAISE EXCEPTION 'That employee isn''t active at this store.';
   END IF;
   IF p_ends_at <= p_starts_at THEN RAISE EXCEPTION 'A shift has to end after it starts.'; END IF;
+  IF p_ends_at - p_starts_at < interval '4 hours' THEN RAISE EXCEPTION 'A shift must be at least 4 hours.'; END IF;
+  IF p_ends_at - p_starts_at > interval '8 hours' THEN RAISE EXCEPTION 'A shift cannot be longer than 8 hours.'; END IF;
   IF p_shift_id IS NULL THEN
     INSERT INTO public.store_shifts (store_id, employee_id, starts_at, ends_at, note, role, break_minutes, created_by)
     VALUES (p_store_id, p_employee_id, p_starts_at, p_ends_at, NULLIF(btrim(p_note), ''), NULLIF(btrim(p_role), ''), GREATEST(COALESCE(p_break_minutes, 0), 0), public.myhr_employee_id(p_store_id))
@@ -189,6 +205,21 @@ BEGIN
     IF v_id IS NULL THEN RAISE EXCEPTION 'That shift wasn''t found.'; END IF;
   END IF;
   RETURN v_id;
+END $$;
+
+-- Managers: clear all draft shifts that overlap one displayed week. Coverage
+-- needs are recurring rules and are intentionally left in place.
+CREATE OR REPLACE FUNCTION public.myhr_clear_schedule(p_store_id uuid, p_from timestamptz, p_to timestamptz)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_count integer;
+BEGIN
+  IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can change the schedule.'; END IF;
+  DELETE FROM public.store_shifts
+   WHERE store_id = p_store_id
+     AND starts_at < p_to
+     AND ends_at > p_from;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
 END $$;
 
 -- ── Draft → publish ─────────────────────────────────────────────────────────
@@ -288,8 +319,10 @@ GRANT EXECUTE ON FUNCTION public.myhr_schedule_staff(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_coverage_rules(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_save_coverage_rule(uuid, uuid, integer, time, time, text, integer, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_delete_coverage_rule(uuid, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.myhr_clear_coverage_rules(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_store_schedule(uuid, timestamptz, timestamptz) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_save_shift(uuid, uuid, uuid, timestamptz, timestamptz, text, integer, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.myhr_clear_schedule(uuid, timestamptz, timestamptz) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_schedule_week(uuid, date) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_publish_schedule(uuid, date) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.myhr_my_schedule(uuid, timestamptz, timestamptz) TO authenticated;

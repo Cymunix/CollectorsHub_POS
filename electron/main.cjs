@@ -1437,6 +1437,28 @@ ipcMain.handle('scanner:scan-image', async (_event, options = {}) => {
   return fallback
 })
 
+// NORDVIK Identity: scan one side of a government ID on the flatbed. The image
+// is returned in memory and every file the scan writes is deleted straight
+// away (ID images must never stay on disk or reach the logs). There's no
+// fallback to the vendor dialog, which saves files elsewhere: use the camera
+// if a direct scan isn't possible.
+ipcMain.handle('scanner:scan-identity', async () => {
+  if (process.platform !== 'win32') throw new Error('Scanning IDs needs the Windows scanner. Use the camera instead.')
+  const dir = path.join(app.getPath('temp'), 'collectorshub-identity')
+  await mkdir(dir, { recursive: true })
+  const base = path.join(dir, randomUUID())
+  const files = { transferPath: `${base}.wia`, rawPath: `${base}.raw.png`, outputPath: `${base}.png`, displayPath: '' }
+  try {
+    const reply = await scannerSession.scan({ mode: 'full', dpi: 300, intent: WIA_INTENT_COLOR | WIA_INTENT_MAXIMIZE_QUALITY, region: null, ...files, quality: 92 })
+    if (reply?.needsSelection || reply?.code === 'NEEDS_SELECTION') return { needsSelection: true, scanners: reply.scanners || [], message: reply.message }
+    if (!reply?.ok) throw new Error(reply?.message || 'The scan did not complete.')
+    const image = await readFile(existsSync(files.outputPath) ? files.outputPath : files.rawPath)
+    return { dataUrl: `data:image/png;base64,${image.toString('base64')}`, scannerName: reply.scannerName || scannerSession.scannerName || '' }
+  } finally {
+    await Promise.all(Object.values(files).filter(Boolean).map((file) => unlink(file).catch(() => {})))
+  }
+})
+
 // Legacy one-shot scan through WIA.CommonDialog.ShowTransfer (shows the
 // Windows/Canon transfer window). Only used when the direct session fails.
 async function legacyScan(options = {}) {

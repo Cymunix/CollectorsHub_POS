@@ -1,8 +1,8 @@
 -- MyHR, part 3 (run after myhr_schedule_profile.sql): the full Personal Data,
 -- Addresses and Emergency Contact screens, and Family Related Data (family members /
--- dependents). Adds name, marital status, birth, address and other personal
--- fields to the employee's own details, and a personnel number for every
--- employee (assigned automatically, read-only for staff).
+-- dependents). Adds name, contact, marital status, birth, address and other
+-- personal fields to the employee's own details, and a personnel number for
+-- every employee (assigned automatically, read-only for staff).
 --
 -- Only the employee can read or change these, through the functions below;
 -- there is no direct table access.
@@ -20,6 +20,7 @@ ALTER TABLE public.store_employee_details
   ADD COLUMN IF NOT EXISTS nationality     text,
   ADD COLUMN IF NOT EXISTS country         text,
   ADD COLUMN IF NOT EXISTS care_of         text,
+  ADD COLUMN IF NOT EXISTS contact_email   text,
   ADD COLUMN IF NOT EXISTS phone_area      text,
   ADD COLUMN IF NOT EXISTS emergency_first_name text,
   ADD COLUMN IF NOT EXISTS emergency_last_name  text,
@@ -61,7 +62,7 @@ RETURNS TABLE (
   emergency_first_name text, emergency_last_name text, emergency_phone_area text
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT e.first_name, e.last_name, e.email, e.username, e.role, e.status, e.created_at, st.store_name, e.personnel_number,
+  SELECT e.first_name, e.last_name, d.contact_email, e.username, e.role, e.status, e.created_at, st.store_name, e.personnel_number,
          d.phone, d.address_line1, d.address_line2, d.city, d.province, d.postal_code,
          d.emergency_name, d.emergency_relationship, d.emergency_phone,
          d.form_of_address, d.middle_name, d.initials, d.known_as,
@@ -76,7 +77,8 @@ $$;
 GRANT EXECUTE ON FUNCTION public.myhr_my_details(uuid) TO authenticated;
 
 -- Save my details (only the keys given change). First and last name are
--- required whenever they're given and update the employee record itself.
+-- required whenever they're given. Name updates the employee record; contact
+-- email and the remaining personal fields update the private details row.
 CREATE OR REPLACE FUNCTION public.myhr_save_details(p_store_id uuid, p_details jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
@@ -84,7 +86,7 @@ DECLARE
   v_text text[] := ARRAY['phone','address_line1','address_line2','city','province','postal_code',
                          'emergency_name','emergency_relationship','emergency_phone',
                          'form_of_address','middle_name','initials','known_as',
-                         'marital_status','gender','language','nationality','country','care_of','phone_area',
+                         'marital_status','gender','language','nationality','country','care_of','contact_email','phone_area',
                          'emergency_first_name','emergency_last_name','emergency_phone_area'];
   v_key text;
 BEGIN
@@ -102,6 +104,11 @@ BEGIN
   END IF;
 
   INSERT INTO public.store_employee_details (employee_id) VALUES (v_emp) ON CONFLICT (employee_id) DO NOTHING;
+  IF p_details ? 'email' THEN
+    UPDATE public.store_employee_details
+       SET contact_email = NULLIF(btrim(p_details->>'email'), '')
+     WHERE employee_id = v_emp;
+  END IF;
   FOREACH v_key IN ARRAY v_text LOOP
     IF p_details ? v_key THEN
       EXECUTE format('UPDATE public.store_employee_details SET %I = $1 WHERE employee_id = $2', v_key)

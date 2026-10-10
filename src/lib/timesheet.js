@@ -1,6 +1,7 @@
 // Record Working Times: builds an employee's week automatically, then applies
 // their edits.
-//   * Attendance: hours worked each day, from clock in/out (by clock-in day).
+//   * Attendance: hours worked each day, from clock in/out. A shift that runs past
+//     midnight is split at midnight, so each day gets the hours actually worked in it.
 //   * Overtime: hours over OVERTIME_AFTER_HOURS in a day move from attendance
 //     to overtime.
 //   * Paid leave: approved leave of a paid type, as its own row, spread over
@@ -57,6 +58,36 @@ function datesBetween(start, end) {
   return out
 }
 
+// Split the time from start to end (ms) at each local midnight: [{ day, hours }].
+// e.g. Thursday 8:00 to Friday 9:00 gives Thursday 16 h and Friday 9 h.
+export function hoursByDay(start, end) {
+  const out = []
+  let from = Number(start)
+  const until = Number(end)
+  while (from < until && out.length < 400) {
+    const at = new Date(from)
+    const midnight = new Date(at.getFullYear(), at.getMonth(), at.getDate() + 1).getTime()
+    const to = Math.min(until, midnight)
+    out.push({ day: isoDay(at), hours: (to - from) / 3600000 })
+    from = to
+  }
+  return out
+}
+
+// A clock-in/out entry's hours per day (an open one counts up to now).
+export function entryHoursByDay(entry, now = Date.now()) {
+  const start = new Date(entry.clock_in).getTime()
+  const end = entry.clock_out ? new Date(entry.clock_out).getTime() : now
+  return hoursByDay(start, Math.max(start, end))
+}
+
+// Hours of an entry that fall between two times (ms or Date).
+export function entryHoursBetween(entry, from, to = Infinity, now = Date.now()) {
+  const start = Math.max(new Date(entry.clock_in).getTime(), Number(from))
+  const end = Math.min(entry.clock_out ? new Date(entry.clock_out).getTime() : now, Number(to))
+  return Math.max(0, (end - start) / 3600000)
+}
+
 // The automatic week: { days, rows: { key: { date: hours } }, planned: { date: hours } }.
 export function autoWeek({ weekStart, entries = [], leave = [], shifts = [], now = Date.now() }) {
   const days = weekDays(weekStart)
@@ -67,11 +98,9 @@ export function autoWeek({ weekStart, entries = [], leave = [], shifts = [], now
 
   // Hours worked per day.
   for (const entry of entries) {
-    const start = new Date(entry.clock_in)
-    const day = isoDay(start)
-    if (!inWeek.has(day)) continue
-    const end = entry.clock_out ? new Date(entry.clock_out).getTime() : now
-    rows.attendance[day] += Math.max(0, (end - start.getTime()) / 3600000)
+    for (const part of entryHoursByDay(entry, now)) {
+      if (inWeek.has(part.day)) rows.attendance[part.day] += part.hours
+    }
   }
   // Over 7 hours a day is overtime.
   for (const day of days) {
@@ -95,9 +124,9 @@ export function autoWeek({ weekStart, entries = [], leave = [], shifts = [], now
 
   // Scheduled hours.
   for (const shift of shifts) {
-    const day = isoDay(new Date(shift.starts_at))
-    if (!inWeek.has(day)) continue
-    planned[day] = round(planned[day] + (new Date(shift.ends_at) - new Date(shift.starts_at)) / 3600000)
+    for (const part of hoursByDay(new Date(shift.starts_at).getTime(), new Date(shift.ends_at).getTime())) {
+      if (inWeek.has(part.day)) planned[part.day] = round(planned[part.day] + part.hours)
+    }
   }
 
   return { days, rows, planned }

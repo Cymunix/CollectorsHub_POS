@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
   listEbayItem: (item) => ipcRenderer.invoke('ebay:list-item', item),
   selectScanImages: () => ipcRenderer.invoke('scanner:select-images'),
   scanImage: (options) => ipcRenderer.invoke('scanner:scan-image', options),
+  scanIdentityDocument: () => ipcRenderer.invoke('scanner:scan-identity'),
   openScannerSession: () => ipcRenderer.invoke('scanner:open-session'),
   closeScannerSession: () => ipcRenderer.invoke('scanner:close-session'),
   getScannerStatus: () => ipcRenderer.invoke('scanner:get-status'),

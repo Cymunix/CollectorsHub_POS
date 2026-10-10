@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>NORDVIK Identity</title>
+<!--
+  NORDVIK Identity: customer phone photo capture.
+  Host this file over HTTPS (for example on the CollectorsHub website at
+  /identity/verify) and set the nordvik-identity function's MOBILE_VERIFY_URL
+  secret to its address. The QR code's token arrives in the URL fragment (#t=),
+  which browsers never send to this page's server; it's cleared from the address
+  bar as soon as the page reads it.
+  The page can only use the session-scoped mobile endpoints; it shows no
+  account or transaction details, and photos are never stored on the phone.
+-->
+<style>
+  :root { --navy: #17253d; --deep: #0b111b; --gold: #d6a632; --gold-dark: #b18425; --bg: #f4f6f8; --border: #e3e8ef; --green: #1f7a3f; --red: #b42318; }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--navy); font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+  header { align-items: center; background: var(--deep); color: #fff; display: flex; gap: 10px; padding: 14px 18px; }
+  header strong { font-size: 17px; }
+  header span { color: var(--gold); font-size: 20px; }
+  main { margin: 0 auto; max-width: 520px; padding: 16px; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  h1 { font-size: 21px; margin: 0 0 6px; }
+  p { margin: 0 0 10px; }
+  .muted { color: #5b6b82; font-size: 14px; }
+  .notice { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; font-size: 14px; margin: 12px 0; max-height: 46vh; overflow-y: auto; padding: 12px; }
+  .notice p { margin: 0 0 8px; }
+  label.field { display: grid; font-size: 13px; font-weight: 700; gap: 4px; margin: 12px 0; }
+  input[type=text] { border: 1px solid var(--border); border-radius: 8px; font: inherit; min-height: 46px; padding: 0 12px; }
+  label.check { align-items: flex-start; display: flex; font-size: 14px; gap: 10px; margin: 10px 0; }
+  label.check input { height: 20px; margin-top: 2px; width: 20px; }
+  button { border: 0; border-radius: 10px; cursor: pointer; font: inherit; font-weight: 800; min-height: 50px; padding: 0 18px; width: 100%; }
+  button.primary { background: var(--gold); color: var(--navy); }
+  button.primary:active { background: var(--gold-dark); }
+  button.secondary { background: #fff; border: 1px solid var(--border); color: var(--navy); }
+  button:disabled { opacity: .5; }
+  .row { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; margin-top: 12px; }
+  .stack { display: grid; gap: 10px; margin-top: 12px; }
+  .preview { aspect-ratio: 3 / 4; background: var(--deep); border-radius: 12px; overflow: hidden; position: relative; }
+  .preview video, .preview img { height: 100%; object-fit: cover; width: 100%; }
+  .preview video { transform: scaleX(-1); }
+  .guide { border: 3px dashed rgba(214, 166, 50, .9); border-radius: 50%; height: 62%; left: 50%; pointer-events: none; position: absolute; top: 44%; transform: translate(-50%, -50%); width: 66%; }
+  .hint { font-size: 14px; font-weight: 700; margin: 10px 0 0; min-height: 20px; }
+  .hint.bad { color: var(--red); }
+  .hint.good { color: var(--green); }
+  .error { background: #fef3f2; border: 1px solid #fecdca; border-radius: 10px; color: var(--red); font-weight: 700; padding: 12px; }
+  .done { text-align: center; }
+  .done .tick { color: var(--green); font-size: 54px; line-height: 1; }
+  .expiry { color: #5b6b82; font-size: 13px; margin-top: 10px; text-align: center; }
+</style>
+</head>
+<body>
+<header><span>&#x1F6E1;</span><strong>NORDVIK Identity</strong></header>
+<main id="app"><div class="card"><p class="muted">Checking your verification link…</p></div></main>
+<script>
+// Configure for your Supabase project and the deployed function's name.
+const API = 'https://somsquxikodnghjoatar.supabase.co/functions/v1/bright-action/v1/identity/mobile'
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNvbXNxdXhpa29kbmdoam9hdGFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3NTAyMTIsImV4cCI6MjA5NTMyNjIxMn0.4gUiHWqgkQS0TSpswEr1Q4YkxXQcFb435EQ-ldPX_WA' // the project's public anon key (safe to publish; it grants nothing here without the QR token)
+
+const app = document.getElementById('app')
+const token = new URLSearchParams(location.hash.slice(1)).get('t') || ''
+history.replaceState(null, '', location.pathname) // don't leave the token in the address bar or history
+let state = { notice: '', store: '', expiresAt: '' }
+let stream = null
+
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+async function api(path, options = {}) {
+  let response
+  try {
+    response = await fetch(`${API}/${path}`, {
+      method: options.method || 'GET',
+      headers: { 'Content-Type': 'application/json', 'x-identity-token': token, apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      cache: 'no-store',
+    })
+  } catch {
+    throw new Error("We couldn't reach NORDVIK Identity. Check your phone's internet connection and try again, or ask the store for help.")
+  }
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error || 'Something went wrong. Ask the store for a new code.')
+  return data
+}
+function stop() { stream?.getTracks().forEach((track) => track.stop()); stream = null }
+function showError(message) { stop(); app.innerHTML = `<div class="error">${esc(message)}</div>` }
+function expiryLine() { return state.expiresAt ? `<p class="expiry">This link expires at ${new Date(state.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.</p>` : '' }
+
+function consentScreen() {
+  app.innerHTML = `
+  <div class="card">
+    <h1>Verify your identity</h1>
+    <p class="muted">${esc(state.store)} asked you to take a photo to confirm your identity.</p>
+    <div class="notice">
+      <p><strong>Why.</strong> A store must confirm who you are before buying items from you. This helps prevent the sale of stolen goods.</p>
+      <p><strong>What's collected.</strong> One photo of your face, taken now. NORDVIK Identity compares it with the photo on the ID you showed the store (automatically where an approved verification service is connected, otherwise by an authorised NORDVIK Identity reviewer).</p>
+      <p><strong>Who processes it.</strong> NORDVIK Identity, not the store.</p>
+      <p><strong>What stores see.</strong> Stores where you sell items see that you're verified, your verified legal name and date of birth, and a portrait made from this photo, so staff can confirm it's you. Never your ID images. The portrait isn't shown on your public CollectorsHub profile and is separate from your profile picture.</p>
+      <p><strong>How long.</strong> Your photo and ID images are deleted within 7 days of the decision. Details read from your ID are deleted after 90 days. No face templates are kept.</p>
+      <p><strong>Your rights.</strong> You can ask NORDVIK to see or correct what's held about you, or to delete it.</p>
+      <p><strong>Prefer not to?</strong> Choose "No photo" and the store can check your ID in person instead, for review by NORDVIK Identity.</p>
+    </div>
+    <label class="field">Type your full name to agree
+      <input type="text" id="name" autocomplete="name" autocapitalize="words">
+    </label>
+    <div class="stack">
+      <button class="primary" id="agree" disabled>I agree, take my photo</button>
+      <button class="secondary" id="decline">No photo, check my ID in person</button>
+    </div>
+    ${expiryLine()}
+  </div>`
+  const name = document.getElementById('name')
+  const agree = document.getElementById('agree')
+  name.addEventListener('input', () => { agree.disabled = name.value.trim().length < 2 })
+  agree.addEventListener('click', async () => {
+    agree.disabled = true
+    try {
+      await api('consent', { method: 'POST', body: { status: 'given', signedName: name.value.trim(), noticeVersion: state.notice } })
+      cameraScreen()
+    } catch (error) { showError(error.message) }
+  })
+  document.getElementById('decline').addEventListener('click', async () => {
+    try {
+      await api('consent', { method: 'POST', body: { status: 'declined', noticeVersion: state.notice } })
+      app.innerHTML = '<div class="card done"><h1>No problem</h1><p class="muted">Let the store know. They can check your ID in person instead.</p></div>'
+    } catch (error) { showError(error.message) }
+  })
+}
+
+// Brightness and sharpness checks, for guidance only (NORDVIK Identity makes the decision).
+function quality(canvas) {
+  const small = document.createElement('canvas')
+  small.width = 160; small.height = Math.round(160 * canvas.height / canvas.width)
+  const ctx = small.getContext('2d')
+  ctx.drawImage(canvas, 0, 0, small.width, small.height)
+  const { data } = ctx.getImageData(0, 0, small.width, small.height)
+  const gray = new Float32Array(small.width * small.height)
+  let sum = 0
+  for (let i = 0; i < gray.length; i += 1) { gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]; sum += gray[i] }
+  const brightness = sum / gray.length
+  let lap = 0, lap2 = 0, n = 0
+  for (let y = 1; y < small.height - 1; y += 1) for (let x = 1; x < small.width - 1; x += 1) {
+    const i = y * small.width + x
+    const v = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - small.width] - gray[i + small.width]
+    lap += v; lap2 += v * v; n += 1
+  }
+  const sharpness = lap2 / n - (lap / n) ** 2
+  return { brightness, sharpness }
+}
+async function faces(canvas) {
+  if (!('FaceDetector' in window)) return null
+  try { return (await new window.FaceDetector({ fastMode: true, maxDetectedFaces: 3 }).detect(canvas)).length } catch { return null }
+}
+
+async function cameraScreen() {
+  app.innerHTML = `
+  <div class="card">
+    <h1>Take your photo</h1>
+    <p class="muted">Face the camera in good light. Remove sunglasses or hats. Only you in the frame.</p>
+    <div class="preview"><video id="video" autoplay playsinline muted></video><div class="guide"></div></div>
+    <p class="hint" id="hint"></p>
+    <div class="stack" id="actions"><button class="primary" id="capture" disabled>Take photo</button></div>
+    ${expiryLine()}
+  </div>`
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false })
+  } catch {
+    return showError('Camera access was blocked. Allow the camera for this page in your browser settings, then scan the code again, or ask the store to check your ID in person.')
+  }
+  const video = document.getElementById('video')
+  video.srcObject = stream
+  const capture = document.getElementById('capture')
+  video.addEventListener('loadedmetadata', () => { capture.disabled = false })
+  capture.addEventListener('click', async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight
+    canvas.getContext('2d').drawImage(video, 0, 0) // the original frame, no filters
+    const hint = document.getElementById('hint')
+    const q = quality(canvas)
+    const count = await faces(canvas)
+    let problem = ''
+    if (q.brightness < 60) problem = 'Too dark. Find more light and try again.'
+    else if (q.brightness > 225) problem = 'Too bright. Avoid strong light behind or on you.'
+    else if (q.sharpness < 40) problem = 'Blurry. Hold still and try again.'
+    else if (count === 0) problem = "We couldn't find a face. Centre your face in the oval."
+    else if (count > 1) problem = 'More than one face. Only you should be in the photo.'
+    if (problem) { hint.className = 'hint bad'; hint.textContent = problem; return }
+    stop()
+    review(canvas)
+  })
+}
+
+function review(canvas) {
+  const shot = canvas.toDataURL('image/jpeg', 0.92)
+  app.innerHTML = `
+  <div class="card">
+    <h1>Use this photo?</h1>
+    <div class="preview"><img src="${shot}" alt="Your photo"></div>
+    <div class="row"><button class="secondary" id="retake">Retake</button><button class="primary" id="send">Send photo</button></div>
+    ${expiryLine()}
+  </div>`
+  document.getElementById('retake').addEventListener('click', cameraScreen)
+  document.getElementById('send').addEventListener('click', async (event) => {
+    event.target.disabled = true
+    event.target.textContent = 'Sending…'
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map((b) => b.toString(16).padStart(2, '0')).join('')
+      const upload = await api('photo', { method: 'POST' })
+      const form = new FormData()
+      form.append('cacheControl', '0')
+      form.append('', blob)
+      const put = await fetch(upload.signedUrl, { method: 'PUT', body: form, headers: { 'x-upsert': 'false' } })
+      if (!put.ok) throw new Error('The photo could not be sent. Check your connection and try again.')
+      await api('complete', { method: 'POST', body: { sha256: hash } })
+      app.innerHTML = '<div class="card done"><div class="tick">&#10003;</div><h1>Photo sent</h1><p class="muted">Thanks. You can put your phone away and return to the counter. This link can\'t be used again.</p></div>'
+    } catch (error) { showError(error.message) }
+  })
+}
+
+;(async () => {
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') return showError('This page must be opened over a secure (https) connection.')
+  if (!token) return showError('This verification link is not valid. Ask the store for a new code.')
+  try {
+    const session = await api('session')
+    state = { notice: session.noticeVersion, store: session.storeName, expiresAt: session.expiresAt }
+    if (session.phoneConsent === 'given') cameraScreen()
+    else consentScreen()
+  } catch (error) { showError(error.message) }
+})()
+window.addEventListener('pagehide', stop)
+</script>
+</body>
+</html>

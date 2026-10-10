@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, RotateCcw, Save, Send, Trash2, X } from 'lucide-react'
 import { decideTimesheet, loadMyLeave, loadMySchedule, loadMyTime, loadMyTimesheets, loadStoreTimesheets, saveTimesheet } from './lib/myhrPay'
-import { TIMESHEET_ROWS, applyOverrides, autoWeek, isoDay, rowLabel, sundayOf, weekDays } from './lib/timesheet'
+import { TIMESHEET_ROWS, applyOverrides, autoWeek, entryHoursByDay, isoDay, rowLabel, sundayOf, weekDays } from './lib/timesheet'
 
 // Record Working Times: a calendar of weeks (approval required / rejected /
 // approved) and the weekly or daily timesheet. Each week starts automatic
@@ -266,7 +266,8 @@ export default function MyHRTimesheet({ storeId, isManager }) {
   }
   const months = [-1, 0, 1].map((offset) => new Date(anchor.getFullYear(), anchor.getMonth() + offset, 1))
   const shownRows = new Set(view.lines.map((line) => line.row))
-  const dayEntries = entries.filter((entry) => isoDay(new Date(entry.clock_in)) === selectedDay)
+  // Every shift that worked part of the selected day (including one that started the day before).
+  const dayEntries = entries.filter((entry) => entryHoursByDay(entry).some((part) => part.day === selectedDay))
   const daysShown = tab === 'daily' ? [view.days.includes(selectedDay) ? selectedDay : view.days[0]] : view.days
 
   const cell = (line, day) => {

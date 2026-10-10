@@ -1,6 +1,7 @@
 -- MyHR, part 2 (run after myhr_pay.sql):
 --   * My Schedule: shifts managers schedule for staff (store_shifts)
---   * Personal information: phone, address, emergency contact (store_employee_details)
+--   * Personal information: contact details, address, emergency contact
+--     (store_employee_details and store_employees)
 --   * Clock-in status, so the POS can ask staff to clock in before working
 -- Like part 1, everything goes through functions that work out who the
 -- signed-in employee is and check roles.
@@ -9,7 +10,7 @@
 CREATE TABLE IF NOT EXISTS public.store_shifts (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   store_id    uuid NOT NULL REFERENCES public.stores(id) ON DELETE CASCADE,
-  employee_id uuid NOT NULL REFERENCES public.store_employees(id) ON DELETE CASCADE,
+  employee_id uuid REFERENCES public.store_employees(id) ON DELETE CASCADE,
   starts_at   timestamptz NOT NULL,
   ends_at     timestamptz NOT NULL,
   note        text,
@@ -87,6 +88,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS public.store_employee_details (
   employee_id            uuid PRIMARY KEY REFERENCES public.store_employees(id) ON DELETE CASCADE,
   phone                  text,
+  contact_email          text,
   address_line1          text,
   address_line2          text,
   city                   text,
@@ -97,6 +99,8 @@ CREATE TABLE IF NOT EXISTS public.store_employee_details (
   emergency_phone        text,
   updated_at             timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public.store_employee_details
+  ADD COLUMN IF NOT EXISTS contact_email text;
 ALTER TABLE public.store_employee_details ENABLE ROW LEVEL SECURITY;
 
 -- My personal and job information.
@@ -108,7 +112,7 @@ RETURNS TABLE (
   emergency_name text, emergency_relationship text, emergency_phone text
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT e.first_name, e.last_name, e.email, e.username, e.role, e.status, e.created_at, st.store_name,
+  SELECT e.first_name, e.last_name, d.contact_email, e.username, e.role, e.status, e.created_at, st.store_name,
          d.phone, d.address_line1, d.address_line2, d.city, d.province, d.postal_code,
          d.emergency_name, d.emergency_relationship, d.emergency_phone
     FROM public.store_employees e
@@ -117,15 +121,17 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
    WHERE e.id = public.myhr_employee_id(p_store_id)
 $$;
 
--- Save my phone / address / emergency contact (only the keys given change).
+-- Save my contact details / address / emergency contact (only the keys given change).
 CREATE OR REPLACE FUNCTION public.myhr_save_details(p_store_id uuid, p_details jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_emp uuid := public.myhr_employee_id(p_store_id);
 BEGIN
   IF v_emp IS NULL THEN RAISE EXCEPTION 'You are not an active employee of this store.'; END IF;
+
   INSERT INTO public.store_employee_details (employee_id) VALUES (v_emp) ON CONFLICT (employee_id) DO NOTHING;
   UPDATE public.store_employee_details SET
     phone                  = CASE WHEN p_details ? 'phone' THEN NULLIF(btrim(p_details->>'phone'), '') ELSE phone END,
+    contact_email          = CASE WHEN p_details ? 'email' THEN NULLIF(btrim(p_details->>'email'), '') ELSE contact_email END,
     address_line1          = CASE WHEN p_details ? 'address_line1' THEN NULLIF(btrim(p_details->>'address_line1'), '') ELSE address_line1 END,
     address_line2          = CASE WHEN p_details ? 'address_line2' THEN NULLIF(btrim(p_details->>'address_line2'), '') ELSE address_line2 END,
     city                   = CASE WHEN p_details ? 'city' THEN NULLIF(btrim(p_details->>'city'), '') ELSE city END,

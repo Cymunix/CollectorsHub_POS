@@ -8,7 +8,13 @@
 // leave:  { employee_name?, employee_id?, start_date, end_date, status }
 
 const SLOT = 15 // minutes
+export const MAX_DAYS_PER_WEEK = 5
 const ANYONE = 'employee'
+const normalizeRole = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+const coverageRole = (value) => {
+  const role = normalizeRole(value)
+  return role === 'manager' || role === 'assistant manager' || role === 'supervisor' ? 'manager' : role
+}
 
 const minutesOf = (time) => { const [h, m] = String(time).split(':').map(Number); return h * 60 + (m || 0) }
 export const clock = (minutes) => {
@@ -22,16 +28,21 @@ export const isoDay = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1
 const round = (value) => Math.round(value * 100) / 100
 
 // Paid hours of a shift (minus its unpaid break).
-export const shiftHours = (shift) => Math.max(0, (new Date(shift.ends_at) - new Date(shift.starts_at)) / 3600000 - Number(shift.break_minutes || 0) / 60)
+// Fifteen-minute breaks are paid. Only a 30-minute lunch reduces paid hours.
+export const shiftHours = (shift) => {
+  const breakMinutes = Number(shift.break_minutes || 0)
+  const unpaidHours = breakMinutes >= 60 ? 1 : breakMinutes >= 30 ? 0.5 : 0
+  return Math.max(0, (new Date(shift.ends_at) - new Date(shift.starts_at)) / 3600000 - unpaidHours)
+}
 
 // The role a shift is worked as (its own, else the employee's).
 export const shiftRole = (shift, person) => shift.role || person?.schedule_role || 'Employee'
 
 // Can this person, on this shift, fill a requirement for `role`?
 export function canFill(role, shift, person) {
-  const wanted = String(role || 'Employee').toLowerCase()
+  const wanted = coverageRole(role || 'Employee')
   if (wanted === ANYONE) return true
-  const roles = [shiftRole(shift, person), ...(person?.can_cover || [])].map((value) => String(value).toLowerCase())
+  const roles = [shiftRole(shift, person), ...(person?.can_cover || [])].map(coverageRole)
   return roles.includes(wanted)
 }
 
@@ -50,7 +61,7 @@ export function coverageForDay(day, rules, shifts, staffById) {
   const dayRules = rules.filter((rule) => Number(rule.weekday) === weekday)
   if (!dayRules.length) return { day, results: [], surplus: [] }
   const windows = shifts.map((shift) => ({ shift, person: staffById[shift.employee_id], range: shiftWindowOn(shift, day) }))
-    .filter(({ range }) => range[1] > range[0])
+    .filter(({ person, range }) => person && range[1] > range[0])
   const specificFirst = [...dayRules].sort((a, b) => (String(a.role).toLowerCase() === ANYONE) - (String(b.role).toLowerCase() === ANYONE))
   const first = Math.min(...dayRules.map((rule) => minutesOf(rule.start_time)))
   const last = Math.max(...dayRules.map((rule) => minutesOf(rule.end_time)))
@@ -150,11 +161,14 @@ export function weekWarnings({ days, staff, shifts, rules, leave = [], storeHour
       if (item.ok) continue
       const label = item.rule.label ? `${item.rule.label}: ` : ''
       const role = String(item.rule.role || 'Employee')
-      const range = `${clock(minutesOf(item.rule.start_time))}–${clock(minutesOf(item.rule.end_time))}`
-      warnings.push({
-        id: `cov-${item.rule.id}-${day}`, kind: 'coverage', day, severity: 'error',
-        text: `${dayName} ${range} · ${label}${item.missing > 1 ? `${item.missing} ${role}s short` : `${role} coverage missing`}`,
-      })
+      for (const gap of item.gaps) {
+        const range = `${clock(gap.from)}–${clock(gap.to)}`
+        const shortage = `${gap.value} ${role}${gap.value === 1 ? '' : 's'} short`
+        warnings.push({
+          id: `cov-${item.rule.id}-${day}-${gap.from}`, kind: 'coverage', day, severity: 'error',
+          text: `${dayName} ${range} · ${label}${shortage}`,
+        })
+      }
     }
     for (const segment of result.surplus) {
       warnings.push({
@@ -178,6 +192,12 @@ export function weekWarnings({ days, staff, shifts, rules, leave = [], storeHour
       warnings.push({ id: `min-${person.id}`, kind: 'hours', employeeId: person.id, severity: 'warn', text: `${name}: only ${hours} hrs, under their minimum of ${Number(person.min_hours)}` })
     } else if (target != null && target - hours >= 1) {
       warnings.push({ id: `under-${person.id}`, kind: 'hours', employeeId: person.id, severity: 'warn', text: `${name}: only ${hours} hrs, ${round(target - hours)} hrs under target` })
+    }
+
+    // No more than five working days in a week.
+    const workDays = new Set(mine.map((shift) => isoDay(new Date(shift.starts_at)))).size
+    if (workDays > MAX_DAYS_PER_WEEK) {
+      warnings.push({ id: `days-${person.id}`, kind: 'days', employeeId: person.id, severity: 'error', text: `${name}: scheduled ${workDays} days, more than the ${MAX_DAYS_PER_WEEK} a week allowed` })
     }
 
     // Availability: a weekday with windows set means only those times.

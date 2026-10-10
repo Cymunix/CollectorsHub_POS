@@ -28,7 +28,7 @@ import {
   loadStoreLeave,
   shiftHours,
 } from './lib/myhrPay'
-import { sundayOf } from './lib/timesheet'
+import { entryHoursBetween, sundayOf } from './lib/timesheet'
 import MyHRDetails from './MyHRDetails'
 import MyHRFamily from './MyHRFamily'
 import MyHRJob from './MyHRJob'
@@ -115,9 +115,8 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
   }, [])
 
   const open = entries.find((entry) => !entry.clock_out)
-  const hoursSince = (from, to = Infinity) => entries
-    .filter((entry) => new Date(entry.clock_in) >= from && new Date(entry.clock_in) < to)
-    .reduce((sum, entry) => sum + shiftHours(entry, now), 0)
+  // Only the part of each shift inside the period counts (a shift over midnight on Sunday is split).
+  const hoursSince = (from, to = Infinity) => entries.reduce((sum, entry) => sum + entryHoursBetween(entry, from, to, now), 0)
   const weekHours = hoursSince(thisWeek)
   const lastWeekHours = hoursSince(lastWeek, thisWeek)
 
@@ -335,7 +334,7 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
   }
 
   return (
-    <div className="myhr-pay">
+    <div className={`myhr-pay${view === 'schedule' ? ' myhr-pay-schedule' : ''}`}>
       {view !== 'home' ? (
         <div className="myhr-subnav">
           <button type="button" className="myhr-back" onClick={() => { setView('home'); setNotice(''); setProblem('') }}><ArrowLeft size={16} /> All options</button>

@@ -484,6 +484,21 @@ export async function listStoreEmployees(storeId) {
 // Provision a POS login for a store. Store employees use an internal auth email
 // behind Store Code + Username + PIN, so the Edge Function creates the auth user
 // as email-confirmed with the service role.
+// Set a new password (PIN) for an existing employee: their sign-in password and
+// store PIN together (the staff Edge Function, deployed as dynamic-function).
+export async function changeEmployeePassword(employeeId, password) {
+  if (!employeeId) throw new Error('Missing employee.')
+  if (!password || password.trim().length < 4) throw new Error('The new password must be at least 4 characters.')
+  const { data, error } = await supabase.functions.invoke('dynamic-function', { body: { action: 'change_password', employeeId, password: password.trim() } })
+  if (error || data?.error) {
+    let message = data?.error || error?.message || 'The password could not be changed.'
+    try { const body = await error?.context?.json?.(); if (body?.error) message = body.error } catch {}
+    if (/failed to send a request/i.test(message) || error?.context?.status === 404) message = 'Changing passwords needs the staff Edge Function (dynamic-function), and Supabase can’t reach it.'
+    throw new Error(message)
+  }
+  return data
+}
+
 export async function createStoreEmployee({
   storeId,
   firstName,

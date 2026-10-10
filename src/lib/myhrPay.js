@@ -8,7 +8,7 @@ async function call(name, params) {
   if (error) {
     // The SQL isn't installed yet.
     if (/could not find the function|does not exist/i.test(error.message || '')) {
-      throw new Error('MyHR time and leave isn’t set up in Supabase yet (run the supabase/myhr_*.sql files).')
+      throw new Error(`MyHR function ${name} is not installed in Supabase yet. Run the required supabase/myhr_*.sql migrations.`)
     }
     throw error
   }
@@ -99,6 +99,9 @@ export const loadMySchedule = async (storeId, from, to) => (await call('myhr_my_
 export const loadStoreStaff = async (storeId) => (await call('myhr_store_staff', { p_store_id: storeId })) || []
 export const loadStoreSchedule = async (storeId, from, to) => (await call('myhr_store_schedule', { p_store_id: storeId, p_from: from.toISOString(), p_to: to.toISOString() })) || []
 export const deleteShift = (storeId, shiftId) => call('myhr_delete_shift', { p_store_id: storeId, p_shift_id: shiftId })
+export const clearSchedule = (storeId, from, to) => call('myhr_clear_schedule', {
+  p_store_id: storeId, p_from: from.toISOString(), p_to: to.toISOString(),
+})
 export const loadMyDetails = async (storeId) => {
   const data = await call('myhr_my_details', { p_store_id: storeId })
   return (Array.isArray(data) ? data[0] : data) || null
@@ -189,12 +192,34 @@ export const saveCoverageRule = (storeId, { id, weekday, start, end, role, neede
   p_store_id: storeId, p_id: id || null, p_weekday: weekday, p_start: start, p_end: end, p_role: role, p_needed: needed, p_label: label || null,
 })
 export const deleteCoverageRule = (storeId, id) => call('myhr_delete_coverage_rule', { p_store_id: storeId, p_id: id })
+export const clearCoverageRules = (storeId) => call('myhr_clear_coverage_rules', { p_store_id: storeId })
 export const saveShift = (storeId, { id, employeeId, startsAt, endsAt, role, breakMinutes, note }) => call('myhr_save_shift', {
   p_store_id: storeId, p_shift_id: id || null, p_employee_id: employeeId, p_starts_at: new Date(startsAt).toISOString(), p_ends_at: new Date(endsAt).toISOString(),
   p_role: role || null, p_break_minutes: Number(breakMinutes || 0), p_note: note || null,
 })
 export const loadScheduleWeek = async (storeId, weekStart) => firstRow(await call('myhr_schedule_week', { p_store_id: storeId, p_week_start: weekStart }))
 export const publishSchedule = (storeId, weekStart) => call('myhr_publish_schedule', { p_store_id: storeId, p_week_start: weekStart })
+
+// After publishing: email each scheduled employee their week (supabase/functions/send-schedule).
+// previousShifts is the week as it was last published, so a re-publish only
+// emails the people whose shifts changed. Resolves to { sent, skipped, failed } (names).
+export const SCHEDULE_EMAIL_FUNCTION = 'send-schedule'
+export async function emailPublishedSchedule(storeId, weekStart, previousShifts = []) {
+  const { data, error } = await supabase.functions.invoke(SCHEDULE_EMAIL_FUNCTION, {
+    body: {
+      storeId,
+      weekStart,
+      previousShifts: (previousShifts || []).map((shift) => ({ id: shift.id, employee_id: shift.employee_id, starts_at: shift.starts_at, ends_at: shift.ends_at, role: shift.role, break_minutes: shift.break_minutes })),
+    },
+  })
+  if (error || data?.error) {
+    let message = data?.error || error?.message || 'The schedule emails could not be sent.'
+    try { const details = await error?.context?.json?.(); if (details?.error) message = details.error } catch {}
+    if (error?.context?.status === 404) message = 'the send-schedule Edge Function is not deployed in Supabase yet'
+    throw new Error(message)
+  }
+  return { sent: data?.sent || [], skipped: data?.skipped || [], failed: data?.failed || [] }
+}
 export const loadMyAvailability = async (storeId) => (await call('myhr_my_availability', { p_store_id: storeId })) || {}
 export const saveMyAvailability = (storeId, availability) => call('myhr_save_my_availability', { p_store_id: storeId, p_availability: availability })
 export const loadOrgScheduleProfile = async (orgId, employeeId) => firstRow(await call('myhr_org_schedule_profile', { p_org_id: orgId, p_employee_id: employeeId }))

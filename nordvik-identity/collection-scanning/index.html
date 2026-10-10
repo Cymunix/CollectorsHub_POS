@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>Store requests · CollectorsHub</title>
+<!--
+  CollectorsHub: approve or manage a store scanning items into your collection.
+  Host over HTTPS at https://collectorshub.ca/collection-scanning (the POS QR
+  codes link here as ?request=<id>). The collector signs in to their own
+  account; every action is checked in the database against that account
+  (supabase/collection_scanning.sql), so a link alone grants nothing.
+-->
+<style>
+  :root { --navy: #17253d; --deep: #0b111b; --gold: #d6a632; --gold-dark: #b18425; --bg: #f4f6f8; --border: #e3e8ef; --green: #1f7a3f; --red: #b42318; --amber: #8a5a00; }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--navy); font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+  header { align-items: center; background: var(--deep); color: #fff; display: flex; justify-content: space-between; padding: 14px 18px; }
+  header strong { font-size: 17px; }
+  header button { background: none; border: 1px solid #3a4a63; border-radius: 8px; color: #fff; font: inherit; padding: 6px 10px; }
+  main { margin: 0 auto; max-width: 640px; padding: 16px; display: grid; gap: 12px; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .card.highlight { border: 2px solid var(--gold); }
+  h1 { font-size: 21px; margin: 0 0 6px; } h2 { font-size: 17px; margin: 0 0 4px; }
+  p { margin: 0 0 8px; } .muted { color: #5b6b82; font-size: 14px; }
+  label { display: grid; font-size: 13px; font-weight: 700; gap: 4px; margin: 10px 0; }
+  input { border: 1px solid var(--border); border-radius: 8px; font: inherit; min-height: 46px; padding: 0 12px; }
+  button { border: 0; border-radius: 10px; cursor: pointer; font: inherit; font-weight: 800; min-height: 46px; padding: 0 16px; }
+  .primary { background: var(--gold); color: var(--navy); }
+  .secondary { background: #fff; border: 1px solid var(--border); color: var(--navy); }
+  .danger { background: #fff; border: 1px solid #fecdca; color: var(--red); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .pill { border-radius: 999px; display: inline-block; font-size: 12px; font-weight: 800; padding: 2px 9px; }
+  .pill.pending { background: #fff4db; color: var(--amber); } .pill.approved { background: #dcfae6; color: #085d3a; }
+  .pill.other { background: #f2f4f7; color: #475467; }
+  ul.scope { font-size: 14px; margin: 8px 0; padding-left: 18px; }
+  .error { background: #fef3f2; border: 1px solid #fecdca; border-radius: 10px; color: var(--red); font-weight: 700; padding: 10px; }
+  .facts { display: grid; font-size: 14px; gap: 2px 10px; grid-template-columns: 140px 1fr; margin: 8px 0; }
+  .facts dt { color: #5b6b82; } .facts dd { margin: 0; }
+</style>
+</head>
+<body>
+<header><strong>CollectorsHub · Store requests</strong><button id="signout" hidden>Sign out</button></header>
+<main id="app"><div class="card"><p class="muted">Loading…</p></div></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+const SUPABASE_URL = 'https://somsquxikodnghjoatar.supabase.co'
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNvbXNxdXhpa29kbmdoam9hdGFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3NTAyMTIsImV4cCI6MjA5NTMyNjIxMn0.4gUiHWqgkQS0TSpswEr1Q4YkxXQcFb435EQ-ldPX_WA' // the project's public anon key
+const client = window.supabase.createClient(SUPABASE_URL, ANON_KEY)
+const app = document.getElementById('app')
+const highlight = new URLSearchParams(location.search).get('request') || ''
+const highlightLink = new URLSearchParams(location.search).get('link') || ''
+const highlightWishlist = new URLSearchParams(location.search).get('wishlist') || ''
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const when = (value) => value ? new Date(value).toLocaleString() : '—'
+const STATUS = { pending_authorisation: 'Waiting for your approval', awaiting_intake: 'Approved, collection not yet dropped off', received: 'Received by the store', scanning: 'Being scanned', paused: 'Paused', needs_review: 'Some items being checked', ready_to_finalise: 'Scanning finished', importing: 'Adding to your collection', ready_for_collection: 'Done: ready to collect', completed: 'Completed', cancelled: 'Cancelled' }
+
+function signInScreen(message = '') {
+  document.getElementById('signout').hidden = true
+  app.innerHTML = `<div class="card">
+    <h1>Sign in to CollectorsHub</h1>
+    <p class="muted">A store asked to scan items into your collection. Sign in with your own CollectorsHub account to review it.</p>
+    ${message ? `<p class="error">${esc(message)}</p>` : ''}
+    <form id="signin"><label>Email<input id="email" type="email" autocomplete="email" required></label>
+    <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+    <button class="primary" type="submit" style="width:100%">Sign in</button></form>
+    <p class="muted" style="margin-top:10px">Forgot your password? Use "Forgot password" on collectorshub.ca.</p></div>`
+  document.getElementById('signin').addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const { error } = await client.auth.signInWithPassword({ email: document.getElementById('email').value.trim(), password: document.getElementById('password').value })
+    if (error) signInScreen(error.message)
+    else load()
+  })
+}
+
+async function rpc(name, params) {
+  const { data, error } = await client.rpc(name, params)
+  if (error) throw new Error(error.message)
+  return data
+}
+
+function scope(row) {
+  return `<ul class="scope">
+    <li><b>${esc(row.store_name)}</b>${row.location_name ? `, ${esc(row.location_name)}` : ''}${row.location_address ? ` (${esc(row.location_address)})` : ''}</li>
+    <li>Intake reference <b>${esc(row.reference)}</b></li>
+    <li>${row.kind === 'express' ? 'Scan and identify the items you brought in today' : 'Scan and identify the collection you leave with the store'}</li>
+    <li>Add the scanned items to your CollectorsHub collection. They can't change or remove anything already in it, or see the rest of your account.</li>
+    <li>Lasts ${row.kind === 'express' ? '60 minutes' : `${Math.round(row.duration_minutes / 1440)} days`} after you approve, or until the job is done. You can revoke it at any time.</li>
+  </ul>`
+}
+
+function render(rows) {
+  document.getElementById('signout').hidden = false
+  if (!rows.length) { app.innerHTML = '<div class="card"><h1>No store requests</h1><p class="muted">When a store asks to scan items into your collection, link your account or see your wishlist, it appears here.</p></div>'; return }
+  const ordered = [...rows].sort((a, b) => (b.authorisation_id === highlight) - (a.authorisation_id === highlight))
+  app.innerHTML = ordered.map((row) => {
+    const pending = row.authorisation_status === 'pending'
+    const active = row.authorisation_status === 'approved'
+    const containers = (row.containers || []).map((c) => `${esc(c.code)}${c.description ? ` (${esc(c.description)})` : ''}${c.returned_at ? ' · returned' : ''}`).join('<br>')
+    return `<div class="card ${row.authorisation_id === highlight ? 'highlight' : ''}">
+      <h2>${esc(row.store_name)} · ${esc(row.reference)}</h2>
+      <span class="pill ${pending ? 'pending' : active ? 'approved' : 'other'}">${pending ? 'Needs your approval' : active ? `Approved until ${esc(when(row.expires_at))}` : `Authorisation ${esc(row.authorisation_status)}`}</span>
+      ${pending ? `<p style="margin-top:10px">${row.kind === 'express' ? 'Express scan' : 'Collection drop-off'}: the store is asking to:</p>${scope(row)}` : ''}
+      <dl class="facts">
+        <dt>Status</dt><dd>${esc(STATUS[row.job_status] || row.job_status)}</dd>
+        <dt>Scanned</dt><dd>${esc(row.scanned)} item(s)${row.estimated_items != null ? ` of about ${esc(row.estimated_items)} (estimate)` : ''}</dd>
+        <dt>In your collection</dt><dd>${esc(row.imported)} item(s)</dd>
+        ${row.kind === 'dropoff' ? `<dt>Handed over</dt><dd>${esc(when(row.received_at))}${row.received_acknowledged_by ? ` (signed: ${esc(row.received_acknowledged_by)})` : ''}</dd>
+        <dt>Returned</dt><dd>${row.returned_at ? esc(when(row.returned_at)) : 'Not yet'}</dd>
+        <dt>Containers</dt><dd>${containers || '—'}</dd>` : ''}
+      </dl>
+      <div class="row">
+        ${pending ? `<button class="primary" data-act="approve" data-id="${row.authorisation_id}">Approve</button><button class="secondary" data-act="decline" data-id="${row.authorisation_id}">Decline</button>` : ''}
+        ${active ? `<button class="danger" data-act="revoke" data-id="${row.authorisation_id}">Revoke access</button>` : ''}
+        ${row.kind === 'dropoff' && (active || row.authorisation_status === 'expired') && !['completed', 'cancelled'].includes(row.job_status) ? `<button class="secondary" data-act="extend" data-id="${row.authorisation_id}">Extend 14 days</button>` : ''}
+      </div></div>`
+  }).join('')
+  app.querySelectorAll('button[data-act]').forEach((button) => button.addEventListener('click', async () => {
+    const id = button.dataset.id
+    const act = button.dataset.act
+    if (act === 'revoke' && !confirm('Revoke this store’s access? They won’t be able to add anything more to your collection.')) return
+    button.disabled = true
+    try {
+      if (act === 'approve') await rpc('cs_decide_authorisation', { p_authorisation_id: id, p_approve: true })
+      if (act === 'decline') await rpc('cs_decide_authorisation', { p_authorisation_id: id, p_approve: false })
+      if (act === 'revoke') await rpc('cs_revoke_authorisation', { p_authorisation_id: id })
+      if (act === 'extend') await rpc('cs_extend_authorisation', { p_authorisation_id: id, p_days: 14 })
+      load()
+    } catch (error) { alert(error.message); button.disabled = false }
+  }))
+}
+
+// Stores asking to link their customer record to this CollectorsHub account.
+function renderLinks(links) {
+  const open = links.filter((link) => link.status === 'pending' || link.id === highlightLink)
+  if (!open.length) return
+  const html = open.map((link) => `<div class="card ${link.id === highlightLink ? 'highlight' : ''}">
+      <h2>${esc(link.store_name)} · account link</h2>
+      ${link.status === 'pending' ? `<p>${esc(link.store_name)} asks to link its customer record for you to your CollectorsHub account. They'll see your username, display name and photo, and your purchases there can count toward your collection and XP. They won't see your collection, wishlist or other store's records.</p>
+      <div class="row"><button class="primary" data-link="approve" data-id="${link.id}">Link my account</button><button class="secondary" data-link="decline" data-id="${link.id}">Decline</button></div>`
+      : `<span class="pill other">Request ${esc(link.status)}</span>`}</div>`).join('')
+  app.insertAdjacentHTML('afterbegin', html)
+  app.querySelectorAll('button[data-link]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true
+    try { await rpc('customer_link_decide', { p_request_id: button.dataset.id, p_approve: button.dataset.link === 'approve' }); load() } catch (error) { alert(error.message); button.disabled = false }
+  }))
+}
+
+// Stores that can see this member's wishlist. Stores they've shopped at see it
+// automatically; the member can turn that off (or back on) per store, and answer
+// requests from stores they haven't shopped at. Stores can only read it.
+function renderWishlist(grants) {
+  const shown = grants.filter((grant) => grant.status !== 'expired' || grant.id === highlightWishlist)
+  if (!shown.length) return
+  const html = `<div class="card"><h2>Wishlist sharing</h2><p class="muted">Stores you've bought from can see your wishlist so staff can tell you when they have something you want. They can't change it, and they don't see your collection. You can turn it off for any store.</p></div>` + shown.map((grant) => {
+    const pending = grant.status === 'pending' && grant.request_pending
+    const on = grant.status === 'granted'
+    const label = on ? (grant.automatic ? 'Shared (you shopped here)' : `Shared since ${when(grant.decided_at)}`)
+      : grant.status === 'revoked' ? 'Not shared (you turned it off)' : grant.status === 'declined' ? 'Not shared (you declined)'
+      : grant.status === 'withdrawn' ? 'The store stopped using it' : pending ? 'Asking to see your wishlist' : 'Not shared'
+    return `<div class="card ${grant.id && grant.id === highlightWishlist ? 'highlight' : ''}">
+      <h2>${esc(grant.store_name)}</h2>
+      <span class="pill ${on ? 'approved' : pending ? 'pending' : 'other'}">${esc(label)}</span>
+      ${pending ? `<p style="margin-top:10px">${esc(grant.store_name)} asks to see your CollectorsHub wishlist. They can only see it, never change it, and only this store sees it.</p>
+      <div class="row"><button class="primary" data-wish="approve" data-id="${grant.id}">Share my wishlist</button><button class="secondary" data-wish="decline" data-id="${grant.id}">Don’t share</button></div>`
+      : `<div class="row">${on ? `<button class="danger" data-wish="off" data-store="${grant.store_id}">Stop sharing with this store</button>` : grant.status !== 'withdrawn' ? `<button class="secondary" data-wish="on" data-store="${grant.store_id}">Share with this store</button>` : ''}</div>`}
+    </div>`
+  }).join('')
+  app.insertAdjacentHTML('afterbegin', html)
+  app.querySelectorAll('button[data-wish]').forEach((button) => button.addEventListener('click', async () => {
+    const act = button.dataset.wish
+    if (act === 'off' && !confirm('Stop sharing your wishlist with this store?')) return
+    button.disabled = true
+    try {
+      if (act === 'on' || act === 'off') await rpc('wishlist_access_set', { p_store_id: button.dataset.store, p_share: act === 'on' })
+      else await rpc('wishlist_access_decide', { p_access_id: button.dataset.id, p_approve: act === 'approve' })
+      load()
+    } catch (error) { alert(error.message); button.disabled = false }
+  }))
+}
+
+async function load() {
+  const { data } = await client.auth.getSession()
+  if (!data?.session) return signInScreen()
+  try {
+    const [rows, links, grants] = await Promise.all([rpc('cs_my_scanning', {}).catch(() => []), rpc('customer_link_requests_mine', {}).catch(() => []), rpc('wishlist_access_mine', {}).catch(() => [])])
+    render(rows || [])
+    const otherOpen = (links || []).some((link) => link.status === 'pending' || link.id === highlightLink) || (grants || []).some((grant) => grant.status !== 'expired' || grant.id === highlightWishlist)
+    if (!(rows || []).length && otherOpen) app.innerHTML = ''
+    renderLinks(links || [])
+    renderWishlist(grants || [])
+  } catch (error) { app.innerHTML = `<div class="card"><p class="error">${esc(error.message)}</p></div>` }
+}
+document.getElementById('signout').addEventListener('click', async () => { await client.auth.signOut(); signInScreen() })
+if (location.protocol !== 'https:' && location.hostname !== 'localhost') app.innerHTML = '<div class="card"><p class="error">This page must be opened over https.</p></div>'
+else load()
+setInterval(() => { if (!document.hidden) load() }, 30000)
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ import {
   Eye,
   EyeOff,
   Gift,
+  HandCoins,
   History,
   Home,
   Keyboard,
@@ -47,7 +48,10 @@ import {
 } from 'lucide-react'
 import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
-import StoreScanIntake from './StoreScanIntake'
+import ScanCentre from './scan/ScanCentre'
+import CustomersView from './customers/CustomersView'
+import TransactionsView from './transactions/TransactionsView'
+import PawnView from './pawn/PawnView'
 import ConditionHint from './ConditionHint'
 import MyHRView from './MyHR'
 import UpdateCheck from './UpdateCheck'
@@ -61,6 +65,14 @@ import { createStoreItem, saveStoreItemChanges } from './lib/storeScan'
 import { printItemLabel } from './lib/printLabel'
 import { clock as clockShift, loadClockStatus } from './lib/myhrPay'
 import ClockInGate from './ClockInGate'
+import CreateCustomerModal from './CreateCustomer'
+import IdentityWizard from './identity/IdentityWizard'
+import VerificationDetails from './identity/VerificationDetails'
+import { getVerificationStatus } from './identity/nordvikIdentity'
+import IdentityCustomerCard from './identity/IdentityCustomerCard'
+import ManualIdCheck from './identity/ManualIdCheck'
+import { DEFAULT_RULES, loadBuybackRules } from './lib/buybackIdentification'
+import { loadStoreFeatures } from './lib/storeFeatures'
 import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
 import { supabase } from './lib/supabaseClient'
 
@@ -204,6 +216,11 @@ function App() {
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState([])
   const [pendingRegisterItem, setPendingRegisterItem] = useState(null)
+  // A customer to open in Customers (from a transaction).
+  const [customerFocus, setCustomerFocus] = useState('')
+  // A pawn loan to open in Pawn & Loans (from a customer's profile).
+  const [pawnFocus, setPawnFocus] = useState('')
+  const registerToggleRef = useRef(false)
   const [registerHasDraft, setRegisterHasDraft] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
@@ -395,9 +412,15 @@ function App() {
       if (openedAt && createdAt) return createdAt >= openedAt
       return createdAt.startsWith(today)
     })
+    // Sales, transactions and items sold are the signed-in employee's own;
+    // the cash drawer is the whole (shared) drawer.
+    const myName = authSession?.username || authSession?.displayName || ''
+    const isMine = (transaction) => (authSession?.employeeId && transaction.employeeId
+      ? transaction.employeeId === authSession.employeeId
+      : Boolean(myName) && transaction.employeeName === myName)
 
     const saleTransactions = transactions.filter((transaction) => (
-      transaction.type !== 'buy' && (transaction.items || []).some((item) => item.direction !== 'incoming')
+      isMine(transaction) && transaction.type !== 'buy' && (transaction.items || []).some((item) => item.direction !== 'incoming')
     ))
 
     const salesToday = saleTransactions.reduce((total, transaction) => total + Number(transaction.total || 0), 0)
@@ -491,6 +514,13 @@ function App() {
     setClockStatus(await loadClockStatus(authSession.storeId))
   }
   useEffect(() => { refreshClockStatus() }, [authSession?.storeId, authSession?.type, authSession?.username])
+  // Optional features the organization turned on for this store (e.g. Pawns & Loans).
+  const [storeFeatures, setStoreFeatures] = useState({})
+  useEffect(() => {
+    let cancelled = false
+    loadStoreFeatures(authSession?.storeId).then((flags) => { if (!cancelled) setStoreFeatures(flags) })
+    return () => { cancelled = true }
+  }, [authSession?.storeId])
   const needsClockIn = clockStatus.required && !clockStatus.clockedInAt
   // An organization sign-in doesn't sell: no Register (it starts on MyHR).
   const isOrgSession = authSession?.type === 'organization'
@@ -641,6 +671,12 @@ function App() {
   }
 
   async function toggleRegister() {
+    if (registerToggleRef.current) return
+    registerToggleRef.current = true
+    try { await toggleRegisterOnce() } finally { registerToggleRef.current = false }
+  }
+
+  async function toggleRegisterOnce() {
     const isOpen = store.register.status === 'open'
     const openingCash = getRegisterOpeningCash(store.register, authSession)
     const transientStore = isTransientStoreSession(authSession)
@@ -921,9 +957,10 @@ function App() {
           {!isOrgSession ? <>
           <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
-          {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan to Inventory" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
-          <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} notReady />
+          {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan Centre" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
+          {authSession?.storeId ? <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} /> : null}
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
+          {storeFeatures.pawns_loans ? <NavButton icon={HandCoins} label="Pawns & Loans" active={activeView === 'pawns'} onClick={() => requestNavigate('pawns')} /> : null}
           <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} notReady />
           <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => requestNavigate('myhr')} />
           <NavButton icon={Settings} label="Settings" active={activeView === 'settings'} onClick={() => requestNavigate('settings')} />
@@ -947,7 +984,7 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
+        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'customers' && activeView !== 'pawns' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
           <>
             <header className="topbar">
               <div>
@@ -973,12 +1010,14 @@ function App() {
               onDismissError={() => persist({ ...storeRef.current, sync: { ...syncStatus, error: '' } })}
             />
 
-            <section className="metric-row" aria-label="Store metrics">
-              <Metric label="Today" value={money.format(todaysSales)} />
-              <Metric label="Inventory Value" value={money.format(inventoryValue)} />
-              <Metric label="Items" value={String(store.inventory.length)} />
-              <Metric label="Transactions" value={String(store.transactions.length)} />
-            </section>
+            {activeView !== 'transactions' ? (
+              <section className="metric-row" aria-label="Store metrics">
+                <Metric label="Today" value={money.format(todaysSales)} />
+                <Metric label="Inventory Value" value={money.format(inventoryValue)} />
+                <Metric label="Items" value={String(store.inventory.length)} />
+                <Metric label="Transactions" value={String(store.transactions.length)} />
+              </section>
+            ) : null}
           </>
         ) : null}
 
@@ -1042,18 +1081,70 @@ function App() {
         ) : null}
 
         {activeView === 'scan' ? (
-          <StoreScanIntake
+          <ScanCentre
             session={authSession}
-            savedQueue={store.storeScanQueue || []}
-            onSaveQueue={(queue) => persist({ ...storeRef.current, storeScanQueue: queue })}
+            storeQueue={store.storeScanQueue || []}
+            onSaveStoreQueue={(queue) => persist({ ...storeRef.current, storeScanQueue: queue })}
             onStockChanged={handleSyncNow}
+            collectorQueues={store.collectorScanQueues || {}}
+            collectorScanning={Boolean(storeFeatures.collector_scanning)}
+            onSaveCollectorQueue={(key, queue) => {
+              // Each collector job (and container) keeps its own scan queue; empty ones are dropped.
+              const next = { ...(storeRef.current.collectorScanQueues || {}) }
+              if (queue.length) next[key] = queue
+              else delete next[key]
+              persist({ ...storeRef.current, collectorScanQueues: next })
+            }}
           />
         ) : null}
 
         {activeView === 'dashboard' ? <PlaceholderView icon={Home} title="Dashboard" copy="Store operating overview, register status, daily sales, and urgent tasks will live here." /> : null}
         {activeView === 'catalog' ? <PlaceholderView icon={PackageSearch} title="Catalog" copy="Catalogue search, product records, category data, and item references will live here." /> : null}
-        {activeView === 'customers' ? <PlaceholderView icon={Users} title="Customers" copy="Local customer profiles, store credit, trade notes, and purchase history will live here." /> : null}
-        {activeView === 'transactions' ? <TransactionsView transactions={store.transactions} /> : null}
+        {activeView === 'customers' ? (
+          <CustomersView
+            session={authSession}
+            initialProfileId={customerFocus}
+            pawnEnabled={Boolean(storeFeatures.pawns_loans)}
+            onOpenPawnLoan={(loanId) => { setPawnFocus(loanId); requestNavigate('pawns') }}
+            onProfileOpened={() => setCustomerFocus('')}
+            onScanForCollector={(kind) => {
+              // Opens Scan Centre on Collector Collection (Express Scan or Drop-Off).
+              try { window.localStorage.setItem('scan-centre-tab', kind === 'dropoff' ? 'dropoff' : 'express') } catch {}
+              requestNavigate('scan')
+            }}
+            onViewInventory={(line) => { setSearch(line.sku || ''); requestNavigate('inventory') }}
+            onStartSale={(line, member) => {
+              // A wishlist match: open the Register with that stock item and the member on the sale.
+              const item = (store.inventory || []).find((entry) => entry.id === line.inventory_id || entry.inventoryId === line.inventory_id)
+              if (!item) { window.alert("That item isn't in this register's inventory yet. Use Sync Now, then try again."); return }
+              if (Number(item.quantity ?? item.available ?? 0) <= 0) { window.alert('That item is no longer available at this register.'); return }
+              setPendingRegisterItem({
+                ...item,
+                handoffId: createId('register_handoff'),
+                handoffCustomer: member?.profileId ? { id: `profile_${member.profileId}`, profileId: member.profileId, collectorshub_user_id: member.profileId, name: member.name, username: member.username || '', email: '', phone: '', storeCredit: 0, kind: 'profile' } : null,
+              })
+              setActiveView('register')
+            }}
+          />
+        ) : null}
+        {activeView === 'pawns' && storeFeatures.pawns_loans ? (
+          <PawnView
+            key={pawnFocus || 'pawns'}
+            session={authSession}
+            initialLoanId={pawnFocus}
+            onOpenCustomer={(customerId) => { setPawnFocus(''); setCustomerFocus(customerId); requestNavigate('customers') }}
+          />
+        ) : null}
+        {activeView === 'transactions' ? (
+          <TransactionsView
+            session={authSession}
+            online={syncStatus?.online !== false && (typeof navigator === 'undefined' || navigator.onLine)}
+            receiptBranding={receiptBranding}
+            renderReceipt={(receipt) => <ReceiptDocument transaction={receipt} />}
+            localTransactions={store.transactions}
+            onOpenCustomer={(customerId) => { setCustomerFocus(customerId); requestNavigate('customers') }}
+          />
+        ) : null}
         {activeView === 'reports' ? <PlaceholderView icon={BarChart3} title="Reports" copy="Daily closeout, stock movement, margin, category performance, and tax summaries will live here." /> : null}
         {activeView === 'settings' ? <SettingsView dataPath={dataPath} /> : null}
         {activeView.startsWith('org-') && isOrgSession ? (
@@ -1081,6 +1172,7 @@ function App() {
 function LoginScreen({ appVersion, draft, error, isAuthenticating, mode, onChange, onClearError, onModeChange, onSubmit }) {
   const isAdminMode = mode === 'admin'
   const [showPassword, setShowPassword] = useState(false)
+  const [showForgotHelp, setShowForgotHelp] = useState(false)
 
   function handleExit() {
     desktopApi().exitApp()
@@ -1160,7 +1252,12 @@ function LoginScreen({ appVersion, draft, error, isAuthenticating, mode, onChang
             <ArrowRight size={24} />
           </button>
 
-          <button className="forgot-password not-ready" type="button" disabled title="Coming soon. Ask the store owner to reset it for now">Forgot password?</button>
+          <button className="forgot-password" type="button" onClick={() => setShowForgotHelp((open) => !open)} aria-expanded={showForgotHelp}>Forgot password?</button>
+          {showForgotHelp ? (
+            <p className="forgot-password-help" role="status">
+              Forgotten your password? Reach out to your HR rep and they'll reset it for you.
+            </p>
+          ) : null}
 
           <div className="login-version" aria-label="Application version">
             <span />
@@ -1320,12 +1417,20 @@ function RegisterView({
   const [profileMatches, setProfileMatches] = useState([])
   const [isSearchingProfiles, setIsSearchingProfiles] = useState(false)
   const [profileSearchError, setProfileSearchError] = useState('')
+  const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false)
   const [buyCatalogueResults, setBuyCatalogueResults] = useState([])
   // The text those results were searched for (older results are filtered locally).
   const [buyCatalogueQuery, setBuyCatalogueQuery] = useState('')
   const [isSearchingBuyCatalogue, setIsSearchingBuyCatalogue] = useState(false)
   const [buyCatalogueSearchError, setBuyCatalogueSearchError] = useState('')
   const [guestLegalName, setGuestLegalName] = useState('')
+  const [identityWizardFor, setIdentityWizardFor] = useState(null) // the customer being verified with NORDVIK Identity
+  const [isIdentityDetailsOpen, setIsIdentityDetailsOpen] = useState(false)
+  // Buyback identification for the current sale: a manual ID check or guest
+  // details (transaction-level; the server links it to the transaction).
+  const [buybackIdentification, setBuybackIdentification] = useState(null)
+  const [manualIdKind, setManualIdKind] = useState('') // 'manual' | 'guest'
+  const [buybackRules, setBuybackRules] = useState(DEFAULT_RULES)
   const [paymentMethod, setPaymentMethod] = useState('')
   const [cashReceived, setCashReceived] = useState('')
   const [appliedPayments, setAppliedPayments] = useState([])
@@ -1389,8 +1494,13 @@ function RegisterView({
 
   useEffect(() => {
     if (!pendingRegisterItem) return
+    const { handoffCustomer, ...pendingItem } = pendingRegisterItem
     setMode('sale')
-    addInventoryItem(pendingRegisterItem)
+    if (handoffCustomer) {
+      const currentProfile = customer && !customer.guest ? (customer.collectorshub_user_id || customer.profileId) : ''
+      if (!customer || (currentProfile !== handoffCustomer.profileId && window.confirm(`Put ${handoffCustomer.name} on this sale instead of ${customer.name || 'the current customer'}?`))) setCustomer(handoffCustomer)
+    }
+    addInventoryItem(pendingItem)
     onPendingRegisterItemConsumed?.()
   }, [pendingRegisterItem])
 
@@ -1523,11 +1633,31 @@ function RegisterView({
   const cashDue = paymentMethod === 'cash' ? roundCanadianCash(remaining) : remaining
   const cashRounding = cashDue - remaining
   const changeDue = paymentMethod === 'cash' ? Math.max(0, cashAmount - cashDue) : 0
-  const requiresRecordedGuestName = Boolean(customer?.guest && mode === 'buy')
+  // Guests can't sell to the store any more (see identity below), so a guest's
+  // legal name is no longer collected for buys.
+  const requiresRecordedGuestName = false
   const hasRecordedGuestName = !requiresRecordedGuestName || guestLegalName.trim().length > 1
+  // Selling to the store (buy / trade-in, including the buyback part of a
+  // trade) needs a NORDVIK Identity verified customer. Ordinary sales don't.
+  // Selling to the store (buy / trade-in, including the buyback part of a
+  // trade) needs the seller identified: NORDVIK Identity verified, a manual ID
+  // check for this transaction, or guest buyback details. Ordinary sales don't.
+  // The server enforces the same rule when the transaction is recorded.
+  const requiresVerifiedIdentity = mode === 'buy' && Boolean(customer)
+  const customerAccountId = customer && !customer.guest ? (customer.collectorshub_user_id || customer.profileId || '') : ''
+  const hasVerifiedIdentity = !requiresVerifiedIdentity
+    || (Boolean(customerAccountId) && customer.identityStatus === 'verified')
+    || (Boolean(customerAccountId) && buybackIdentification?.method === 'manual_id_check')
+    || (Boolean(customer?.guest) && buybackIdentification?.method === 'guest_manual_id_check')
+  const identityBlockReason = !requiresVerifiedIdentity || hasVerifiedIdentity ? ''
+    : customer?.guest ? (buybackRules.allow_guest_buyback ? 'Record Guest Buyback Information before buying from a guest.' : "This location doesn't buy from guests. Create a customer instead.")
+      : !customerAccountId ? 'This customer needs a CollectorsHub account, or use Guest buyback.'
+        : buybackRules.allow_manual_check ? 'Identity verification is required before this customer can sell items to the store. Verify with NORDVIK Identity or manually check their ID.'
+          : 'Identity verification is required before this customer can sell items to the store.'
+  const guestIdName = buybackIdentification?.method === 'guest_manual_id_check' ? buybackIdentification.fullName : ''
   const effectiveCustomer = customer?.guest
-    ? { ...customer, name: guestLegalName.trim() || customer.name, legalName: guestLegalName.trim() || customer.legalName || customer.name }
-    : customer
+    ? { ...customer, name: guestIdName || guestLegalName.trim() || customer.name, legalName: guestIdName || guestLegalName.trim() || customer.legalName || customer.name, identificationId: buybackIdentification?.id || null }
+    : customer ? { ...customer, legalName: customer.fullName || customer.legalName || customer.name } : customer
   const cashCoversRemaining = paymentMethod === 'cash' && cashAmount >= cashDue
   const splitCoversRemaining = appliedPayments.length > 0 && remaining <= 0
   // Two-step register: build the cart, then a checkout screen for the
@@ -1538,7 +1668,7 @@ function RegisterView({
     setIsCurrentSaleCollapsed(false)
     setCheckoutOpen(true)
   }
-  const canComplete = mode !== 'scan_intake' && isOpen && lines.length > 0 && !isSubmitting && hasRecordedGuestName && (
+  const canComplete = mode !== 'scan_intake' && isOpen && lines.length > 0 && !isSubmitting && hasRecordedGuestName && hasVerifiedIdentity && (
     mode === 'buy'
       ? customer && hasRecordedGuestName && !hasUnpricedTradeItems && (
         (amountDue === 0 && payoutDue === 0)
@@ -1553,6 +1683,7 @@ function RegisterView({
     cashAmount,
     cashDue,
     customer,
+    identityBlockReason,
     hasRecordedGuestName,
     isOpen,
     lines,
@@ -1625,6 +1756,69 @@ function RegisterView({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [isOpen, selectedLineId])
+
+  // A member attached to the sale: link them to the store, then load their
+  // NORDVIK Identity status (needed before they can sell to the store) and,
+  // when they've allowed it, their verified portrait.
+  const attachedProfileId = customer && !customer.guest ? (customer.collectorshub_user_id || customer.profileId || '') : ''
+  async function loadCustomerIdentity(profileId) {
+    const member = await supabase.rpc('attach_store_member', { p_store_id: authSession.storeId, p_profile_id: profileId })
+    const row = Array.isArray(member.data) ? member.data[0] : member.data
+    if (member.error) console.warn('[Register] Could not link the member to the store:', member.error.message)
+    let identity = null
+    let identityError = ''
+    const credit = await supabase.rpc('store_credit_balance', { p_store_id: authSession.storeId, p_customer_id: row?.customer_id || null, p_collectorshub_user_id: profileId })
+    try {
+      identity = await getVerificationStatus(authSession.storeId, profileId)
+    } catch (error) {
+      identityError = error?.message || String(error)
+      console.warn('[Register] Could not load NORDVIK Identity status:', identityError)
+    }
+    setCustomer((current) => {
+      if (!current || (current.collectorshub_user_id || current.profileId) !== profileId) return current
+      return {
+        ...current,
+        identityLoaded: true,
+        id: row?.customer_id || current.id,
+        fullName: row?.full_name || current.fullName || '',
+        identity: identity || current.identity || null,
+        identityStatus: identity ? identity.status : (current.identityStatus || 'unverified'),
+        storeCredit: credit.error ? Number(current.storeCredit || 0) : Number(credit.data || 0),
+        identityError,
+      }
+    })
+  }
+  useEffect(() => {
+    if (!attachedProfileId || !authSession?.storeId || customer?.identityLoaded) return
+    loadCustomerIdentity(attachedProfileId)
+  }, [attachedProfileId, authSession?.storeId, customer?.id])
+  // While a verification is in progress, the card refreshes itself (an
+  // authenticated status request; nothing from the phone is trusted directly).
+  useEffect(() => {
+    if (!attachedProfileId || !authSession?.storeId || identityWizardFor) return undefined
+    if (!['pending', 'processing', 'manual_review'].includes(customer?.identityStatus) && !customer?.identity?.openSession) return undefined
+    const timer = setInterval(() => loadCustomerIdentity(attachedProfileId), 20000)
+    return () => clearInterval(timer)
+  }, [attachedProfileId, authSession?.storeId, customer?.identityStatus, customer?.identity?.openSession?.id, identityWizardFor])
+
+  useEffect(() => {
+    if (!authSession?.storeId) return undefined
+    let cancelled = false
+    loadBuybackRules(authSession.storeId, authSession.locationId)
+      .then((rules) => { if (!cancelled) setBuybackRules(rules) })
+      .catch((error) => console.warn('[Register] Buyback ID rules:', error?.message || error))
+    return () => { cancelled = true }
+  }, [authSession?.storeId, authSession?.locationId])
+  // An identification belongs to one customer and one sale.
+  const identificationKey = customer ? (customer.guest ? 'guest' : String(customer.collectorshub_user_id || customer.profileId || customer.id || '')) : ''
+  useEffect(() => { setBuybackIdentification(null); setManualIdKind('') }, [identificationKey])
+
+  // The NORDVIK Identity wizard closed: reload the status it left.
+  function closeIdentityWizard() {
+    const profileId = identityWizardFor?.collectorshub_user_id || identityWizardFor?.profileId
+    setIdentityWizardFor(null)
+    if (profileId && authSession?.storeId) loadCustomerIdentity(profileId)
+  }
 
   useEffect(() => {
     const value = customerQuery.trim()
@@ -2781,12 +2975,14 @@ function RegisterView({
         </div>
       </header>
 
-      <section className="register-metric-row" aria-label="Register metrics">
-        <RegisterMetric icon={ShoppingCart} label="Sales Today" value={money.format(Number(registerMetrics?.salesToday || 0))} />
-        <RegisterMetric icon={ReceiptText} label="Transactions" value={String(Number(registerMetrics?.transactionCount || 0))} gold />
-        <RegisterMetric icon={Boxes} label="Items Sold" value={String(Number(registerMetrics?.itemsSold || 0))} />
-        <RegisterMetric icon={Banknote} label="Cash Drawer" value={money.format(Number(registerMetrics?.registerBalance || 0))} gold />
-      </section>
+      {!lines.length ? (
+        <section className="register-metric-row" aria-label="Your sales on this register">
+          <RegisterMetric icon={ShoppingCart} label="My Sales Today" value={money.format(Number(registerMetrics?.salesToday || 0))} />
+          <RegisterMetric icon={ReceiptText} label="My Transactions" value={String(Number(registerMetrics?.transactionCount || 0))} gold />
+          <RegisterMetric icon={Boxes} label="My Items Sold" value={String(Number(registerMetrics?.itemsSold || 0))} />
+          <RegisterMetric icon={Banknote} label="Cash Drawer (all staff)" value={money.format(Number(registerMetrics?.registerBalance || 0))} gold />
+        </section>
+      ) : null}
 
       <div className={`register-grid register-dashboard-grid ${mode !== 'scan_intake' && checkoutOpen ? 'checkout-stage' : 'cart-stage'}`}>
         <section className={`register-main-panel register-pos-panel${mode === 'scan_intake' ? ' scan-intake-mode' : ''}`}>
@@ -2974,6 +3170,8 @@ function RegisterView({
                           </td>
                           <td>
                             <select
+                              className={`condition-select condition-${conditionTone(line.condition)}`}
+                              title={line.condition || 'No condition'}
                               value={line.condition || ''}
                               onChange={(event) => {
                                 const condition = event.target.value
@@ -3102,12 +3300,26 @@ function RegisterView({
                       <strong>Customer</strong>
                       <button type="button" onClick={() => setIsCustomerCollapsed((current) => !current)}>{isCustomerCollapsed ? 'v' : '^'}</button>
                     </div>
-                    {!isCustomerCollapsed && customer ? (
+                    {!isCustomerCollapsed && customer && !customer.guest && (customer.collectorshub_user_id || customer.profileId) ? (
+                      <IdentityCustomerCard
+                        customer={customer}
+                        storeId={authSession?.storeId}
+                        mode={mode}
+                        money={money}
+                        onVerify={() => setIdentityWizardFor(customer)}
+                        onDetails={() => setIsIdentityDetailsOpen(true)}
+                        onRemove={() => { setCustomer(null); setGuestLegalName('') }}
+                        buyback={mode === 'buy'}
+                        manualCheck={buybackIdentification?.method === 'manual_id_check' ? buybackIdentification : null}
+                        onManualCheck={buybackRules.allow_manual_check ? () => setManualIdKind('manual') : null}
+                      />
+                    ) : null}
+                    {!isCustomerCollapsed && customer && (customer.guest || !(customer.collectorshub_user_id || customer.profileId)) ? (
                       <div className="attached-customer">
                         <span className="customer-avatar">{initials(customer.name || customer.username || 'Guest')}</span>
                         <span>
                           <strong>{customer.name || customer.username || 'CollectorsHub Customer'}</strong>
-                          <span>{customer.guest ? 'Guest' : customer.kind === 'profile' ? 'Member' : 'Customer'}</span>
+                          <span>{customer.guest ? 'Guest' : customer.username ? `@${customer.username}` : customer.kind === 'profile' ? 'Member' : 'Customer'}</span>
                           <small>Store Credit <b>{money.format(Number(customer.storeCredit || 0))}</b></small>
                           {!customer.guest ? <small>Purchase XP <b>+250 XP</b></small> : null}
                         </span>
@@ -3116,20 +3328,18 @@ function RegisterView({
                       </div>
                     ) : null}
                     {!isCustomerCollapsed && customer?.guest && mode === 'buy' ? (
-                      <label className="guest-legal-name">
-                        <span>Guest legal name</span>
-                        <input
-                          value={guestLegalName}
-                          onChange={(event) => setGuestLegalName(event.target.value)}
-                          placeholder="Required for store buy/trade-in"
-                        />
-                      </label>
+                      buybackIdentification?.method === 'guest_manual_id_check'
+                        ? <p className="buyback-id-done"><IdCard size={15} /> Guest ID checked: <b>{buybackIdentification.fullName}</b> · {DOCUMENT_LABELS[buybackIdentification.idType] || buybackIdentification.idType}</p>
+                        : buybackRules.allow_guest_buyback
+                          ? <button type="button" className="gold-button buyback-id-button" onClick={() => setManualIdKind('guest')}><IdCard size={15} /> Guest Buyback Information</button>
+                          : null
                     ) : null}
                     {!isCustomerCollapsed && !customer ? (
                       <>
                         <div className="customer-actions">
                           <button type="button" onClick={() => { setCustomer({ name: 'Guest', guest: true, storeCredit: 0 }); setGuestLegalName('') }}><User size={15} /> Guest</button>
                           <button type="button" disabled className="not-ready" title="Coming soon"><Keyboard size={17} /> Scan Membership</button>
+                          <button type="button" className="create-customer-button" onClick={() => setIsCreateCustomerOpen(true)} disabled={!authSession?.storeId} title="Create a CollectorsHub account for this customer"><UserPlus size={15} /> Create Customer</button>
                         </div>
                         <div className="customer-search-popover">
                           <label className="customer-search compact-customer-search">
@@ -3156,6 +3366,7 @@ function RegisterView({
                         </div>
                       </>
                     ) : null}
+                    {!isCustomerCollapsed && identityBlockReason ? <p className="register-warning">{identityBlockReason}</p> : null}
                     {!isCustomerCollapsed && mode === 'buy' && !customer ? <p className="register-warning">Attach a customer before completing a trade-in.</p> : null}
                     {!isCustomerCollapsed && requiresRecordedGuestName && !hasRecordedGuestName ? <p className="register-warning">Record the guest's legal name before completing this buy.</p> : null}
                   </section>
@@ -3288,6 +3499,56 @@ function RegisterView({
           </section>
         ) : null}
       </div>
+
+      {isCreateCustomerOpen ? (
+        <CreateCustomerModal
+          storeId={authSession?.storeId}
+          onCancel={() => setIsCreateCustomerOpen(false)}
+          onCreated={(created, emailed, verifyNow) => {
+            setIsCreateCustomerOpen(false)
+            setCustomer(created)
+            setGuestLegalName('')
+            setCustomerQuery('')
+            setNotice(!created.username
+              ? `Added ${created.name || 'the customer'}${created.customerNumber ? ` (${created.customerNumber})` : ''} to this sale as a store customer.`
+              : `Created @${created.username} and added them to this sale.${emailed ? ` ${created.email} will get an email to set their password.` : " The welcome email couldn't be sent; they can use 'Forgot password' on the website to set one."}`)
+            if (verifyNow) setIdentityWizardFor(created)
+          }}
+        />
+      ) : null}
+
+      {manualIdKind && customer ? (
+        <ManualIdCheck
+          kind={manualIdKind}
+          customer={customer}
+          rules={buybackRules}
+          storeId={authSession?.storeId}
+          locationId={authSession?.locationId}
+          onCancel={() => setManualIdKind('')}
+          onDone={(record) => {
+            setManualIdKind('')
+            setBuybackIdentification(record)
+            setNotice(record.method === 'guest_manual_id_check' ? 'Guest details recorded for this buyback (' + record.fullName + ').' : 'ID checked manually for this transaction. The customer stays unverified in NORDVIK Identity.')
+          }}
+        />
+      ) : null}
+
+      {isIdentityDetailsOpen && customer && !customer.guest ? (
+        <VerificationDetails
+          customer={customer}
+          identity={customer.identity || { status: customer.identityStatus || 'unverified' }}
+          onVerify={() => { setIsIdentityDetailsOpen(false); setIdentityWizardFor(customer) }}
+          onClose={() => setIsIdentityDetailsOpen(false)}
+        />
+      ) : null}
+
+      {identityWizardFor ? (
+        <IdentityWizard
+          storeId={authSession?.storeId}
+          customer={{ ...identityWizardFor, profileId: identityWizardFor.collectorshub_user_id || identityWizardFor.profileId }}
+          onClose={closeIdentityWizard}
+        />
+      ) : null}
 
       {activeModal ? (
         <div className="register-modal" role="dialog" aria-modal="true">
@@ -4060,12 +4321,15 @@ function TotalRow({ label, value, muted }) {
   )
 }
 
-function checkoutDisabledReason({ amountDue, canComplete, cashAmount, cashDue, customer, hasRecordedGuestName, hasUnpricedTradeItems, isOpen, lines, mode, paymentMethod, payoutDue, remaining }) {
+const DOCUMENT_LABELS = { drivers_licence: "Driver's Licence", passport: 'Passport', provincial_id: 'Provincial/State Photo ID' }
+
+function checkoutDisabledReason({ amountDue, canComplete, cashAmount, cashDue, customer, identityBlockReason = '', hasRecordedGuestName, hasUnpricedTradeItems, isOpen, lines, mode, paymentMethod, payoutDue, remaining }) {
   if (canComplete) return ''
   if (!isOpen) return 'Open the register to continue.'
   if (!lines.length) return 'Add at least one item to continue.'
   if (mode === 'buy' && !customer) return 'Attach a customer before completing this transaction.'
   if (!hasRecordedGuestName) return "Record the guest's legal name to continue."
+  if (identityBlockReason) return identityBlockReason
   if (mode === 'buy' && hasUnpricedTradeItems) return 'Enter a store offer for each trade-in item.'
   if ((amountDue > 0 || payoutDue > 0) && !paymentMethod) return 'Select a settlement method to continue.'
   if (paymentMethod === 'other' && remaining > 0) return 'Apply a tender from Other payment to continue.'
@@ -4348,6 +4612,19 @@ function initials(value) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join('') || 'CH'
+}
+
+// Colour level for a condition (the text is always shown too):
+// top (green), good (blue), fair (amber), poor (orange), damaged (red), none (grey).
+function conditionTone(condition) {
+  const text = String(condition || '').toLowerCase().trim()
+  if (!text || text === 'n/a') return 'none'
+  if (/damaged|poor/.test(text)) return 'damaged'
+  if (/heavily played/.test(text)) return 'poor'
+  if (/moderately played|used - fair|missing parts|fair/.test(text)) return 'fair'
+  if (/lightly played|open box|used - good|used\/complete|excellent|very good|good/.test(text)) return 'good'
+  if (/near mint|mint|new|sealed|pre-owned 100%|like new|psa|bgs|cgc|sgc|grade/.test(text)) return 'top'
+  return 'none'
 }
 
 function conditionOptions(mode, category) {
@@ -5268,35 +5545,6 @@ function ItemThumb({ item }) {
   )
 }
 
-function TransactionsView({ transactions }) {
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <p className="eyebrow">Local sales ledger</p>
-          <h2>Transactions</h2>
-        </div>
-        <Archive size={22} />
-      </div>
-      <div className="inventory-list">
-        {transactions.length === 0 ? <EmptyState text="Completed sales will appear here." /> : null}
-        {transactions.map((transaction) => (
-          <div className="inventory-row" key={transaction.id}>
-            <span>
-              <strong>{transaction.number}</strong>
-              <small>{new Date(transaction.createdAt).toLocaleString()}</small>
-            </span>
-            <span className="row-meta">
-              <strong>{money.format(Number(transaction.total || 0))}</strong>
-              <small>{transaction.items.length} item{transaction.items.length === 1 ? '' : 's'}</small>
-            </span>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 function SettingsView({ dataPath }) {
   return (
     <section className="panel settings-panel">
@@ -5425,7 +5673,12 @@ class ErrorScreen extends React.Component {
 window.addEventListener('error', (event) => window.nordvikDesktop?.logError?.({ message: String(event.message || ''), stack: String(event.error?.stack || '') }))
 window.addEventListener('unhandledrejection', (event) => window.nordvikDesktop?.logError?.({ message: `Unhandled: ${String(event.reason?.message || event.reason || '')}`, stack: String(event.reason?.stack || '') }))
 
-createRoot(document.getElementById('root')).render(
+// One React root for the page. In development this file can run again after an
+// edit; reusing the root (instead of creating a second one on the same element)
+// keeps the window from crashing or showing stale screens.
+const rootElement = document.getElementById('root')
+const root = rootElement.__collectorsHubRoot || (rootElement.__collectorsHubRoot = createRoot(rootElement))
+root.render(
   <ErrorScreen>
     <App />
     <UpdatePrompt />

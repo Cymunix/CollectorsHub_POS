@@ -5,8 +5,8 @@ import { loadMyDetails, saveMyDetails } from './lib/myhrPay'
 // Personal Information (Personal Data, Addresses, Emergency Contact) and My Job
 // (Display Job Information) for the signed-in employee. Each screen has
 // Save and Back / Save / Cancel; fields marked * are required. The personnel
-// number is assigned by the system; email, username and role are managed by
-// the store owner.
+// number is assigned by the system; username and role are managed by the store
+// owner. Phone and email are employee-owned contact details for updates.
 
 const PROVINCES = ['Alberta', 'British Columbia', 'Manitoba', 'New Brunswick', 'Newfoundland and Labrador', 'Northwest Territories', 'Nova Scotia', 'Nunavut', 'Ontario', 'Prince Edward Island', 'Quebec', 'Saskatchewan', 'Yukon']
 const OPTIONS = {
@@ -24,11 +24,12 @@ const SCREENS = {
     columns: [
       [
         ['Name', [['form_of_address', 'Form of Address', 'select'], ['first_name', 'First Name', 'text', true], ['last_name', 'Last Name', 'text', true], ['middle_name', 'Middle Name'], ['initials', 'Initials'], ['known_as', 'Known as']]],
-        ['Marital Status', [['marital_status', 'Marital Status', 'select'], ['marital_since', 'Since', 'date']]],
+        ['Contact Information', [['phone', 'Telephone Number', 'phone'], ['email', 'Email', 'email']]],
       ],
       [
         ['Birth Data', [['date_of_birth', 'Date of Birth', 'date', true], ['gender', 'Gender', 'select']]],
-        ['Other Personal Data', [['language', 'Language', 'select', true], ['nationality', 'Nationality'], ['personnel_number', 'Personnel Number', 'readonly'], ['email', 'Email', 'readonly']]],
+        ['Other Personal Data', [['language', 'Language', 'select', true], ['nationality', 'Nationality'], ['personnel_number', 'Personnel Number', 'readonly']]],
+        ['Marital Status', [['marital_status', 'Marital Status', 'select'], ['marital_since', 'Since', 'date']]],
       ],
     ],
   },
@@ -36,7 +37,7 @@ const SCREENS = {
     title: 'Addresses',
     columns: [[
       ['', [['country', 'Country', 'select', true]]],
-      ['Address', [['care_of', 'c/o'], ['address_line1', 'Street and House Number', 'text', true], ['address_line2', 'Address Line 2'], ['city', 'City', 'text', true], ['province', 'Province', 'province', true], ['postal_code', 'Postal code', 'text', true], ['phone', 'Telephone', 'phone']]],
+      ['Address', [['care_of', 'c/o'], ['address_line1', 'Street and House Number', 'text', true], ['address_line2', 'Address Line 2'], ['city', 'City', 'text', true], ['province', 'Province', 'province', true], ['postal_code', 'Postal code', 'text', true]]],
     ]],
   },
   emergency: {
@@ -48,7 +49,8 @@ const SCREENS = {
 }
 
 const roleText = (role) => String(role || '').replace(/_/g, ' ')
-const editableKeys = (screen) => screen.columns.flat().flatMap(([, fields]) => fields)
+const screenSections = (screen) => screen.sections || screen.columns.flat()
+const editableKeys = (screen) => screenSections(screen).flatMap(([, fields]) => fields)
   .filter(([, , kind]) => kind !== 'readonly')
   .flatMap(([key, , kind, , areaKey]) => (kind === 'phone' ? [areaKey || 'phone_area', key] : [key]))
 
@@ -101,7 +103,7 @@ export default function MyHRDetails({ storeId, view, onBack }) {
   const set = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
 
   async function save(andBack) {
-    const missing = screen.columns.flat().flatMap(([, fields]) => fields)
+    const missing = screenSections(screen).flatMap(([, fields]) => fields)
       .filter(([key, , , required]) => required && !String(draft[key] || '').trim())
       .map(([, label]) => label)
     if (missing.length) { setProblem(`Fill in: ${missing.join(', ')}.`); setNotice(''); return }
@@ -155,7 +157,7 @@ export default function MyHRDetails({ storeId, view, onBack }) {
         </span>
       )
     } else {
-      input = <input type={kind === 'date' ? 'date' : 'text'} value={draft[key] || ''} onChange={(event) => set(key, event.target.value)} />
+      input = <input type={kind === 'date' ? 'date' : kind === 'email' ? 'email' : 'text'} value={draft[key] || ''} onChange={(event) => set(key, event.target.value)} />
     }
     return (
       <label key={key} className="myhr-form-row">
@@ -174,19 +176,30 @@ export default function MyHRDetails({ storeId, view, onBack }) {
         {notice ? <span className="myhr-notice">{notice}</span> : null}
       </div>
       {problem ? <p className="myhr-editor-problem">{problem}</p> : null}
-      <div className={`myhr-form-columns cols-${screen.columns.length}`}>
-        {screen.columns.map((column, index) => (
-          <div key={index} className="myhr-form-column">
-            {column.map(([heading, fields]) => (
+      {screen.sections ? (
+        <div className={`myhr-form-sections layout-${screen.layout || 'grid'}`}>
+          {screen.sections.map(([heading, fields, area]) => (
+            <fieldset key={heading || fields[0][0]} className={`myhr-form-section ${area ? `area-${area}` : ''}`}>
+              {heading ? <legend>{heading}</legend> : null}
+              {fields.map(field)}
+            </fieldset>
+          ))}
+        </div>
+      ) : (
+        <div className={`myhr-form-columns cols-${screen.columns.length}`}>
+          {screen.columns.map((column, index) => (
+            <div key={index} className="myhr-form-column">
+              {column.map(([heading, fields]) => (
               <fieldset key={heading || fields[0][0]} className="myhr-form-section">
                 {heading ? <legend>{heading}</legend> : null}
                 {fields.map(field)}
               </fieldset>
-            ))}
-          </div>
-        ))}
-      </div>
-      {view === 'personal' ? <small className="myhr-muted">Only you can see these details. Email and username are managed by the store owner.</small> : null}
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {view === 'personal' ? <small className="myhr-muted">Phone and email are used for schedule updates and store contact. Username and role are managed by the store owner.</small> : null}
     </section>
   )
 }

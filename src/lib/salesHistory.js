@@ -42,6 +42,24 @@ export async function loadStoreSalesHistory(storeId, catalogItemId, limit = 500)
     .sort(newestFirst)
 }
 
+// The schedule builder uses the same completed store sales, but needs all
+// sold items grouped by day and hour instead of one catalogue item.
+export async function loadStoreSalesActivity(storeId, limit = 5000) {
+  if (!storeId) return []
+  const { data, error } = await supabase
+    .from('store_transaction_items')
+    .select('unit_price, quantity, line_total, direction, store_transactions!inner(transaction_number, transaction_type, status, completed_at, created_at, store_id)')
+    .eq('direction', 'out')
+    .eq('store_transactions.store_id', storeId)
+    .eq('store_transactions.status', 'completed')
+    .limit(limit)
+  if (error) throw error
+  return (data || [])
+    .filter((row) => !['refund', 'return'].includes(row.store_transactions?.transaction_type))
+    .map((row) => normalise({ ...row, ...row.store_transactions }, 'This store'))
+    .sort(newestFirst)
+}
+
 export async function loadAllSalesHistory(catalogItemId, limit = 500) {
   if (!catalogItemId) return []
   const [inStore, byItem, byCatalogue] = await Promise.all([

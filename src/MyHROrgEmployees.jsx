@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Search } from 'lucide-react'
+import { ArrowLeft, KeyRound, Search } from 'lucide-react'
+import { changeEmployeePassword } from './org/orgApi'
 import { loadOrgOnboarding, loadOrgStaff } from './lib/myhrPay'
 import { OrgJobEditor } from './MyHRJob'
 import { OrgLeaveEntitlements, OrgScheduleProfile } from './MyHRLeave'
@@ -9,6 +10,54 @@ import { OnboardingBadge, OrgOnboardingPanel, onboardingCounts } from './MyHROnb
 // their onboarding status, and their job, pay, scheduling and leave
 // entitlements (set here, not by the stores). Staff still being onboarded are
 // listed first. Used for the org's Staff section and MyHR → Employees.
+
+// Head office: give an employee a new password (it's also their store PIN).
+function ChangePassword({ employeeId, name }) {
+  const [open, setOpen] = useState(false)
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState({ text: '', bad: false })
+  useEffect(() => { setOpen(false); setPassword(''); setConfirm(''); setMessage({ text: '', bad: false }) }, [employeeId])
+  const problem = password && password.trim().length < 4 ? 'At least 4 characters.' : confirm && confirm !== password ? "The passwords don't match." : ''
+  async function save(event) {
+    event.preventDefault()
+    if (problem || !password || confirm !== password) return
+    setBusy(true)
+    setMessage({ text: '', bad: false })
+    try {
+      await changeEmployeePassword(employeeId, password)
+      setPassword('')
+      setConfirm('')
+      setOpen(false)
+      setMessage({ text: `Password changed for ${name || 'this employee'}. Give them the new password; it's also their store PIN.`, bad: false })
+    } catch (error) {
+      setMessage({ text: error?.message || String(error), bad: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="myhr-org-password">
+      <header>
+        <span><KeyRound size={16} /> <strong>Sign-in</strong></span>
+        {!open ? <button type="button" onClick={() => { setOpen(true); setMessage({ text: '', bad: false }) }}>Change password</button> : null}
+      </header>
+      {open ? (
+        <form onSubmit={save}>
+          <label><span>New password</span><input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label>
+          <label><span>Confirm new password</span><input type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label>
+          {problem ? <p className="bad">{problem}</p> : <p className="myhr-muted">At least 4 characters. It's also their PIN for register approvals.</p>}
+          <div>
+            <button type="button" onClick={() => { setOpen(false); setPassword(''); setConfirm('') }}>Cancel</button>
+            <button type="submit" className="gold-button" disabled={busy || Boolean(problem) || !password || confirm !== password}>{busy ? 'Saving…' : 'Save password'}</button>
+          </div>
+        </form>
+      ) : null}
+      {message.text ? <p className={message.bad ? 'bad' : 'good'}>{message.text}</p> : null}
+    </section>
+  )
+}
 
 export default function MyHROrgEmployees({ orgId, orgName, onBack, initialSelectedId = '', title = 'Employees' }) {
   const [staff, setStaff] = useState(null)
@@ -81,6 +130,7 @@ export default function MyHROrgEmployees({ orgId, orgName, onBack, initialSelect
         {selectedId ? (
           <div className="myhr-org-editors">
             <OrgOnboardingPanel status={onboarding[selectedId]} name={selected?.name} onJump={jump} />
+            <ChangePassword employeeId={selectedId} name={selected?.name} />
             <div id="org-task-job"><OrgJobEditor orgId={orgId} employeeId={selectedId} onSaved={reload} /></div>
             <div id="org-task-scheduling"><OrgScheduleProfile orgId={orgId} employeeId={selectedId} onSaved={reload} /></div>
             <div id="org-task-leave"><OrgLeaveEntitlements orgId={orgId} employeeId={selectedId} onSaved={reload} /></div>

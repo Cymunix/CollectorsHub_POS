@@ -102,8 +102,8 @@ function MyShifts({ storeId, storeName }) {
   )
 }
 
-export default function MyHRSchedule({ storeId, isManager, storeName = 'Store' }) {
-  const [tab, setTab] = useState('mine')
+export default function MyHRSchedule({ storeId, isManager, storeName = 'Store', initialTab = 'mine' }) {
+  const [tab, setTab] = useState(initialTab)
   return (
     <div className="myhr-schedule">
       <div className="ts-tabs ms-tabs" role="tablist">

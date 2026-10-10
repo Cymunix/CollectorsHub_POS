@@ -6,7 +6,11 @@
 // personal email inbox, so their generated internal Supabase auth account must
 // be created as email-confirmed.
 //
-// Deploy: supabase functions deploy create-store-employee
+// Also: { action: 'change_password', employeeId, password } sets a new
+// password (PIN) for an existing employee: their sign-in password and the
+// store PIN together. Same permission as creating staff.
+//
+// Deploy: supabase functions deploy create-store-employee (deployed as dynamic-function)
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -40,6 +44,25 @@ const canManageEmployees = (employee: any) => {
   return role === 'owner' || role === 'manager' || Boolean(permissions.employee_management)
 }
 
+// Platform admin, the store owner, the store's organization owner, or an
+// active employee of the store who can manage employees.
+async function canManageStoreStaff(admin: any, store: any, callerId: string) {
+  const { data: callerProfile } = await admin.from('profiles').select('subscription_tier').eq('id', callerId).maybeSingle()
+  if (callerProfile?.subscription_tier === 'platform_admin' || store.owner_user_id === callerId) return true
+  if (store.organization_id) {
+    const { data: org } = await admin.from('organizations').select('owner_user_id').eq('id', store.organization_id).maybeSingle()
+    if (org?.owner_user_id === callerId) return true
+  }
+  const { data: employeeAccess } = await admin
+    .from('store_employees')
+    .select('id, role, permissions, action_permissions')
+    .eq('store_id', store.id)
+    .or(`auth_user_id.eq.${callerId},employee_user_id.eq.${callerId}`)
+    .eq('status', 'active')
+    .maybeSingle()
+  return canManageEmployees(employeeAccess)
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
@@ -60,6 +83,38 @@ Deno.serve(async (req) => {
     if (authError || !caller) return json({ error: 'Not authenticated' }, 401)
 
     const body = await req.json().catch(() => ({}))
+
+    // Change an existing employee's password (PIN).
+    if (body.action === 'change_password') {
+      const employeeId = clean(body.employeeId)
+      const password = clean(body.password)
+      if (!employeeId) return json({ error: 'Missing employee.' }, 400)
+      if (password.length < 4) return json({ error: 'The new password must be at least 4 characters.' }, 400)
+      const { data: target } = await admin
+        .from('store_employees')
+        .select('id, store_id, auth_user_id, employee_user_id, username, status')
+        .eq('id', employeeId)
+        .maybeSingle()
+      if (!target) return json({ error: 'Employee not found.' }, 404)
+      const { data: targetStore } = await admin.from('stores').select('id, owner_user_id, organization_id').eq('id', target.store_id).maybeSingle()
+      if (!targetStore) return json({ error: 'Store not found.' }, 404)
+      if (!(await canManageStoreStaff(admin, targetStore, caller.id))) return json({ error: "You do not have permission to change this employee's password." }, 403)
+      const authUserId = target.auth_user_id || target.employee_user_id
+      if (!authUserId) return json({ error: 'This employee has no sign-in account to update.' }, 400)
+      if (authUserId === caller.id) return json({ error: 'Change your own password from your own account.' }, 400)
+      const { error: authUpdateError } = await admin.auth.admin.updateUserById(authUserId, { password })
+      if (authUpdateError) return json({ error: authUpdateError.message || 'The password could not be changed.' }, 400)
+      const { error: pinError } = await admin.rpc('set_store_employee_pin', { p_employee_id: target.id, p_pin: password })
+      if (pinError) return json({ error: `The sign-in password was changed, but the store PIN wasn't: ${pinError.message}` }, 400)
+      await admin.rpc('log_store_employee_action', {
+        p_store_id: target.store_id,
+        p_employee_id: target.id,
+        p_action: 'employee_password_changed',
+        p_metadata: { changed_by: caller.id },
+      })
+      return json({ ok: true, username: target.username })
+    }
+
     const storeId = clean(body.storeId)
     const firstName = clean(body.firstName)
     const lastName = clean(body.lastName)
@@ -85,32 +140,7 @@ Deno.serve(async (req) => {
       .single()
     if (storeError || !store) return json({ error: 'Store not found.' }, 404)
 
-    const { data: callerProfile } = await admin
-      .from('profiles')
-      .select('subscription_tier')
-      .eq('id', caller.id)
-      .maybeSingle()
-
-    let allowed = callerProfile?.subscription_tier === 'platform_admin' || store.owner_user_id === caller.id
-    // The store's organization (its owner) manages the store's staff too.
-    if (!allowed && store.organization_id) {
-      const { data: org } = await admin
-        .from('organizations')
-        .select('owner_user_id')
-        .eq('id', store.organization_id)
-        .maybeSingle()
-      allowed = org?.owner_user_id === caller.id
-    }
-    if (!allowed) {
-      const { data: employeeAccess } = await admin
-        .from('store_employees')
-        .select('id, role, permissions, action_permissions')
-        .eq('store_id', store.id)
-        .or(`auth_user_id.eq.${caller.id},employee_user_id.eq.${caller.id}`)
-        .eq('status', 'active')
-        .maybeSingle()
-      allowed = canManageEmployees(employeeAccess)
-    }
+    const allowed = await canManageStoreStaff(admin, store, caller.id)
     if (!allowed) return json({ error: 'You do not have permission to create employees for this store.' }, 403)
 
     const { data: username, error: usernameError } = await admin.rpc('generate_store_employee_username', {

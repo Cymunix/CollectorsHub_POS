@@ -19,6 +19,7 @@ import {
   Tags,
   Users,
   X,
+  Scale,
 } from 'lucide-react'
 import {
   ADMIN_EXPLORER_TABLES,
@@ -100,6 +101,8 @@ import {
 } from './lib/scanReviewCloud'
 import { looseCardKey, scanConfidence } from './lib/scanConfidence'
 import UpdateCheck from './UpdateCheck'
+import IdentityReviews from './identity/IdentityReviews'
+import PawnJurisdictions from './pawn/PawnJurisdictions'
 import { SUPABASE_PUBLIC_CONFIG } from './lib/supabaseClient'
 
 const adminNav = [
@@ -114,6 +117,8 @@ const adminNav = [
   { key: 'market', label: 'Market Data', icon: FileSearch },
   { key: 'stores', label: 'Stores & Organisations', icon: Store },
   { key: 'users', label: 'Users', icon: Users },
+  { key: 'identity', label: 'Identity Reviews', icon: Users },
+  { key: 'pawn', label: 'Pawn Jurisdictions', icon: Scale },
   { key: 'system', label: 'System / Sync', icon: RefreshCw },
   { key: 'settings', label: 'Settings', icon: Settings },
 ]
@@ -951,6 +956,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         {activeView === 'market' ? <MarketDataAdmin storeContext={storeContext} /> : null}
         {activeView === 'stores' ? <AdminSectionBrowser title="Stores & Organisations" kicker="Enterprise account administration" loader={loadStoresOrganizationsData} /> : null}
         {activeView === 'users' ? <AdminSectionBrowser title="Users" kicker="Profiles and memberships" loader={loadUsersData} /> : null}
+        {activeView === 'identity' ? <IdentityReviews /> : null}
+        {activeView === 'pawn' ? <PawnJurisdictions /> : null}
         {activeView === 'system' ? <AdminSystem syncStatus={syncStatus} /> : null}
         {activeView === 'settings' ? <AdminPlaceholder icon={Settings} title="Settings" copy="Admin-specific desktop preferences, scanner defaults, and local cache configuration will live here." /> : null}
       </section>
