@@ -1234,7 +1234,7 @@ function LoginScreen({ appVersion, draft, error, isAuthenticating, mode, onChang
       <div className="login-gold-line login-gold-line-right" aria-hidden="true" />
 
       <section className="pos-login" aria-label="CollectorsHub POS sign in">
-        <img className="pos-login-logo" src="/collectorshub-pos-logo.png" alt="CollectorsHub POS" />
+        <img className="pos-login-logo" src="/collectorshub-pos-retail-logo.webp" alt="CollectorsHub POS" />
 
         <form className={isAdminMode ? 'login-form admin-mode' : 'login-form'} onSubmit={onSubmit}>
           <div className="login-heading">
@@ -5694,7 +5694,7 @@ function UpdatePrompt() {
   return (
     <div className="register-modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
       <section>
-        <img className="update-prompt-logo" src="/collectorshub-pos-logo.png" alt="CollectorsHub POS" />
+        <img className="update-prompt-logo" src="/collectorshub-pos-retail-logo.webp" alt="CollectorsHub POS" />
         <p className="update-prompt-kicker">Update ready</p>
         <h2 id="update-prompt-title">CollectorsHub POS {update.version ? `v${update.version}` : ''} is ready to install</h2>
         <p>
