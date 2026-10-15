@@ -96,7 +96,7 @@ export default function PawnView({ session, initialLoanId = '', onOpenCustomer }
                       <td>{day(row.due_date)}{row.days_overdue ? <small className="pw-overdue"> {row.days_overdue} days overdue</small> : null}</td>
                       <td><Pill state={row.state} /></td>
                       <td>{row.employee || '—'}</td>
-                      <td className="tx-row-action"><button type="button" onClick={(event) => { event.stopPropagation(); setScreen({ kind: 'loan', id: row.id }) }}>Open</button></td>
+                      <td className="tx-row-action"><button type="button" onClick={(event) => { event.stopPropagation(); setScreen({ kind: 'loan', id: row.id }) }}>View</button></td>
                     </tr>
                   ))}
                 </tbody>

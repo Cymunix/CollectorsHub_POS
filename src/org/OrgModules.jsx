@@ -9,6 +9,7 @@ import {
 } from './orgApi'
 import { taxForProvince } from './orgApi'
 import { regionNameById } from './notificationRegions'
+import UpdateCheck from '../UpdateCheck'
 
 // Head-office Phase 1 modules (Locations, Staff, Inventory) — tenant-scoped
 // org-wide views over the existing store/location/employee/inventory data.
@@ -356,6 +357,7 @@ export function InventoryModule({ orgId, stores }) {
   const [reserved, setReserved] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [xfer, setXfer] = useState(null) // inventory row to transfer
+  const [loadError, setLoadError] = useState('')
 
   useEffect(() => {
     let c = false
@@ -368,7 +370,7 @@ export function InventoryModule({ orgId, stores }) {
         listOrgTransfers(orgId),
       ])
       if (c) return
-      setKpis(k); setRows(r); setTransfers(x); setLoading(false)
+      setKpis(k); setRows(r); setTransfers(x); setLoadError(r?.error || k?.__error || ''); setLoading(false)
     }, search ? 300 : 0)
     return () => { c = true; clearTimeout(t) }
   }, [orgId, scope, search, availability, condition, lowStock, reserved, reloadKey])
@@ -398,8 +400,10 @@ export function InventoryModule({ orgId, stores }) {
         <button type="button" style={{ ...m.chip, ...(reserved ? m.chipOn : {}) }} onClick={() => setReserved(v => !v)}>Reserved</button>
       </div>
 
+      {loadError ? <div style={{ ...m.empty, color: '#b91c1c', textAlign: 'left' }}><strong>Organisation inventory couldn't be loaded:</strong> {loadError}. The figures above may be incomplete; store inventory itself isn't affected.</div> : null}
       {loading ? <div style={m.empty}>Loading…</div>
-        : rows.length === 0 ? <div style={m.empty}>No inventory found{search || lowStock ? ' for this filter' : ''}.</div>
+        : loadError ? null
+        : rows.length === 0 ? <div style={m.empty}>No inventory found{search || lowStock || availability || condition || reserved ? ' for these filters' : ''}.</div>
         : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -909,6 +913,7 @@ export function OrgSettingsModule({ stores, orgId }) {
       </div>
       {orgId ? <OrgBrandingCard orgId={orgId} /> : null}
       {orgId ? <OrgCategoriesCard orgId={orgId} /> : null}
+      <div style={{ ...m.empty, alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between', textAlign: 'left' }}><strong>App version</strong><UpdateCheck /></div>
       <div style={m.empty}>Use Stores, Locations, Staff, Policies, and Integrations for specific changes. This keeps head-office settings from duplicating store-level controls.</div>
     </div>
   )

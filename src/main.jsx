@@ -11,6 +11,7 @@ import {
   Plug,
   ScrollText,
   Banknote,
+  Plane,
   Boxes,
   Building2,
   CircleDollarSign,
@@ -80,7 +81,7 @@ import IdentityCustomerCard from './identity/IdentityCustomerCard'
 import ManualIdCheck from './identity/ManualIdCheck'
 import { DEFAULT_RULES, loadBuybackRules } from './lib/buybackIdentification'
 import { loadStoreFeatures } from './lib/storeFeatures'
-import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
+import OrgPortal, { NAV as ORG_NAV, NAV_GROUPS as ORG_NAV_GROUPS } from './org/OrgPortal'
 import { supabase } from './lib/supabaseClient'
 
 const emptyStore = {
@@ -978,14 +979,20 @@ function App() {
           </div>
         </div>
 
-        <nav className="nav-list" aria-label="Main">
+        <nav className={`nav-list${isOrgSession ? ' org-nav' : ''}`} aria-label="Main">
           {isOrgSession ? (
-            <>
-              {ORG_NAV.map(([id, label]) => (
-                <NavButton key={id} icon={ORG_ICONS[id] || LayoutDashboard} label={label} active={activeView === `org-${id}`} onClick={() => setActiveView(`org-${id}`)} />
-              ))}
-              <NavButton icon={IdCard} label="MyHR" active={activeView === 'myhr'} onClick={() => setActiveView('myhr')} />
-            </>
+            // Organisation Administration. "MyHR Setup" is where the organization chooses what staff
+            // see in MyHR; staff use MyHR itself in the store (POS) sign-in.
+            ORG_NAV_GROUPS.map(([group, ids]) => (
+              <div className="nav-group" key={group}>
+                <span className="nav-group-label">{group}</span>
+                {ids.map((id) => {
+                  if (id === 'myhr') return <NavButton key={id} icon={IdCard} label="MyHR Setup" active={activeView === 'myhr'} onClick={() => setActiveView('myhr')} />
+                  const label = (ORG_NAV.find(([key]) => key === id) || [id, id])[1]
+                  return <NavButton key={id} icon={ORG_ICONS[id] || LayoutDashboard} label={label} active={activeView === `org-${id}`} onClick={() => setActiveView(`org-${id}`)} />
+                })}
+              </div>
+            ))
           ) : null}
           {!isOrgSession ? <>
           <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
@@ -1002,13 +1009,12 @@ function App() {
 
         <div className="sidebar-footer">
           {!isOrgSession ? (
-            <span className={store.register.status === 'open' ? 'status-pill open' : 'status-pill'}>
+            <span className={store.register.status === 'open' ? 'status-pill open' : 'status-pill closed'}>
               {store.register.status === 'open' ? 'Register open' : 'Register closed'}
             </span>
           ) : <span className="status-pill">Head office</span>}
           <small>{isSaving ? 'Saving...' : 'Local data saved'}</small>
           <small>{describeAuthSession(authSession)}</small>
-          <UpdateCheck compact />
           <button className="sidebar-logout" type="button" onClick={handleLogout}>
             <LogOut size={16} />
             <span>Logout</span>
@@ -1335,7 +1341,7 @@ function describeAuthSession(session) {
 const ORG_ICONS = {
   overview: LayoutDashboard, stores: Store, locations: MapPin, staff: Users, inventory: Boxes, orders: ClipboardList,
   sales: CircleDollarSign, tradeins: ArrowDownToLine, promos: PartyPopper, reports: BarChart3, policies: ScrollText,
-  integrations: Plug, settings: Settings,
+  integrations: Plug, settings: Settings, expenses: Plane, payroll: Banknote,
 }
 
 function NavButton({ icon: Icon, label, active, onClick, badge = null, badgeTitle = '', notReady = false }) {

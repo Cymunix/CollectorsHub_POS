@@ -9,6 +9,8 @@ import {
   PromotionsEventsModule, PoliciesModule, ReportsModule, IntegrationsModule, OrgSettingsModule,
 } from './OrgModules'
 import MyHROrgEmployees from '../MyHROrgEmployees'
+import OrgTravelExpenses from './OrgTravelExpenses'
+import OrgPayroll from './OrgPayroll'
 import StoreHoursModal from './StoreHours'
 import BuybackRulesModal from './BuybackRules'
 import StoreFeaturesModal from './StoreFeatures'
@@ -130,6 +132,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
     .filter(s => { const q = tableSearch.trim().toLowerCase(); return !q || s.storeName.toLowerCase().includes(q) || (s.storeCode || '').toLowerCase().includes(q) })
 
   const focusStores = (attKey) => { setActiveModule('stores'); setAttentionFilter(attKey) }
+  const scopeLabel = scope === 'all' ? 'All regions' : (regions.find(r => r.id === scope)?.name || 'Selected region')
 
   // Set a store's collector notification region (auto-derived from its address,
   // overridable to another region within the same province).
@@ -169,7 +172,13 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
               <tbody>
                 {tableStores.map(s => (
                   <tr key={s.storeId} style={ent.tr}>
-                    <td style={{ ...etd, fontWeight: 700, color: INK }}>{s.storeName}</td>
+                    <td style={{ ...etd, fontWeight: 700, color: INK }}>
+                      {s.storeName}
+                      {(() => {
+                        const missing = [(!s.primaryLocation || s.locationCount === 0) && 'primary location', (s.staffCount || 0) === 0 && 'staff'].filter(Boolean)
+                        return missing.length ? <div style={{ color: '#b45309', fontSize: '0.72rem', fontWeight: 700, marginTop: 2 }}>Setup needed: {missing.join(', ')}</div> : null
+                      })()}
+                    </td>
                     <td style={etd}>{s.storeCode}</td>
                     <td style={etd}>{s.demo ? (<span style={{ color: FAINT }}>{regionNameById(s.notificationRegionId) || '—'}</span>) : (() => {
                       const opts = regionsForProvince(s.primaryProvince)
@@ -190,10 +199,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
                     <td style={{ ...etd, textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {!s.demo && <button type="button" onClick={() => setStaffStore(s)} style={{ ...ent.rowGhost, marginLeft: 0 }}>Staff</button>}
                       {!s.demo && <button type="button" onClick={() => setHoursStore(s)} style={ent.rowGhost}>Hours</button>}
-                      {!s.demo && <button type="button" onClick={() => setIdRulesStore(s)} style={ent.rowGhost}>ID rules</button>}
                       {!s.demo && <button type="button" onClick={() => setFeaturesStore(s)} style={ent.rowGhost}>Features</button>}
-                      {!s.demo && <button type="button" onClick={() => setPawnStore(s)} style={ent.rowGhost}>Pawn</button>}
-                      {!s.demo && <button type="button" onClick={() => setReportStore(s)} style={ent.rowGhost}>Reports</button>}
                       <button type="button" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu(menu?.storeId === s.storeId ? null : { storeId: s.storeId, top: r.bottom + 4, left: Math.max(8, r.right - 200) }) }} style={ent.rowGhost}>More ▾</button>
                     </td>
                   </tr>
@@ -212,6 +218,9 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
             <div onClick={() => setMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 30 }} />
             <div style={{ ...ent.menu, position: 'fixed', top: menu.top, left: menu.left, right: 'auto', zIndex: 31 }}>
               <button type="button" style={ent.menuItem} onClick={() => { setMenu(null); setLocStore(s) }}>Locations &amp; Address</button>
+              {!s.demo && <button type="button" style={ent.menuItem} onClick={() => { setMenu(null); setIdRulesStore(s) }}>ID rules</button>}
+              {!s.demo && <button type="button" style={ent.menuItem} onClick={() => { setMenu(null); setPawnStore(s) }}>Pawn settings</button>}
+              {!s.demo && <button type="button" style={ent.menuItem} onClick={() => { setMenu(null); setReportStore(s) }}>Report access</button>}
               <div style={{ borderTop: `1px solid ${BORDER}`, margin: '4px 0' }} />
               <button type="button" disabled={busy === s.storeId} style={{ ...ent.menuItem, color: '#b91c1c' }}
                 onClick={() => { if (window.confirm(`${s.demo ? 'Remove' : 'Detach'} “${s.storeName}” from this organisation?`)) { setMenu(null); detach(s.storeId) } }}>
@@ -248,17 +257,23 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
               )}
             </div>
 
-            {/* KPIs */}
-            <div style={ent.kpiGrid}>
-              <Kpi label="Stores" value={kpis.stores} onClick={() => setActiveModule('stores')} />
-              <Kpi label="Locations" value={kpis.locations} onClick={() => setActiveModule('locations')} />
-              <Kpi label="Active Inventory" value={kpis.inventory} onClick={() => setActiveModule('inventory')} />
-              <Kpi label="Sales Today" value={moneyText(live.sales.today)} onClick={() => setActiveModule('sales')} />
-              <Kpi label="Transactions Today" value={Number(live.sales.transactions_today || 0)} onClick={() => setActiveModule('sales')} />
-              <Kpi label="Trade-Ins Today" value={Number(live.tradeins.today || 0)} onClick={() => setActiveModule('tradeins')} />
-              <Kpi label="Orders Ready" value={Number(live.orders.ready_for_pickup || 0)} onClick={() => setActiveModule('orders')} />
-              <Kpi label="Outstanding Layaway" value={moneyText(live.orders.outstanding_layaway)} onClick={() => setActiveModule('orders')} />
-              <Kpi label="Outstanding Pre-Order" value={moneyText(live.orders.outstanding_preorder)} onClick={() => setActiveModule('orders')} />
+            {/* KPIs, grouped; each group says what it covers. */}
+            <div style={ent.kpiGroups}>
+              <KpiGroup title="Network" scope={scopeLabel}>
+                <Kpi label="Stores" value={kpis.stores} onClick={() => setActiveModule('stores')} />
+                <Kpi label="Locations" value={kpis.locations} onClick={() => setActiveModule('locations')} />
+                <Kpi label="Inventory records" value={kpis.inventory} hint="Stock records in the stores" onClick={() => setActiveModule('inventory')} />
+              </KpiGroup>
+              <KpiGroup title="Today" scope={`${scopeLabel} · completed sales`}>
+                <Kpi label="Sales" value={moneyText(live.sales.today)} onClick={() => setActiveModule('sales')} />
+                <Kpi label="Transactions" value={Number(live.sales.transactions_today || 0)} onClick={() => setActiveModule('sales')} />
+                <Kpi label="Trade-ins" value={Number(live.tradeins.today || 0)} onClick={() => setActiveModule('tradeins')} />
+              </KpiGroup>
+              <KpiGroup title="Orders" scope={`${scopeLabel} · open now`}>
+                <Kpi label="Ready for pickup" value={Number(live.orders.ready_for_pickup || 0)} onClick={() => setActiveModule('orders')} />
+                <Kpi label="Layaway owing" value={moneyText(live.orders.outstanding_layaway)} onClick={() => setActiveModule('orders')} />
+                <Kpi label="Pre-order owing" value={moneyText(live.orders.outstanding_preorder)} onClick={() => setActiveModule('orders')} />
+              </KpiGroup>
             </div>
 
             {/* Needs Attention + Quick Actions */}
@@ -323,6 +338,10 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
           <LocationsModule orgId={session.orgId} stores={stores} />
         ) : activeModule === 'staff' && !session.demo ? (
           <MyHROrgEmployees orgId={session.orgId} orgName={session.orgName} title="Staff" initialSelectedId={focusEmployeeId} />
+        ) : activeModule === 'expenses' && !session.demo ? (
+          <OrgTravelExpenses orgId={session.orgId} />
+        ) : activeModule === 'payroll' && !session.demo ? (
+          <OrgPayroll orgId={session.orgId} />
         ) : activeModule === 'inventory' && !session.demo ? (
           <InventoryModule orgId={session.orgId} stores={stores} />
         ) : activeModule === 'orders' && !session.demo ? (
@@ -358,9 +377,17 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
   )
 }
 
+// The organization sidebar, grouped (the same destinations as NAV).
+export const NAV_GROUPS = [
+  ['Network', ['overview', 'stores', 'locations']],
+  ['People', ['staff', 'myhr', 'expenses', 'payroll']],
+  ['Commerce', ['inventory', 'orders', 'sales', 'tradeins', 'promos']],
+  ['Administration', ['reports', 'policies', 'integrations', 'settings']],
+]
+
 export const NAV = [
   ['overview', 'Overview', '▤'], ['stores', 'Stores', '🏬'], ['locations', 'Locations', '📍'],
-  ['staff', 'Staff', '👥'], ['inventory', 'Inventory', '📦'], ['orders', 'Orders', '🧾'],
+  ['staff', 'Staff', '👥'], ['expenses', 'Travel & Expenses', '✈'], ['payroll', 'Payroll', '💵'], ['inventory', 'Inventory', '📦'], ['orders', 'Orders', '🧾'],
   ['sales', 'Sales', '💰'], ['tradeins', 'Trade-Ins', '📥'], ['promos', 'Promotions & Events', '🎪'],
   ['reports', 'Reports', '📊'], ['policies', 'Policies', '📋'], ['integrations', 'Integrations', '🔌'],
   ['settings', 'Settings', '⚙'],
@@ -370,10 +397,21 @@ function Kpi({ label, value, hint, onClick }) {
   const Comp = onClick ? 'button' : 'div'
   return (
     <Comp type={onClick ? 'button' : undefined} onClick={onClick} style={{ ...ent.kpi, cursor: onClick ? 'pointer' : 'default' }}>
-      <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', fontWeight: 800, color: INK }}>{value}</div>
+      <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.3rem', fontWeight: 800, color: INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={String(value)}>{value}</div>
       <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: SUB, marginTop: 2 }}>{label}</div>
       {hint && <div style={{ fontSize: '0.62rem', color: FAINT, marginTop: 2 }}>{hint}</div>}
     </Comp>
+  )
+}
+function KpiGroup({ title, scope, children }) {
+  return (
+    <section style={ent.kpiGroup}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+        <span style={ent.panelTitle}>{title}</span>
+        <span style={{ fontSize: '0.68rem', color: FAINT, textAlign: 'right' }}>{scope}</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>{children}</div>
+    </section>
   )
 }
 function Mini({ label, value }) {
@@ -715,7 +753,9 @@ const ent = {
   h2: { fontFamily: 'var(--font-display)', fontSize: '1.05rem', fontWeight: 700, color: INK, margin: '0 0 12px' },
   infoStrip: { color: SUB, fontSize: '0.85rem', margin: '4px 0 0' },
   kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10, marginBottom: 18 },
-  kpi: { textAlign: 'left', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 12, padding: '14px 16px', fontFamily: 'inherit' },
+  kpiGroups: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 12, marginBottom: 18 },
+  kpiGroup: { background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 12, padding: '12px 12px 12px' },
+  kpi: { textAlign: 'left', background: '#F8FAFC', border: `1px solid ${BORDER}`, borderRadius: 10, padding: '10px 12px', fontFamily: 'inherit', minHeight: 76, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' },
   twoCol: { display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 14, marginBottom: 18 },
   panel: { background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16 },
   panelTitle: { fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: FAINT, marginBottom: 12 },

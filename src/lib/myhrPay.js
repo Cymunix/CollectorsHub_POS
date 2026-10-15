@@ -138,19 +138,22 @@ export const loadOrgStaff = async (orgId) => (await call('myhr_org_staff', { p_o
 export const loadOrgStaffJob = async (orgId, employeeId) => firstRow(await call('myhr_org_staff_job', { p_org_id: orgId, p_employee_id: employeeId }))
 export const saveOrgStaffJob = (orgId, employeeId, job) => call('myhr_org_save_staff_job', { p_org_id: orgId, p_employee_id: employeeId, p_job: job })
 
+// Expected hours per week, as the organization entered them (older records: worked out from hours per pay).
+export const weeklyHours = (job) => (job?.hours_per_week != null && job.hours_per_week !== '' ? Number(job.hours_per_week) : periodToWeeklyHours(job?.hours_per_period, job?.pay_period))
 export const PAY_PERIODS = [['weekly', 'Weekly', 52], ['biweekly', 'Bi-weekly', 26], ['semimonthly', 'Semi-monthly', 24], ['monthly', 'Monthly', 12]]
 // Pay for one pay period, and the projected annual pay (null when not enough is set).
 export function payFigures(job) {
   const rate = Number(job?.pay_rate)
   const periods = (PAY_PERIODS.find(([key]) => key === job?.pay_period) || [])[2]
-  if (!(rate > 0) || !periods) return { perPeriod: null, annual: null }
-  if (job.pay_type === 'salary') return { perPeriod: rate / periods, annual: rate }
+  if (!(rate > 0) || !periods) return { perPeriod: null, annual: null, hourly: null }
+  const weekly = Number(weeklyHours(job))
+  // Salary: the hourly rate (for overtime) is the annual salary over the hours worked in a year.
+  if (job.pay_type === 'salary') return { perPeriod: rate / periods, annual: rate, weekly: weekly > 0 ? weekly : null, hourly: weekly > 0 ? rate / (weekly * 52) : null }
   // Hourly: from hours per week (52 weeks a year), so semi-monthly and
   // monthly pay come out exactly.
-  const weekly = Number(job?.hours_per_week ?? periodToWeeklyHours(job?.hours_per_period, job?.pay_period))
-  if (!(weekly > 0)) return { perPeriod: null, annual: null }
+  if (!(weekly > 0)) return { perPeriod: null, annual: null, hourly: rate }
   const annual = rate * weekly * 52
-  return { perPeriod: annual / periods, annual, weekly }
+  return { perPeriod: annual / periods, annual, weekly, hourly: rate }
 }
 
 // Part 5, the organization: leave year and entitlements.

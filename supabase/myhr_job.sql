@@ -1,6 +1,6 @@
 -- MyHR, part 4 (run after myhr_personal_data.sql): Job Information.
 -- Each employee's job and pay (group, subgroup, position, pay type and rate,
--- hours per pay period, next increase), set by the ORGANIZATION (its owner) and
+-- expected hours per week, next increase), set by the ORGANIZATION (its owner) and
 -- read-only for stores and staff. Who changed it and when is recorded. The
 -- position defaults to the role the staff member was created with (e.g.
 -- Cashier) until the organization sets a more specific one. Safe to run again.
@@ -21,12 +21,31 @@ CREATE TABLE IF NOT EXISTS public.store_employee_jobs (
 );
 ALTER TABLE public.store_employee_jobs ENABLE ROW LEVEL SECURITY;
 
--- Job information for one employee (internal).
-CREATE OR REPLACE FUNCTION public.myhr_job_row(p_store_id uuid, p_employee_id uuid)
+-- Expected hours are entered and kept per week, exactly as typed (hours_per_period is
+-- worked out from them for each pay period). Salaried hours were saved without
+-- conversion, so they already are weekly; hourly ones are turned back into weekly.
+ALTER TABLE public.store_employee_jobs ADD COLUMN IF NOT EXISTS hours_per_week numeric(6,2) CHECK (hours_per_week IS NULL OR hours_per_week >= 0);
+CREATE OR REPLACE FUNCTION public.myhr_weeks_per_period(p_period text)
+RETURNS numeric LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE p_period WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'semimonthly' THEN 52.0 / 24 WHEN 'monthly' THEN 52.0 / 12 END
+$$;
+UPDATE public.store_employee_jobs
+   SET hours_per_week = CASE WHEN pay_type = 'salary' OR pay_period IS NULL THEN hours_per_period
+                             ELSE round(hours_per_period / public.myhr_weeks_per_period(pay_period), 2) END
+ WHERE hours_per_week IS NULL AND hours_per_period IS NOT NULL;
+UPDATE public.store_employee_jobs
+   SET hours_per_period = round(hours_per_week * public.myhr_weeks_per_period(pay_period), 2)
+ WHERE hours_per_week IS NOT NULL AND pay_period IS NOT NULL
+   AND hours_per_period IS DISTINCT FROM round(hours_per_week * public.myhr_weeks_per_period(pay_period), 2);
+
+-- Job information for one employee (internal). Dropped first: its columns changed.
+DROP FUNCTION IF EXISTS public.myhr_org_staff_job(uuid, uuid);
+DROP FUNCTION IF EXISTS public.myhr_job_row(uuid, uuid);
+CREATE FUNCTION public.myhr_job_row(p_store_id uuid, p_employee_id uuid)
 RETURNS TABLE (
   employee_id uuid, personnel_number text, name text, personnel_area text, business_area text,
   employee_group text, employee_subgroup text, position_title text,
-  pay_type text, pay_rate numeric, hours_per_period numeric, pay_period text, next_increase date,
+  pay_type text, pay_rate numeric, hours_per_period numeric, hours_per_week numeric, pay_period text, next_increase date,
   changed_by_name text, changed_at timestamptz
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
@@ -35,7 +54,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
          COALESCE(o.name, st.store_name),
          (SELECT l.location_name FROM public.store_locations l WHERE l.store_id = p_store_id ORDER BY l.created_at LIMIT 1),
          j.employee_group, j.employee_subgroup, COALESCE(NULLIF(btrim(j.position_title), ''), initcap(replace(e.role, '_', ' '))),
-         j.pay_type, j.pay_rate, j.hours_per_period, j.pay_period, j.next_increase,
+         j.pay_type, j.pay_rate, j.hours_per_period, j.hours_per_week, j.pay_period, j.next_increase,
          j.changed_by_name, j.changed_at
     FROM public.store_employees e
     LEFT JOIN public.store_employee_details d ON d.employee_id = e.id
@@ -52,7 +71,7 @@ CREATE FUNCTION public.myhr_my_job(p_store_id uuid)
 RETURNS TABLE (
   employee_id uuid, personnel_number text, name text, personnel_area text, business_area text,
   employee_group text, employee_subgroup text, position_title text,
-  pay_type text, pay_rate numeric, hours_per_period numeric, pay_period text, next_increase date,
+  pay_type text, pay_rate numeric, hours_per_period numeric, hours_per_week numeric, pay_period text, next_increase date,
   changed_by_name text, changed_at timestamptz
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
@@ -101,11 +120,11 @@ BEGIN
 END $$;
 
 -- Org owner: one employee's job information.
-CREATE OR REPLACE FUNCTION public.myhr_org_staff_job(p_org_id uuid, p_employee_id uuid)
+CREATE FUNCTION public.myhr_org_staff_job(p_org_id uuid, p_employee_id uuid)
 RETURNS TABLE (
   employee_id uuid, personnel_number text, name text, personnel_area text, business_area text,
   employee_group text, employee_subgroup text, position_title text,
-  pay_type text, pay_rate numeric, hours_per_period numeric, pay_period text, next_increase date,
+  pay_type text, pay_rate numeric, hours_per_period numeric, hours_per_week numeric, pay_period text, next_increase date,
   changed_by_name text, changed_at timestamptz
 )
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
@@ -139,13 +158,17 @@ BEGIN
     position_title    = CASE WHEN p_job ? 'position_title' THEN NULLIF(btrim(p_job->>'position_title'), '') ELSE position_title END,
     pay_type          = CASE WHEN p_job ? 'pay_type' THEN NULLIF(btrim(p_job->>'pay_type'), '') ELSE pay_type END,
     pay_rate          = CASE WHEN p_job ? 'pay_rate' THEN NULLIF(p_job->>'pay_rate', '')::numeric ELSE pay_rate END,
-    hours_per_period  = CASE WHEN p_job ? 'hours_per_period' THEN NULLIF(p_job->>'hours_per_period', '')::numeric ELSE hours_per_period END,
+    hours_per_week    = CASE WHEN p_job ? 'hours_per_week' THEN NULLIF(p_job->>'hours_per_week', '')::numeric ELSE hours_per_week END,
     pay_period        = CASE WHEN p_job ? 'pay_period' THEN NULLIF(btrim(p_job->>'pay_period'), '') ELSE pay_period END,
     next_increase     = CASE WHEN p_job ? 'next_increase' THEN NULLIF(p_job->>'next_increase', '')::date ELSE next_increase END,
     changed_by        = NULL,
     changed_by_name   = COALESCE(v_org_name, 'Organization'),
     changed_at        = now()
   WHERE employee_id = p_employee_id;
+  -- Hours per pay period always follow the weekly hours and the pay period.
+  UPDATE public.store_employee_jobs
+     SET hours_per_period = round(hours_per_week * public.myhr_weeks_per_period(pay_period), 2)
+   WHERE employee_id = p_employee_id;
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.myhr_my_job(uuid) TO authenticated;

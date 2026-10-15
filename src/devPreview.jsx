@@ -455,6 +455,42 @@ SAMPLE.rpt_log_export = () => null
 // MOCK personal settings (preview only).
 SAMPLE.me_profile = () => ({ employee: { id: 'e1', first_name: 'Hayden', last_name: 'MacIvor', username: 'HaydenM8', display_name: 'Hayden', photo_path: null, email: 'hayden@example.com', role: 'manager', status: 'active', all_locations: true, since: '2026-05-26T15:00:00Z' }, store: { name: 'Nordvik Test Store', code: 'NVK-TEST', organization: 'Nordvik Collectibles' }, locations: ['Main Store'], assignments: [{ store: 'Nordvik Test Store', code: 'NVK-TEST', role: 'manager', status: 'active', organization: 'Nordvik Collectibles', current: true }, { store: 'Nordvik Halifax', code: 'NVK-HFX', role: 'cashier', status: 'active', organization: 'Nordvik Collectibles', current: false }], account: { email: 'haydenm8@internal', last_sign_in_at: new Date().toISOString(), created_at: '2026-05-26T15:00:00Z' } })
 SAMPLE.rpt_transactions_detail = () => [{ number: 'TXN-1', date: '2026-10-09 14:02', type: 'sale', employee: 'Morgan Lee', location: 'Main Store', customer_type: 'Member', gross: 40, discount: 0, net: 40, tax: 5.6, total: 45.6, cost: 22, payments: 'card 45.60', tax_detail: { label_1: 'HST', rate_1: 0.14 } }]
+// MOCK travel & expenses and payroll results (preview only; sample data, not real payroll).
+const tePolicy = { currency: 'CAD', mileage_enabled: true, mileage_rate: 0.5, meal_daily_limit: 60, lodging_nightly_limit: 200, receipt_required_over: 25, manager_approval_limit: 500, policy_notes: 'Sample policy for the preview.' }
+const teHistory = (who) => [{ id: 1, action: 'created', by_name: who, at: '2026-10-01T14:00:00Z' }, { id: 2, action: 'submitted', by_name: who, at: '2026-10-01T14:05:00Z' }]
+const teRows = [
+  { kind: 'claim', id: 'c1', reference: 'EC-2026-000012', employee_id: 'e1', employee_name: 'Hayden MacIvor', store_name: 'Nordvik Test Store', description: 'Toronto card show', start_date: '2026-09-26', end_date: '2026-09-28', total: 412.6, approved_total: 380.1, currency: 'CAD', status: 'partially_approved', payment_status: 'awaiting', updated_at: '2026-10-03T15:00:00Z' },
+  { kind: 'travel', id: 't1', reference: 'TR-2026-000009', employee_id: 'e1', employee_name: 'Hayden MacIvor', store_name: 'Nordvik Test Store', description: 'Toronto, ON · Card show booth', start_date: '2026-09-26', end_date: '2026-09-28', total: 900, currency: 'CAD', status: 'approved', payment_status: null, updated_at: '2026-09-20T12:00:00Z' },
+  { kind: 'claim', id: 'c2', reference: 'EC-2026-000015', employee_id: 'e1', employee_name: 'Hayden MacIvor', store_name: 'Nordvik Test Store', description: 'Supplies run', start_date: '2026-10-06', end_date: '2026-10-06', total: 48.2, currency: 'CAD', status: 'returned', payment_status: 'not_due', updated_at: '2026-10-08T10:00:00Z' },
+  { kind: 'claim', id: 'c3', reference: 'EC-2026-000016', employee_id: 'e1', employee_name: 'Hayden MacIvor', store_name: 'Nordvik Test Store', description: 'Draft: Halifax meeting', start_date: '2026-10-09', end_date: '2026-10-09', total: 0, currency: 'CAD', status: 'draft', payment_status: 'not_due', updated_at: '2026-10-09T10:00:00Z' },
+]
+const teDecide = [{ kind: 'claim', id: 'c9', reference: 'EC-2026-000017', employee_id: 'e2', employee_name: 'Morgan Lee', store_name: 'Nordvik Test Store', description: 'Mileage to the Truro show', start_date: '2026-10-04', end_date: '2026-10-04', total: 61, currency: 'CAD', status: 'submitted', payment_status: 'not_due', updated_at: '2026-10-05T09:00:00Z' }]
+const teClaim = {
+  ...teRows[0], mine: true, can_decide: false, submitted_total: 412.6, approved_total: 380.1, reimbursed_total: 290, payment_status: 'partial', payments: [{ id: 'p1', paid_on: '2026-10-06', method: 'E-transfer', reference: 'ET-48213', processed_by_name: 'Pat Accounts', amount: 290 }], decided_by_name: 'Nordvik Collectibles', decision_note: 'Second dinner over the daily meal limit.', travel_request_id: 't1', travel_reference: 'TR-2026-000009',
+  lines: [
+    { id: 'l1', line_no: 1, kind: 'expense', expense_date: '2026-09-26', category: 'Accommodation', description: 'Hotel, 2 nights', business_purpose: 'Card show', payment_method: 'Personal card', amount: 290, currency: 'CAD', amount_claim: 290, tax_amount: 37.73, receipt_path: 'u/hotel.pdf', receipt_name: 'hotel.pdf', approved_amount: 290 },
+    { id: 'l2', line_no: 2, kind: 'expense', expense_date: '2026-09-27', category: 'Meals', description: 'Dinner', payment_method: 'Personal card', amount: 92.5, currency: 'CAD', amount_claim: 92.5, receipt_path: 'u/dinner.jpg', receipt_name: 'dinner.jpg', approved_amount: 60, disallowed_note: 'Over the $60 daily meal limit' },
+    { id: 'l3', line_no: 3, kind: 'mileage', expense_date: '2026-09-28', category: 'Mileage', from_place: 'Halifax', to_place: 'Airport', km: 60.2, mileage_rate: 0.5, amount: 30.1, currency: 'CAD', amount_claim: 30.1, approved_amount: 30.1 },
+  ],
+  history: [...teHistory('Hayden MacIvor'), { id: 3, action: 'partially approved', by_name: 'Nordvik Collectibles', note: 'Approved 380.10 · Second dinner over the daily meal limit.', at: '2026-10-03T15:00:00Z' }],
+}
+const teDecideRecord = { ...teDecide[0], mine: false, can_decide: true, submitted_total: 61, lines: [{ id: 'm1', line_no: 1, kind: 'mileage', expense_date: '2026-10-04', category: 'Mileage', from_place: 'New Glasgow', to_place: 'Truro', km: 122, mileage_rate: 0.5, amount: 61, currency: 'CAD', amount_claim: 61 }], history: teHistory('Morgan Lee') }
+const teTravel = { ...teRows[1], mine: true, can_decide: false, destination: 'Toronto, ON', purpose: 'Card show booth', departure_date: '2026-09-26', return_date: '2026-09-28', transport: 'Air', accommodation: '2 nights near the venue', department: 'Manager', work_location: 'Primary Location', estimated_total: 900, estimate_lines: [{ category: 'Transportation', description: 'Flights', amount: 450 }, { category: 'Accommodation', description: 'Hotel', amount: 300 }, { category: 'Meals', description: '', amount: 150 }], decided_by_name: 'Nordvik Collectibles', decision_note: null, history: [...teHistory('Hayden MacIvor'), { id: 3, action: 'approved', by_name: 'Nordvik Collectibles', at: '2026-09-20T12:00:00Z' }] }
+SAMPLE.te_my_context = () => ({ employee_id: 'e1', employee_name: 'Hayden MacIvor', organization: 'Nordvik Collectibles', store_name: 'Nordvik Test Store', department: 'Manager', work_location: 'Primary Location', policy: tePolicy, is_manager: true })
+SAMPLE.te_my_records = () => teRows
+SAMPLE.te_store_to_decide = () => teDecide
+SAMPLE.te_my_approved_travel = () => [teRows[1]]
+SAMPLE.te_record = ({ p_kind, p_id }) => (p_id === 'c9' ? teDecideRecord : p_kind === 'travel' ? teTravel : p_id === 'c2' ? { ...teClaim, ...teRows[2], decision_note: 'Please attach the receipt.', lines: [teClaim.lines[1]], approved_total: null, history: teHistory('Hayden MacIvor') } : teClaim)
+SAMPLE.te_save_travel = () => 't-new'
+SAMPLE.te_save_claim = () => 'c-new'
+SAMPLE.te_org_records = () => [...teDecide, ...teRows.filter((row) => row.status !== 'draft')]
+SAMPLE.te_org_record = (params) => ({ ...SAMPLE.te_record(params), can_decide: true })
+SAMPLE.te_org_policy = () => tePolicy
+SAMPLE.te_org_line_summary = () => ({ categories: [{ category: 'Accommodation', lines: 1, claimed: 290, approved: 290 }, { category: 'Meals', lines: 1, claimed: 92.5, approved: 60 }, { category: 'Mileage', lines: 2, claimed: 91.1, approved: 30.1 }], mileage: { trips: 2, km: 182.2, claimed: 91.1, approved: 30.1 } })
+SAMPLE.payroll_org_settings = () => ({ legal_employer_name: 'Nordvik Collectibles Ltd.', province: 'NS', pay_frequency: 'biweekly', first_period_start: '2026-01-04', pay_date_offset_days: 5 })
+SAMPLE.pay_my_overview = () => ({ employee_name: 'Hayden MacIvor', personnel_number: '4000001', organization: 'Nordvik Collectibles Ltd.', pay_frequency: 'biweekly', first_period_start: '2026-01-04', pay_date_offset_days: 5, next_run: null, latest: null, ytd_gross: 0, ytd_deductions: 0, ytd_net: 0, year: 2026 })
+SAMPLE.pay_my_payslips = () => []
+SAMPLE.pay_my_tax_documents = () => []
 supabase.rpc = async (name, params) => {
   const value = SAMPLE[name]
   try {
@@ -465,7 +501,7 @@ supabase.rpc = async (name, params) => {
 }
 
 const screen = new URLSearchParams(window.location.search).get('screen') || 'myhr'
-const payViews = { availability: 'availability', pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', addresses: 'addresses', family: 'family', job: 'job', emergency: 'emergency' }
+const payViews = { availability: 'availability', pay: 'home', time: 'time', leave: 'leave', leaveinfo: 'leaveinfo', schedule: 'schedule', personal: 'personal', addresses: 'addresses', family: 'family', job: 'job', emergency: 'emergency', trips: 'trips', travelrequest: 'travelrequest', expense: 'expense', mypay: 'payadvice', taxform: 'taxform' }
 
 function OrgEmployeesPreview() {
   const [ready, setReady] = React.useState(false)

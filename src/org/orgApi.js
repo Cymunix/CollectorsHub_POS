@@ -191,7 +191,8 @@ export async function orgInventoryKpis(orgId, scope = {}) {
     p_reserved: !!scope.reserved,
     p_transfer_status: scope.transferStatus || null,
   })
-  if (error) { console.error('org_inventory_kpis error:', error); return {} }
+  // The error is passed on so the page can say why it's empty, instead of showing zeros.
+  if (error) { console.error('org_inventory_kpis error:', error); return { __error: error.message } }
   return data || {}
 }
 export async function orgInventory(orgId, { scope = {}, search = '', lowStock = false, categoryId = null, condition = null, availability = null, reserved = false, transferStatus = null, limit = 50, offset = 0 } = {}) {
@@ -208,7 +209,7 @@ export async function orgInventory(orgId, { scope = {}, search = '', lowStock = 
     p_limit: limit,
     p_offset: offset,
   })
-  if (error) { console.error('org_inventory error:', error); return [] }
+  if (error) { console.error('org_inventory error:', error); return Object.assign([], { error: error.message }) }
   return (data || []).map(r => ({
     inventoryId: r.inventory_id, name: r.name, sku: r.sku, condition: r.condition, grade: r.grade,
     storeId: r.store_id, storeName: r.store_name, locationName: r.location_name || null,

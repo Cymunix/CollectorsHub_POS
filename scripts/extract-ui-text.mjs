@@ -29,9 +29,20 @@ function calleeName(node) {
   if (ts.isPropertyAccessExpression(expr)) return expr.name.text
   return ''
 }
+// Text shown directly between JSX tags, through ternaries and && / || ({open ? 'Close' : 'Open'}).
+function inJsxChild(node) {
+  let n = node.parent
+  while (n && (ts.isConditionalExpression(n) || ts.isParenthesizedExpression(n) || (ts.isBinaryExpression(n) && ['&&', '||', '??'].includes(n.operatorToken.getText())))) {
+    if (ts.isConditionalExpression(n) && n.condition === node) return false
+    node = n
+    n = n.parent
+  }
+  return Boolean(n && ts.isJsxExpression(n) && n.parent && (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent)))
+}
 function context(node) {
   const p = node.parent
   if (!p) return 'other'
+  if (inJsxChild(node)) return 'ui'
   if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p) || ts.isExternalModuleReference(p)) return 'skip'
   if (ts.isJsxAttribute(p)) { const n = p.name.getText(); return UI_ATTRS.has(n) ? 'ui' : SKIP_ATTRS.has(n) || /^on[A-Z]/.test(n) ? 'skip' : 'attr' }
   if (ts.isJsxExpression(p) && p.parent && ts.isJsxAttribute(p.parent)) { const n = p.parent.name.getText(); return UI_ATTRS.has(n) ? 'ui' : SKIP_ATTRS.has(n) ? 'skip' : 'attr' }

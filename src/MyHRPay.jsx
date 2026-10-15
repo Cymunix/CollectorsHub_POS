@@ -5,10 +5,7 @@ import {
   CalendarClock,
   Check,
   Clock3,
-  HeartHandshake,
-  HeartPulse,
   IdCard,
-  Link2,
   LogIn,
   LogOut,
   Plane,
@@ -38,6 +35,10 @@ import MyHRTimesheet from './MyHRTimesheet'
 import MyHRSchedule from './MyHRSchedule'
 import MyHRAvailability from './MyHRAvailability'
 import { EmployeeOnboardingBanner } from './MyHROnboarding'
+import MyHRTrips from './MyHRTrips'
+import MyHRTravelRequest from './MyHRTravelRequest'
+import MyHRExpenseClaim from './MyHRExpenseClaim'
+import { MyPay, TaxForms } from './MyHRMyPay'
 
 // My Pay, Vacation & Leaves: an employee self-service directory (personal
 // information, job, time, benefits, payment, travel, health & safety). The
@@ -47,18 +48,14 @@ import { EmployeeOnboardingBanner } from './MyHROnboarding'
 // out until built.
 
 const DIRECTORY = [
-  { title: 'Personal Information', icon: IdCard, items: [['personal', 'Personal Data'], ['addresses', 'Addresses'], ['family', 'Family Related Data'], ['emergency', 'Emergency Contact']] },
-  { title: 'My Benefits', icon: HeartHandshake, items: [['benefits', 'Display Benefits/Beneficiaries'], ['dental', 'Health and Dental Application'], ['life', 'Employee Optional Life Application'], ['familylife', 'Spouse and Child Optional Life Application'], ['beneficiary', 'Beneficiary Nomination Form']] },
-  { title: 'My Job', icon: BriefcaseBusiness, items: [['job', 'Display Job Information']] },
-  { title: 'My Payment', icon: Wallet, items: [['payadvice', 'Pay Advice Inquiry'], ['taxform', 'Tax Form Reprint']] },
-  { title: 'My Time', icon: CalendarClock, items: [['leaveinfo', 'Display Leave Information'], ['time', 'Record Working Time'], ['leave', 'Vacation Leave Request'], ['schedule', 'My Schedule'], ['availability', 'Availability']] },
-  { title: 'Travel and Expenses', icon: Plane, items: [['trips', 'My Trips and Expenses'], ['travelrequest', 'Create Travel Request'], ['expense', 'Create Expense Claim'], ['personnel', 'Unlock Personnel Number']] },
-  { title: 'My Resource Links', icon: Link2, items: [['myhr', 'MyHR'], ['acrobat', 'Adobe Acrobat Reader']] },
-  { title: 'My Health and Safety', icon: HeartPulse, items: [['incident', 'Report a Safety Incident, Near Miss or Safety Observation'], ['safetysite', 'Workplace Health & Safety Site']] },
+  { title: 'Personal Information', column: 'left', icon: IdCard, items: [['personal', 'Personal Data'], ['addresses', 'Addresses'], ['family', 'Family Related Data'], ['emergency', 'Emergency Contact']] },
+  { title: 'My Job', column: 'left', icon: BriefcaseBusiness, items: [['job', 'Display Job Information']] },
+  { title: 'My Payment', column: 'left', icon: Wallet, items: [['payadvice', 'My Pay'], ['taxform', 'Tax Form Reprint']] },
+  { title: 'My Time', column: 'right', icon: CalendarClock, items: [['leaveinfo', 'Display Leave Information'], ['time', 'Record Working Time'], ['leave', 'Vacation Leave Request'], ['schedule', 'My Schedule'], ['availability', 'Availability']] },
+  { title: 'Travel and Expenses', column: 'right', icon: Plane, items: [['trips', 'My Trips and Expenses'], ['travelrequest', 'Create Travel Request'], ['expense', 'Create Expense Claim']] },
 ]
-const BUILT = new Set(['personal', 'addresses', 'family', 'emergency', 'job', 'leaveinfo', 'time', 'leave', 'schedule', 'availability', 'myhr', 'acrobat'])
+const BUILT = new Set(['personal', 'addresses', 'family', 'emergency', 'job', 'leaveinfo', 'time', 'leave', 'schedule', 'availability', 'payadvice', 'taxform', 'trips', 'travelrequest', 'expense'])
 const TITLES = Object.fromEntries(DIRECTORY.flatMap((group) => group.items))
-const ACROBAT_URL = 'https://get.adobe.com/reader/'
 
 const hoursText = (hours) => `${hours.toFixed(2)} h`
 const timeText = (value) => new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -67,7 +64,7 @@ const dateText = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString([], { m
 const rangeText = (start, end) => (start === end ? dateText(start) : `${dateText(start)} – ${dateText(end)}`)
 const STATUS_TEXT = { pending: 'Waiting for approval', approved: 'Approved', declined: 'Declined', cancelled: 'Cancelled' }
 
-export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, onMyHRHome, initialView = 'home' }) {
+export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, initialView = 'home' }) {
   const [view, setView] = useState(initialView)
   const [now, setNow] = useState(Date.now())
   const [entries, setEntries] = useState([])
@@ -81,6 +78,8 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
   const today = isoDate(new Date())
   // The leave request being edited (null: a new one).
   const [editingLeave, setEditingLeave] = useState(null)
+  // The travel request / expense claim being edited (null: a new one).
+  const [editingTE, setEditingTE] = useState(null)
 
   // Weeks run Sunday to Saturday, like the timesheet.
   const thisWeek = sundayOf(new Date(now))
@@ -156,11 +155,15 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
   }, action === 'in' ? 'Clocked in.' : 'Clocked out.')
 
   function openItem(key) {
-    if (key === 'myhr') { onMyHRHome?.(); return }
-    if (key === 'acrobat') { window.open(ACROBAT_URL, '_blank'); return }
     setNotice('')
     setProblem('')
+    if (key === 'travelrequest' || key === 'expense') setEditingTE(null)
     setView(key)
+  }
+  const teDone = (message) => {
+    setEditingTE(null)
+    if (message) setNotice(message)
+    setView('trips')
   }
 
   if (loading) return <p className="myhr-empty">Loading your time and leave…</p>
@@ -269,7 +272,9 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
         ) : null}
         <EmployeeOnboardingBanner storeId={storeId} onOpen={openItem} />
         <div className="myhr-directory">
-          {DIRECTORY.map((group) => {
+          {['left', 'right'].map((column) => (
+          <div className="myhr-directory-column" key={column}>
+          {DIRECTORY.filter((group) => group.column === column).map((group) => {
             const Icon = group.icon
             return (
               <div className="myhr-directory-group" key={group.title}>
@@ -289,6 +294,8 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
               </div>
             )
           })}
+          </div>
+          ))}
         </div>
       </>
     )
@@ -327,6 +334,23 @@ export default function MyHRPay({ storeId, storeName = 'Store', onClockChange, o
     body = <MyHRAvailability storeId={storeId} />
   } else if (view === 'job') {
     body = <MyHRJob storeId={storeId} />
+  } else if (view === 'trips') {
+    body = (
+      <MyHRTrips
+        storeId={storeId}
+        isManager={isManager}
+        onCreate={(kind) => { setEditingTE(null); setNotice(''); setView(kind === 'travel' ? 'travelrequest' : 'expense') }}
+        onEdit={(kind, id) => { setEditingTE(id); setNotice(''); setView(kind === 'travel' ? 'travelrequest' : 'expense') }}
+      />
+    )
+  } else if (view === 'travelrequest') {
+    body = <MyHRTravelRequest key={editingTE || 'new'} storeId={storeId} editingId={editingTE} onDone={teDone} />
+  } else if (view === 'expense') {
+    body = <MyHRExpenseClaim key={editingTE || 'new'} storeId={storeId} editingId={editingTE} onDone={teDone} />
+  } else if (view === 'payadvice') {
+    body = <MyPay storeId={storeId} />
+  } else if (view === 'taxform') {
+    body = <TaxForms storeId={storeId} />
   } else if (view === 'family') {
     body = <MyHRFamily storeId={storeId} />
   } else if (['personal', 'addresses', 'emergency', 'job'].includes(view)) {

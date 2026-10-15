@@ -26,7 +26,7 @@ import { EmployeeOnboardingBanner } from './MyHROnboarding'
 
 // Sections with a feature built into the app (open for everyone, with the
 // org's page, if any, underneath).
-const BUILT_SECTIONS = { pay: (session, extras) => <MyHRPay key={extras.payView || 'home'} storeId={session?.storeId} storeName={extras.storeName} initialView={extras.payView || 'home'} onClockChange={extras.onClockChange} onMyHRHome={extras.onHome} /> }
+const BUILT_SECTIONS = { pay: (session, extras) => <MyHRPay key={extras.payView || 'home'} storeId={session?.storeId} storeName={extras.storeName} initialView={extras.payView || 'home'} onClockChange={extras.onClockChange} /> }
 
 // MyHR: the employee's own HR hub (pay, time off, training, etc.). The store's
 // organization picks which sections its staff see and writes each section's
@@ -42,7 +42,7 @@ const MYHR_SECTIONS = [
   { key: 'job', label: 'My Job & Opportunities', blurb: 'Role, postings and promotions', icon: BriefcaseBusiness },
   { key: 'engagement', label: 'My Workplace Engagement & Diversity', blurb: 'Team news, surveys, recognition', icon: UsersRound },
   { key: 'safety', label: 'My Workplace Health & Safety', blurb: 'Policies and incident reports', icon: HeartPulse },
-  { key: 'absences', label: 'My Absences & Leave Requests', blurb: 'Request time off, sick days', icon: CalendarClock },
+  { key: 'absences', label: 'Leave Requests', blurb: 'Request time off, sick days', icon: CalendarClock },
   { key: 'travel', label: 'My Travel', blurb: 'Card shows, events and expenses', icon: Plane },
   { key: 'departure', label: 'My Retirement & Departure', blurb: 'Resignation and final pay', icon: DoorOpen },
   { key: 'contacts', label: 'HR Contact Directory', blurb: 'Who to ask about what', icon: ContactRound },
