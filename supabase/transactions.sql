@@ -93,12 +93,14 @@ BEGIN
   v_emp := public.current_store_employee_id(p_store_id);
   SELECT lower(COALESCE(e.role, '')), COALESCE(e.action_permissions, e.permissions, '{}'::jsonb) INTO v_role, v_perm FROM public.store_employees e WHERE e.id = v_emp;
   v_boss := EXISTS (SELECT 1 FROM public.stores s WHERE s.id = p_store_id AND (s.owner_user_id = auth.uid() OR s.organization_id IN (SELECT public.user_org_ids())));
-  v_lead := v_boss OR COALESCE(v_role, '') IN ('owner', 'manager', 'store_manager', 'assistant_manager', 'supervisor');
+  v_lead := COALESCE(v_boss, false) OR COALESCE(v_role, '') IN ('owner', 'manager', 'store_manager', 'assistant_manager', 'supervisor');
+  v_perm := COALESCE(v_perm, '{}'::jsonb);
+  -- Always true or false: a missing permission setting means "not allowed" (never null, which would skip checks).
   RETURN jsonb_build_object(
     'employee_id', v_emp,
-    'view_all', v_lead OR (v_perm ->> 'view_all_transactions') = 'true',
-    'refund', v_lead OR (v_perm ->> 'refunds') = 'true',
-    'void', v_lead OR (v_perm ->> 'voids') = 'true',
+    'view_all', v_lead OR COALESCE(v_perm ->> 'view_all_transactions', '') = 'true',
+    'refund', v_lead OR COALESCE(v_perm ->> 'refunds', '') = 'true',
+    'void', v_lead OR COALESCE(v_perm ->> 'voids', '') = 'true',
     'sensitive', v_lead,
     'refund_limit', 50);
 END $$;
@@ -368,7 +370,13 @@ BEGIN
   IF v_remaining <= 0 THEN RAISE EXCEPTION 'This transaction has already been fully refunded.'; END IF;
 
   SELECT COALESCE(sum(line_total), 0) INTO v_out_total FROM public.store_transaction_items WHERE transaction_id = t.id AND direction = 'out';
-  FOR v_line IN SELECT * FROM jsonb_array_elements(COALESCE(p_lines, '[]'::jsonb)) LOOP
+  -- The same item listed more than once counts once, with its quantities added together.
+  FOR v_line IN
+    SELECT jsonb_build_object('item_id', x ->> 'item_id', 'quantity', sum(GREATEST(COALESCE((x ->> 'quantity')::integer, 0), 0)),
+                              'restock', bool_or(COALESCE((x ->> 'restock')::boolean, false)))
+      FROM jsonb_array_elements(COALESCE(p_lines, '[]'::jsonb)) x
+     GROUP BY x ->> 'item_id'
+  LOOP
     SELECT * INTO it FROM public.store_transaction_items WHERE id = NULLIF(v_line ->> 'item_id', '')::uuid AND transaction_id = t.id AND direction = 'out';
     IF it.id IS NULL THEN RAISE EXCEPTION 'That item isn''t part of this sale.'; END IF;
     v_qty := COALESCE((v_line ->> 'quantity')::integer, 0);
@@ -412,7 +420,7 @@ BEGIN
   END IF;
 
   -- Permission: refunds permission, or up to the limit, or a manager's approval.
-  IF NOT (v_access ->> 'refund')::boolean AND v_amount > (v_access ->> 'refund_limit')::numeric THEN
+  IF NOT COALESCE((v_access ->> 'refund')::boolean, false) AND v_amount > COALESCE((v_access ->> 'refund_limit')::numeric, 0) THEN
     v_approver := public.tx_check_approver(p_store_id, p_approver);
     IF v_approver IS NULL THEN RAISE EXCEPTION 'APPROVAL_REQUIRED: Refunds over % need a supervisor or manager.', to_char((v_access ->> 'refund_limit')::numeric, 'FM$999,990.00'); END IF;
   ELSIF p_approver IS NOT NULL THEN
@@ -452,7 +460,7 @@ BEGIN
   IF t.id IS NULL THEN RAISE EXCEPTION 'Transaction not found.'; END IF;
   IF t.status = 'void' THEN RAISE EXCEPTION 'This transaction is already voided.'; END IF;
   IF t.status = 'completed' THEN RAISE EXCEPTION 'Completed transactions can''t be voided. Refund it instead.'; END IF;
-  IF NOT (v_access ->> 'void')::boolean THEN
+  IF NOT COALESCE((v_access ->> 'void')::boolean, false) THEN
     v_approver := public.tx_check_approver(p_store_id, p_approver);
     IF v_approver IS NULL THEN RAISE EXCEPTION 'APPROVAL_REQUIRED: Voids need a supervisor or manager.'; END IF;
   END IF;
