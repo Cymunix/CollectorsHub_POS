@@ -22,15 +22,24 @@ CREATE INDEX IF NOT EXISTS store_shifts_store_idx ON public.store_shifts(store_i
 CREATE INDEX IF NOT EXISTS store_shifts_employee_idx ON public.store_shifts(employee_id, starts_at);
 ALTER TABLE public.store_shifts ENABLE ROW LEVEL SECURITY;
 
--- My shifts in a date range.
-CREATE OR REPLACE FUNCTION public.myhr_my_schedule(p_store_id uuid, p_from timestamptz, p_to timestamptz)
-RETURNS TABLE (id uuid, starts_at timestamptz, ends_at timestamptz, note text)
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT s.id, s.starts_at, s.ends_at, s.note FROM public.store_shifts s
-   WHERE s.employee_id = public.myhr_employee_id(p_store_id)
-     AND s.starts_at < p_to AND s.ends_at > p_from
-   ORDER BY s.starts_at
-$$;
+-- My shifts in a date range. Only created if it doesn't exist yet: part 8
+-- (myhr_schedule_builder.sql) replaces it with a version that returns more
+-- columns, so re-running this file must not change it back.
+DO $do$
+BEGIN
+  IF to_regprocedure('public.myhr_my_schedule(uuid, timestamptz, timestamptz)') IS NULL THEN
+    EXECUTE $q$
+      CREATE FUNCTION public.myhr_my_schedule(p_store_id uuid, p_from timestamptz, p_to timestamptz)
+      RETURNS TABLE (id uuid, starts_at timestamptz, ends_at timestamptz, note text)
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $f$
+        SELECT s.id, s.starts_at, s.ends_at, s.note FROM public.store_shifts s
+         WHERE s.employee_id = public.myhr_employee_id(p_store_id)
+           AND s.starts_at < p_to AND s.ends_at > p_from
+         ORDER BY s.starts_at
+      $f$;
+    $q$;
+  END IF;
+END $do$;
 
 -- Managers: the store's active staff (for scheduling).
 CREATE OR REPLACE FUNCTION public.myhr_store_staff(p_store_id uuid)
@@ -41,7 +50,7 @@ BEGIN
   RETURN QUERY
   SELECT e.id, COALESCE(NULLIF(btrim(concat_ws(' ', e.first_name, e.last_name)), ''), e.username, 'Employee'), e.role
     FROM public.store_employees e
-   WHERE COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active'
+   WHERE (e.store_id = p_store_id OR (e.store_id IS NULL AND e.store_owner_id = (SELECT s0.owner_user_id FROM public.stores s0 WHERE s0.id = p_store_id))) AND e.status = 'active'
    ORDER BY 2;
 END $$;
 
@@ -67,7 +76,7 @@ RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_id uuid;
 BEGIN
   IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can schedule shifts.'; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active') THEN
+  IF NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND (e.store_id = p_store_id OR (e.store_id IS NULL AND e.store_owner_id = (SELECT s0.owner_user_id FROM public.stores s0 WHERE s0.id = p_store_id))) AND e.status = 'active') THEN
     RAISE EXCEPTION 'That employee isn''t active at this store.';
   END IF;
   INSERT INTO public.store_shifts (store_id, employee_id, starts_at, ends_at, note, created_by)

@@ -19,7 +19,7 @@ BEGIN
          e.id = v_me
     FROM public.store_employees e
     LEFT JOIN public.store_employee_details d ON d.employee_id = e.id
-   WHERE COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active';
+   WHERE (e.store_id = p_store_id OR (e.store_id IS NULL AND e.store_owner_id = (SELECT s0.owner_user_id FROM public.stores s0 WHERE s0.id = p_store_id))) AND e.status = 'active';
 END $$;
 
 -- Absences in a date range: everyone's dates and status; the leave type only
@@ -70,7 +70,7 @@ BEGIN
   SELECT COALESCE(NULLIF(btrim(concat_ws(' ', d.form_of_address, e.first_name, e.last_name)), ''), e.username)
     FROM public.store_employees e
     LEFT JOIN public.store_employee_details d ON d.employee_id = e.id
-   WHERE COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active'
+   WHERE (e.store_id = p_store_id OR (e.store_id IS NULL AND e.store_owner_id = (SELECT s0.owner_user_id FROM public.stores s0 WHERE s0.id = p_store_id))) AND e.status = 'active'
      AND lower(e.role) IN ('owner','manager','store_manager','assistant_manager')
    ORDER BY (lower(e.role) = 'owner') DESC, 1;
 END $$;

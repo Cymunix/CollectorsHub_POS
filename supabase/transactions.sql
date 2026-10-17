@@ -372,10 +372,10 @@ BEGIN
   SELECT COALESCE(sum(line_total), 0) INTO v_out_total FROM public.store_transaction_items WHERE transaction_id = t.id AND direction = 'out';
   -- The same item listed more than once counts once, with its quantities added together.
   FOR v_line IN
-    SELECT jsonb_build_object('item_id', x ->> 'item_id', 'quantity', sum(GREATEST(COALESCE((x ->> 'quantity')::integer, 0), 0)),
+    SELECT jsonb_build_object('item_id', NULLIF(btrim(x ->> 'item_id'), '')::uuid, 'quantity', sum(GREATEST(COALESCE((x ->> 'quantity')::integer, 0), 0)),
                               'restock', bool_or(COALESCE((x ->> 'restock')::boolean, false)))
       FROM jsonb_array_elements(COALESCE(p_lines, '[]'::jsonb)) x
-     GROUP BY x ->> 'item_id'
+     GROUP BY NULLIF(btrim(x ->> 'item_id'), '')::uuid
   LOOP
     SELECT * INTO it FROM public.store_transaction_items WHERE id = NULLIF(v_line ->> 'item_id', '')::uuid AND transaction_id = t.id AND direction = 'out';
     IF it.id IS NULL THEN RAISE EXCEPTION 'That item isn''t part of this sale.'; END IF;

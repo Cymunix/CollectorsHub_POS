@@ -231,7 +231,12 @@ async function loadMarketSalesForItems(itemIds) {
   return grouped
 }
 
-function buildConditionMarketStats(rows = []) {
+// The fallback when the server-side averages aren't available. Like them, it only uses sales in
+// one currency (CAD): prices in other currencies, or with no currency recorded, are left out rather
+// than averaged together without conversion.
+const MARKET_CURRENCY = 'CAD'
+function buildConditionMarketStats(allRows = [], currency = MARKET_CURRENCY) {
+  const rows = allRows.filter((row) => String(row.currency || '').trim().toUpperCase() === currency)
   const byCondition = {}
   const datedPrices = []
   const cutoff = new Date()

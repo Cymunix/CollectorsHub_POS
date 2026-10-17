@@ -47,7 +47,9 @@ ALTER TABLE public.store_leave_requests ENABLE ROW LEVEL SECURITY;
 CREATE OR REPLACE FUNCTION public.myhr_employee_id(p_store_id uuid)
 RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT e.id FROM public.store_employees e
-   WHERE COALESCE(e.store_id, p_store_id) = p_store_id
+   WHERE (e.store_id = p_store_id
+          -- An all-locations employee belongs only to the stores of the owner who added them.
+          OR (e.store_id IS NULL AND EXISTS (SELECT 1 FROM public.stores s WHERE s.id = p_store_id AND s.owner_user_id = e.store_owner_id)))
      AND (e.employee_user_id = auth.uid() OR e.auth_user_id = auth.uid())
      AND e.status = 'active'
    ORDER BY e.created_at

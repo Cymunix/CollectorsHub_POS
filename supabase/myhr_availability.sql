@@ -62,7 +62,7 @@ BEGIN
     FROM public.store_employees e
     LEFT JOIN public.store_employee_schedule_profiles p ON p.employee_id = e.id
     LEFT JOIN public.store_employee_jobs j ON j.employee_id = e.id
-   WHERE COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active'
+   WHERE (e.store_id = p_store_id OR (e.store_id IS NULL AND e.store_owner_id = (SELECT s0.owner_user_id FROM public.stores s0 WHERE s0.id = p_store_id))) AND e.status = 'active'
    ORDER BY 2;
 END $$;
 

@@ -190,6 +190,7 @@ BEGIN
   IF public.te_is_org_owner(p_org_id) THEN
     RETURN COALESCE((SELECT name FROM public.organizations WHERE id = p_org_id), 'Organization');
   END IF;
+  IF p_store_id IS NULL OR p_store_id NOT IN (SELECT public.user_store_ids()) THEN RETURN NULL; END IF;
   v_me := public.myhr_employee_id(p_store_id);
   IF v_me IS NULL OR v_me = p_employee_id OR NOT public.myhr_is_manager(p_store_id) THEN RETURN NULL; END IF;
   SELECT manager_approval_limit INTO v_limit FROM public.org_travel_policies WHERE organization_id = p_org_id;

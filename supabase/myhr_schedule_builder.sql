@@ -92,7 +92,7 @@ BEGIN
     FROM public.store_employees e
     LEFT JOIN public.store_employee_schedule_profiles p ON p.employee_id = e.id
     LEFT JOIN public.store_employee_jobs j ON j.employee_id = e.id
-   WHERE COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active'
+   WHERE (e.store_id = p_store_id OR (e.store_id IS NULL AND e.store_owner_id = (SELECT s0.owner_user_id FROM public.stores s0 WHERE s0.id = p_store_id))) AND e.status = 'active'
    ORDER BY 2;
 END $$;
 
@@ -186,7 +186,7 @@ RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_id uuid;
 BEGIN
   IF NOT public.myhr_is_manager(p_store_id) THEN RAISE EXCEPTION 'Only managers can schedule shifts.'; END IF;
-  IF p_employee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND COALESCE(e.store_id, p_store_id) = p_store_id AND e.status = 'active') THEN
+  IF p_employee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.store_employees e WHERE e.id = p_employee_id AND (e.store_id = p_store_id OR (e.store_id IS NULL AND e.store_owner_id = (SELECT s0.owner_user_id FROM public.stores s0 WHERE s0.id = p_store_id))) AND e.status = 'active') THEN
     RAISE EXCEPTION 'That employee isn''t active at this store.';
   END IF;
   IF p_ends_at <= p_starts_at THEN RAISE EXCEPTION 'A shift has to end after it starts.'; END IF;
