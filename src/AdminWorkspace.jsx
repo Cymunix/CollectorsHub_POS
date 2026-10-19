@@ -1236,8 +1236,20 @@ function AdminCatalogue() {
 
   useEffect(() => {
     loadAdminCategories().then(setCategories).catch(() => setCategories([]))
-    loadFranchiseOptions().then(setFranchises).catch(() => setFranchises([]))
   }, [])
+
+  // The franchise list follows the category filter; a franchise from another category is cleared.
+  useEffect(() => {
+    let alive = true
+    loadFranchiseOptions(categoryId)
+      .then((list) => {
+        if (!alive) return
+        setFranchises(list)
+        setFranchiseId((current) => (current && !list.some((franchise) => franchise.id === current) ? '' : current))
+      })
+      .catch(() => { if (alive) setFranchises([]) })
+    return () => { alive = false }
+  }, [categoryId])
 
   useEffect(() => {
     setPage(1)

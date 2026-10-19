@@ -190,8 +190,39 @@ export async function loadCatalogueItemIds(filters = {}, max = 5000) {
   return ids
 }
 
-export async function loadFranchiseOptions() {
-  const { data, error } = await supabase.from('franchises').select('franchise_id, name').order('name')
+// Franchises for the catalogue filter. With a category, only that category's franchises:
+// those linked to its subcategories, plus any its catalogue items use. Each other franchise is
+// checked with a small "one item in this category?" lookup (in parallel batches); a lookup
+// that fails keeps the franchise rather than hiding it. Remembered per category for the session.
+const franchiseIdsByCategory = new Map()
+async function categoryFranchiseIds(categoryId) {
+  if (franchiseIdsByCategory.has(categoryId)) return franchiseIdsByCategory.get(categoryId)
+  const ids = new Set()
+  const { data: subcats } = await supabase.from('subcategories').select('subcategory_id').eq('category_id', categoryId)
+  const subcategoryIds = (subcats || []).map((row) => row.subcategory_id).filter(Boolean)
+  if (subcategoryIds.length) {
+    const { data: links } = await supabase.from('franchise_subcategory').select('franchise_id').in('subcategory_id', subcategoryIds)
+    ;(links || []).forEach((row) => row.franchise_id && ids.add(row.franchise_id))
+  }
+  const { data: everyFranchise } = await supabase.from('franchises').select('franchise_id')
+  const rest = (everyFranchise || []).map((row) => row.franchise_id).filter((id) => id && !ids.has(id))
+  for (let i = 0; i < rest.length; i += 25) {
+    const batch = rest.slice(i, i + 25)
+    const results = await Promise.all(batch.map((id) => supabase.from('items').select('item_id').eq('category_id', categoryId).eq('franchise_id', id).limit(1)))
+    results.forEach((result, j) => { if (result.error || result.data?.length) ids.add(batch[j]) })
+  }
+  franchiseIdsByCategory.set(categoryId, ids)
+  return ids
+}
+
+export async function loadFranchiseOptions(categoryId = '') {
+  let query = supabase.from('franchises').select('franchise_id, name').order('name')
+  if (categoryId) {
+    const ids = await categoryFranchiseIds(categoryId)
+    if (!ids.size) return []
+    query = query.in('franchise_id', [...ids])
+  }
+  const { data, error } = await query
   if (error) throw error
   const byName = new Map()
   ;(data || []).forEach((row) => {
