@@ -23,6 +23,7 @@ import ScheduleBuilder from './ScheduleBuilder'
 import StoreHoursModal from './org/StoreHours'
 import MyHRSchedule from './MyHRSchedule'
 import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
+import { PendingReview } from './AdminWorkspace'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
 // data, no sign-in and nothing saved, so they can be looked at and
@@ -509,9 +510,20 @@ function OrgEmployeesPreview() {
   return ready ? <MyHROrgEmployees orgId="org" orgName="Nordvik Collectibles" onBack={() => {}} initialSelectedId="e2" /> : null
 }
 
+// Admin review queue with two sample scans (preview only).
+function ReviewQueuePreview() {
+  const [drafts, setDrafts] = React.useState([
+    { id: 'd1', status: 'Pending Review', recognition: { status: 'done', result: { name: 'Connor Bedard', cardNumber: '201', year: '2023-24', set: 'Young Guns' } }, metadata: { name: 'Sample card A' }, category: 'Sports Cards' },
+    { id: 'd2', status: 'Review Later', recognition: { status: 'done' }, metadata: { name: 'Sample card B' }, category: 'Sports Cards' },
+  ])
+  return <PendingReview drafts={drafts} onUpdateDraft={() => {}} onDeleteDraft={(id) => setDrafts((list) => list.filter((d) => d.id !== id))}
+    onDeleteDrafts={async (ids) => { setDrafts((list) => list.filter((d) => !ids.includes(d.id))); return ids.length }} onCreateMore={() => {}} />
+}
+
 function Preview() {
   let content
-  if (screen === 'org-employees') content = <OrgEmployeesPreview />
+  if (screen === 'review-queue') content = <section className='admin-shell'><ReviewQueuePreview /></section>
+  else  if (screen === 'org-employees') content = <OrgEmployeesPreview />
   else if (screen === 'org') content = <OrgPortal session={{ type: 'organization', orgId: 'org', orgCode: 'ORG-0001', orgName: 'Nordvik Collectibles' }} activeModule={new URLSearchParams(window.location.search).get('module') || 'overview'} />
   else if (screen === 'store-hours') content = <StoreHoursModal orgId="org" store={{ storeId: 'st1', storeName: 'Nordvik Test Store' }} onClose={() => {}} />
   else if (screen === 'myhr-builder') content = <section className="myhr-page"><div className="myhr-pay myhr-pay-schedule"><MyHRSchedule storeId={storeId} isManager storeName="Nordvik Test Store" initialTab="builder" /></div></section>

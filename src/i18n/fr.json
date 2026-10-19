@@ -4575,5 +4575,15 @@
  "Deleting {0}…": "Suppression de {0}…",
  "Deleted {0} pending scan{1}.": "{0} numérisation{1} en attente supprimée{1}.",
  "Couldn't delete them: {0}": "Impossible de les supprimer : {0}",
- "Delete all {0} pending scan{1} from the review queue? Cards already added or linked to the catalogue aren't affected. This can't be undone. Type DELETE to confirm.": "Supprimer les {0} numérisation{1} en attente de la file de vérification? Les cartes déjà ajoutées ou liées au catalogue ne sont pas touchées. Cette action est irréversible. Tapez DELETE pour confirmer."
+ "Delete all {0} pending scan{1} from the review queue? Cards already added or linked to the catalogue aren't affected. This can't be undone. Type DELETE to confirm.": "Supprimer les {0} numérisation{1} en attente de la file de vérification? Les cartes déjà ajoutées ou liées au catalogue ne sont pas touchées. Cette action est irréversible. Tapez DELETE pour confirmer.",
+ "Delete all {0} pending scan{1} from the review queue?": "Supprimer les {0} numérisation{1} en attente de la file de vérification?",
+ "Cards already added or linked to the catalogue, and cards still waiting for AI, aren't affected. This can't be undone.": "Les cartes déjà ajoutées ou liées au catalogue, et celles qui attendent encore l’IA, ne sont pas touchées. Cette action est irréversible.",
+ "Type DELETE to confirm": "Tapez DELETE pour confirmer",
+ "Merge {0} into {1}?": "Fusionner {0} avec {1}?",
+ "Their transactions, credit, notes and records move to {0}. The merge is recorded and nothing is deleted.": "Ses transactions, crédits, notes et dossiers passent à {0}. La fusion est consignée et rien n’est supprimé.",
+ "Merge": "Fusionner",
+ "Correct this identification record": "Corriger cette fiche d’identification",
+ "The original record is kept; the correction is added alongside it.": "La fiche originale est conservée; la correction est ajoutée à côté.",
+ "Reason for the correction": "Raison de la correction",
+ "Save correction": "Enregistrer la correction"
 }

@@ -3684,7 +3684,7 @@ function draftIdentityKey(draft) {
 
 const COMPLETED_SCAN_REVIEW_STATUSES = new Set(['Catalogue Item Created', 'Matched and Updated', 'Matched'])
 
-function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onDeleteDrafts, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
+export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onDeleteDrafts, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
   // Cards still waiting for (or being retried by) local AI live in the Scan
   // Intake queue; every analysed card comes here for review.
   const rows = (drafts || []).filter((draft) => (
@@ -3703,6 +3703,8 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onD
   }, [drafts])
   const [bulkWork, setBulkWork] = useState(null)
   const [deletingAll, setDeletingAll] = useState('')
+  const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
   const [busyId, setBusyId] = useState('')
   const [reviewDraftId, setReviewDraftId] = useState('')
   // category_id -> name, so matches stored from before the category filter
@@ -3948,7 +3950,8 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onD
   }
   const confidenceOf = (draft) => confidenceById.get(draft.id) || null
   const tierCounts = { high: 0, medium: 0, low: 0 }
-  confidenceById.forEach((entry) => { tierCounts[entry.tier] += 1 })
+  // A scan with no AI result has no confidence; skip it rather than break the whole queue.
+  confidenceById.forEach((entry) => { if (entry?.tier in tierCounts) tierCounts[entry.tier] += 1 })
 
   const sortedRows = (reviewView === 'catalogued' ? cataloguedRows : rows.filter((draft) => !cataloguedIds.has(draft.id)))
     .filter((draft) => (tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter) && matchesSearch(draft))
@@ -4172,24 +4175,37 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onD
         </div>
         <div className="review-header-actions">
           {onDeleteDrafts ? (
-            <button className="danger" type="button" disabled={!rows.length || Boolean(deletingAll)} onClick={async () => {
-              const count = rows.length
-              const typed = window.prompt(`Delete all ${count} pending scan${count === 1 ? '' : 's'} from the review queue? Cards already added or linked to the catalogue aren't affected. This can't be undone. Type DELETE to confirm.`)
-              adminDesktopApi().refocusWindow?.()
-              if (String(typed || '').trim().toUpperCase() !== 'DELETE') return
-              setDeletingAll(`Deleting ${count}…`)
-              try {
-                const removed = await onDeleteDrafts(rows.map((draft) => draft.id))
-                setDeletingAll(`Deleted ${removed} pending scan${removed === 1 ? '' : 's'}.`)
-              } catch (error) {
-                setDeletingAll(`Couldn't delete them: ${error?.message || error}`)
-              }
-              setTimeout(() => setDeletingAll(''), 4000)
-            }}>{deletingAll && deletingAll.startsWith('Deleting') ? deletingAll : `Delete all pending (${rows.length})`}</button>
+            <button className="danger" type="button" disabled={!rows.length || Boolean(deletingAll)} onClick={() => { setConfirmText(''); setConfirmingDeleteAll(true) }}>
+              {deletingAll && deletingAll.startsWith('Deleting') ? deletingAll : `Delete all pending (${rows.length})`}
+            </button>
           ) : null}
           <button className="admin-gold-button" type="button" onClick={onCreateMore}>Scan New Item</button>
         </div>
       </div>
+      {confirmingDeleteAll ? (
+        <form className="review-delete-all" onSubmit={async (event) => {
+          event.preventDefault()
+          if (confirmText.trim().toUpperCase() !== 'DELETE') return
+          const ids = rows.map((draft) => draft.id)
+          setConfirmingDeleteAll(false)
+          setDeletingAll(`Deleting ${ids.length}…`)
+          try {
+            const removed = await onDeleteDrafts(ids)
+            setDeletingAll(`Deleted ${removed} pending scan${removed === 1 ? '' : 's'}.`)
+          } catch (error) {
+            setDeletingAll(`Couldn't delete them: ${error?.message || error}`)
+          }
+          setTimeout(() => setDeletingAll(''), 5000)
+        }}>
+          <p>
+            <strong>Delete all {rows.length} pending scan{rows.length === 1 ? '' : 's'} from the review queue?</strong>
+            <span>Cards already added or linked to the catalogue, and cards still waiting for AI, aren't affected. This can't be undone.</span>
+          </p>
+          <label>Type DELETE to confirm <input autoFocus value={confirmText} onChange={(event) => setConfirmText(event.target.value)} /></label>
+          <button className="danger" type="submit" disabled={confirmText.trim().toUpperCase() !== 'DELETE'}>Delete {rows.length}</button>
+          <button type="button" onClick={() => setConfirmingDeleteAll(false)}>Cancel</button>
+        </form>
+      ) : null}
       {deletingAll && !deletingAll.startsWith('Deleting') ? <div className="review-queue-note"><span>{deletingAll}</span></div> : null}
       {queuedCount ? (
         <div className="review-queue-note">

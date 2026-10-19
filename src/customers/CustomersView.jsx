@@ -3,6 +3,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Copy, Heart, Plus, RefreshCw,
 import { createCustomer, customerDuplicates, customersSummary, listCustomers, matchLabel, mergeCustomers } from '../lib/customers'
 import { CollectorPicker } from '../scan/collectorParts'
 import CustomerProfile, { LinkAccountDialog } from './CustomerProfile'
+import ReasonDialog from '../ReasonDialog'
 
 // Customers: the store's own customers, and CollectorsHub members once they've
 // completed a transaction here (customer_wishlists.sql), for this store only. Layout follows Inventory: header, summary, search and
@@ -225,8 +226,9 @@ function DuplicatesDialog({ storeId, onClose }) {
   const [busy, setBusy] = useState(false)
   async function load() { try { setGroups(await customerDuplicates(storeId)) } catch (error) { setProblem(error?.message || String(error)); setGroups([]) } }
   useEffect(() => { load() }, [storeId])
-  async function merge(keep, other) {
-    const reason = window.prompt(`Merge ${other.name || other.customer_number} into ${keep.name || keep.customer_number}? Their transactions, credit, notes and records move to ${keep.customer_number}. Reason:`)
+  const [merging, setMerging] = useState(null) // { keep, other } waiting for a reason
+  async function merge(keep, other, reason) {
+    setMerging(null)
     if (!reason) return
     setBusy(true)
     setProblem('')
@@ -236,6 +238,15 @@ function DuplicatesDialog({ storeId, onClose }) {
     <div className="register-modal cu-modal wide" role="dialog" aria-modal="true">
       <section>
         <button className="modal-close" type="button" onClick={onClose} aria-label="Close"><X size={18} /></button>
+        {merging ? (
+          <ReasonDialog
+            title={`Merge ${merging.other.name || merging.other.customer_number} into ${merging.keep.name || merging.keep.customer_number}?`}
+            message={`Their transactions, credit, notes and records move to ${merging.keep.customer_number}. The merge is recorded and nothing is deleted.`}
+            confirmLabel="Merge"
+            onCancel={() => setMerging(null)}
+            onSubmit={(reason) => merge(merging.keep, merging.other, reason)}
+          />
+        ) : null}
         <h2>Possible duplicates</h2>
         <p className="cs-muted">Customers sharing an email, phone number or full name. Only managers can merge; the merge is recorded and nothing is deleted.</p>
         {problem ? <p className="cs-error"><AlertTriangle size={14} /> {problem}</p> : null}
@@ -245,7 +256,7 @@ function DuplicatesDialog({ storeId, onClose }) {
             {group.customers.map((customer, index) => (
               <div className="cu-dupe-row" key={customer.id}>
                 <span>{customer.name || 'Customer'} · {customer.customer_number}{customer.is_member ? ' · member' : ''}{customer.email ? ` · ${customer.email}` : ''}{customer.phone ? ` · ${customer.phone}` : ''} · since {day(customer.created_at)}</span>
-                {index > 0 ? <button type="button" disabled={busy} onClick={() => merge(group.customers[0], customer)}>Merge into {group.customers[0].customer_number}</button> : <small className="cs-muted">kept</small>}
+                {index > 0 ? <button type="button" disabled={busy} onClick={() => setMerging({ keep: group.customers[0], other: customer })}>Merge into {group.customers[0].customer_number}</button> : <small className="cs-muted">kept</small>}
               </div>
             ))}
           </div>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { AlertTriangle, IdCard, X } from 'lucide-react'
 import { loadOrgLocationHours } from '../lib/storeHours'
 import { DEFAULT_RULES, correctBuybackIdentification, loadBuybackIdLog, loadOrgBuybackRules, saveOrgBuybackRules } from '../lib/buybackIdentification'
+import ReasonDialog from '../ReasonDialog'
 
 // Head office: what a store must record when it buys from a customer (per
 // location, or a store-wide default), and the store's identification log.
@@ -96,8 +97,9 @@ function LogTab({ store }) {
     } catch (error) { setMessage(error?.message || String(error)); setRows([]) }
   }
   useEffect(() => { load() }, [store.storeId, days])
-  async function correct(row) {
-    const reason = window.prompt('Reason for the correction (the original record is kept):')
+  const [correcting, setCorrecting] = useState(null) // the log row waiting for a reason
+  async function correct(row, reason) {
+    setCorrecting(null)
     if (!reason) return
     try { await correctBuybackIdentification(row.id, reason, null, null); await load() } catch (error) { setMessage(error?.message || String(error)) }
   }
@@ -105,6 +107,16 @@ function LogTab({ store }) {
     <div className="nid-step">
       <label className="buyback-rules-scope"><span>Period</span><select value={days} onChange={(event) => setDays(Number(event.target.value))}><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option></select></label>
       {message ? <p className="nid-error"><AlertTriangle size={15} /> {message}</p> : null}
+      {correcting ? (
+        <ReasonDialog
+          title="Correct this identification record"
+          message="The original record is kept; the correction is added alongside it."
+          label="Reason for the correction"
+          confirmLabel="Save correction"
+          onCancel={() => setCorrecting(null)}
+          onSubmit={(reason) => correct(correcting, reason)}
+        />
+      ) : null}
       {rows === null ? <p className="nid-muted">Loading…</p> : rows.length === 0 ? <p className="nid-muted">No buyback identifications in this period.</p> : (
         <div className="buyback-log">
           <table>
@@ -118,7 +130,7 @@ function LogTab({ store }) {
                   <td>{ID_TYPES.find(([id]) => id === row.id_type)?.[1] || (row.method === 'nordvik_identity' ? 'NORDVIK Identity' : row.id_type || '—')}</td>
                   <td>{row.employee_name}</td>
                   <td>{row.transaction_number || <span className="nid-muted">Not used</span>}</td>
-                  <td>{!row.corrects_id ? <button type="button" onClick={() => correct(row)}>Correct</button> : null}</td>
+                  <td>{!row.corrects_id ? <button type="button" onClick={() => setCorrecting(row)}>Correct</button> : null}</td>
                 </tr>
               ))}
             </tbody>
