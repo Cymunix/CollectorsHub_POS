@@ -157,7 +157,7 @@ REVOKE ALL ON FUNCTION public.te_store_org(uuid) FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION public.te_is_org_owner(p_org_id uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT p_org_id IS NOT NULL AND p_org_id IN (SELECT public.user_org_ids())
+  SELECT p_org_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.user_org_ids() AS u(id) WHERE u.id = p_org_id)
 $$;
 REVOKE ALL ON FUNCTION public.te_is_org_owner(uuid) FROM PUBLIC;
 
@@ -190,7 +190,7 @@ BEGIN
   IF public.te_is_org_owner(p_org_id) THEN
     RETURN COALESCE((SELECT name FROM public.organizations WHERE id = p_org_id), 'Organization');
   END IF;
-  IF p_store_id IS NULL OR p_store_id NOT IN (SELECT public.user_store_ids()) THEN RETURN NULL; END IF;
+  IF p_store_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.user_store_ids() AS u(id) WHERE u.id = p_store_id) THEN RETURN NULL; END IF;
   v_me := public.myhr_employee_id(p_store_id);
   IF v_me IS NULL OR v_me = p_employee_id OR NOT public.myhr_is_manager(p_store_id) THEN RETURN NULL; END IF;
   SELECT manager_approval_limit INTO v_limit FROM public.org_travel_policies WHERE organization_id = p_org_id;
@@ -260,8 +260,10 @@ BEGIN
   IF p_kind = 'travel' THEN
     SELECT * INTO t FROM public.myhr_travel_requests WHERE id = p_id;
     IF t.id IS NULL THEN RAISE EXCEPTION 'That travel request wasn''t found.'; END IF;
-    IF NOT (t.employee_id = v_emp OR public.te_is_org_owner(t.organization_id)
-            OR (t.store_id = p_store_id AND public.te_approver_name(t.store_id, t.organization_id, t.employee_id, t.estimated_total) IS NOT NULL)) THEN
+    -- Each part is true or false, never NULL: a NULL here would skip the rejection.
+    IF NOT (COALESCE(v_emp IS NOT NULL AND t.employee_id = v_emp, false)
+            OR COALESCE(public.te_is_org_owner(t.organization_id), false)
+            OR COALESCE(t.store_id = p_store_id AND public.te_approver_name(t.store_id, t.organization_id, t.employee_id, t.estimated_total) IS NOT NULL, false)) THEN
       RAISE EXCEPTION 'You can''t open this travel request.';
     END IF;
     RETURN to_jsonb(t) || public.te_summary_travel(t)
@@ -271,8 +273,9 @@ BEGIN
   ELSIF p_kind = 'claim' THEN
     SELECT * INTO c FROM public.myhr_expense_claims WHERE id = p_id;
     IF c.id IS NULL THEN RAISE EXCEPTION 'That expense claim wasn''t found.'; END IF;
-    IF NOT (c.employee_id = v_emp OR public.te_is_org_owner(c.organization_id)
-            OR (c.store_id = p_store_id AND public.te_approver_name(c.store_id, c.organization_id, c.employee_id, c.submitted_total) IS NOT NULL)) THEN
+    IF NOT (COALESCE(v_emp IS NOT NULL AND c.employee_id = v_emp, false)
+            OR COALESCE(public.te_is_org_owner(c.organization_id), false)
+            OR COALESCE(c.store_id = p_store_id AND public.te_approver_name(c.store_id, c.organization_id, c.employee_id, c.submitted_total) IS NOT NULL, false)) THEN
       RAISE EXCEPTION 'You can''t open this expense claim.';
     END IF;
     RETURN to_jsonb(c) || public.te_summary_claim(c)
@@ -590,7 +593,7 @@ BEGIN
   IF NOT public.te_is_org_owner(p_org_id) THEN RAISE EXCEPTION 'Only the organization''s owner can open this.'; END IF;
   v_store := CASE WHEN p_kind = 'travel' THEN (SELECT store_id FROM public.myhr_travel_requests WHERE id = p_id)
                   ELSE (SELECT store_id FROM public.myhr_expense_claims WHERE id = p_id) END;
-  IF v_store IS NULL OR public.te_store_org(v_store) <> p_org_id THEN RAISE EXCEPTION 'That record isn''t in this organization.'; END IF;
+  IF v_store IS NULL OR public.te_store_org(v_store) IS DISTINCT FROM p_org_id THEN RAISE EXCEPTION 'That record isn''t in this organization.'; END IF;
   RETURN public.te_record(v_store, p_kind, p_id);
 END $$;
 
@@ -601,7 +604,7 @@ BEGIN
   IF NOT public.te_is_org_owner(p_org_id) THEN RAISE EXCEPTION 'Only the organization''s owner can decide this.'; END IF;
   v_store := CASE WHEN p_kind = 'travel' THEN (SELECT store_id FROM public.myhr_travel_requests WHERE id = p_id)
                   ELSE (SELECT store_id FROM public.myhr_expense_claims WHERE id = p_id) END;
-  IF v_store IS NULL OR public.te_store_org(v_store) <> p_org_id THEN RAISE EXCEPTION 'That record isn''t in this organization.'; END IF;
+  IF v_store IS NULL OR public.te_store_org(v_store) IS DISTINCT FROM p_org_id THEN RAISE EXCEPTION 'That record isn''t in this organization.'; END IF;
   PERFORM public.te_decide(v_store, p_kind, p_id, p_decision, p_note, p_lines);
 END $$;
 
@@ -614,7 +617,7 @@ DECLARE c public.myhr_expense_claims; v_org_name text; v_outstanding numeric; v_
 BEGIN
   IF NOT public.te_is_org_owner(p_org_id) THEN RAISE EXCEPTION 'Only the organization''s owner can record reimbursements.'; END IF;
   SELECT * INTO c FROM public.myhr_expense_claims WHERE id = p_claim_id FOR UPDATE;
-  IF c.id IS NULL OR public.te_store_org(c.store_id) <> p_org_id THEN RAISE EXCEPTION 'That claim isn''t in this organization.'; END IF;
+  IF c.id IS NULL OR public.te_store_org(c.store_id) IS DISTINCT FROM p_org_id THEN RAISE EXCEPTION 'That claim isn''t in this organization.'; END IF;
   IF c.payment_status NOT IN ('awaiting','partial') THEN RAISE EXCEPTION 'This claim isn''t waiting for reimbursement.'; END IF;
   IF p_paid_on IS NULL OR COALESCE(btrim(p_reference), '') = '' OR COALESCE(btrim(p_method), '') = '' OR COALESCE(btrim(p_processed_by), '') = '' THEN
     RAISE EXCEPTION 'Enter the payment date, method, reference and who processed it.';

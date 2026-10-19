@@ -6,7 +6,9 @@
 -- Part B: the security fixes.
 -- 1. MyHR: an all-locations employee (no store set) belongs only to the stores of the owner
 --    who added them, not to every store.
--- 2. Travel & Expenses: a store manager decides only in a store they can access.
+-- 2. Travel & Expenses: a record opens only for its owner, the organization or a manager allowed to
+--    decide it (a NULL in the check no longer lets it through); records of stores outside the
+--    organization are refused; managers decide only in stores they can access.
 -- 3. Refunds and voids: a missing permission means "not allowed" (needs approval); the same
 --    item listed twice, in any letter case, is counted once.
 
@@ -392,6 +394,12 @@ BEGIN
   RETURN v_id;
 END $$;
 
+-- te_is_org_owner (from myhr_travel_expenses.sql)
+CREATE OR REPLACE FUNCTION public.te_is_org_owner(p_org_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT p_org_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.user_org_ids() AS u(id) WHERE u.id = p_org_id)
+$$;
+
 -- te_approver_name (from myhr_travel_expenses.sql)
 -- Who is deciding: the organization's owner (anywhere in their organization), or a store
 -- manager (their own store, within the manager limit, never their own record).
@@ -403,12 +411,108 @@ BEGIN
   IF public.te_is_org_owner(p_org_id) THEN
     RETURN COALESCE((SELECT name FROM public.organizations WHERE id = p_org_id), 'Organization');
   END IF;
-  IF p_store_id IS NULL OR p_store_id NOT IN (SELECT public.user_store_ids()) THEN RETURN NULL; END IF;
+  IF p_store_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.user_store_ids() AS u(id) WHERE u.id = p_store_id) THEN RETURN NULL; END IF;
   v_me := public.myhr_employee_id(p_store_id);
   IF v_me IS NULL OR v_me = p_employee_id OR NOT public.myhr_is_manager(p_store_id) THEN RETURN NULL; END IF;
   SELECT manager_approval_limit INTO v_limit FROM public.org_travel_policies WHERE organization_id = p_org_id;
   IF v_limit IS NULL OR COALESCE(p_amount, 0) > v_limit THEN RETURN NULL; END IF;
   RETURN public.te_employee_name(v_me);
+END $$;
+
+-- te_record (from myhr_travel_expenses.sql)
+-- Full record: the owner, the organization's owner, or a manager who may decide it.
+CREATE OR REPLACE FUNCTION public.te_record(p_store_id uuid, p_kind text, p_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE t public.myhr_travel_requests; c public.myhr_expense_claims; v_emp uuid := public.myhr_employee_id(p_store_id);
+BEGIN
+  IF p_kind = 'travel' THEN
+    SELECT * INTO t FROM public.myhr_travel_requests WHERE id = p_id;
+    IF t.id IS NULL THEN RAISE EXCEPTION 'That travel request wasn''t found.'; END IF;
+    -- Each part is true or false, never NULL: a NULL here would skip the rejection.
+    IF NOT (COALESCE(v_emp IS NOT NULL AND t.employee_id = v_emp, false)
+            OR COALESCE(public.te_is_org_owner(t.organization_id), false)
+            OR COALESCE(t.store_id = p_store_id AND public.te_approver_name(t.store_id, t.organization_id, t.employee_id, t.estimated_total) IS NOT NULL, false)) THEN
+      RAISE EXCEPTION 'You can''t open this travel request.';
+    END IF;
+    RETURN to_jsonb(t) || public.te_summary_travel(t)
+      || jsonb_build_object('mine', t.employee_id = v_emp,
+           'can_decide', t.employee_id IS DISTINCT FROM v_emp AND public.te_approver_name(t.store_id, t.organization_id, t.employee_id, t.estimated_total) IS NOT NULL,
+           'history', COALESCE((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.at) FROM public.myhr_te_history h WHERE h.record_kind = 'travel' AND h.record_id = t.id), '[]'::jsonb));
+  ELSIF p_kind = 'claim' THEN
+    SELECT * INTO c FROM public.myhr_expense_claims WHERE id = p_id;
+    IF c.id IS NULL THEN RAISE EXCEPTION 'That expense claim wasn''t found.'; END IF;
+    IF NOT (COALESCE(v_emp IS NOT NULL AND c.employee_id = v_emp, false)
+            OR COALESCE(public.te_is_org_owner(c.organization_id), false)
+            OR COALESCE(c.store_id = p_store_id AND public.te_approver_name(c.store_id, c.organization_id, c.employee_id, c.submitted_total) IS NOT NULL, false)) THEN
+      RAISE EXCEPTION 'You can''t open this expense claim.';
+    END IF;
+    RETURN to_jsonb(c) || public.te_summary_claim(c)
+      || jsonb_build_object('mine', c.employee_id = v_emp,
+           'can_decide', c.employee_id IS DISTINCT FROM v_emp AND public.te_approver_name(c.store_id, c.organization_id, c.employee_id, c.submitted_total) IS NOT NULL,
+           'travel_reference', (SELECT reference FROM public.myhr_travel_requests WHERE id = c.travel_request_id),
+           'lines', COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.line_no) FROM public.myhr_expense_lines l WHERE l.claim_id = c.id), '[]'::jsonb),
+           'payments', COALESCE((SELECT jsonb_agg(to_jsonb(pm) ORDER BY pm.paid_on, pm.recorded_at) FROM public.myhr_expense_payments pm WHERE pm.claim_id = c.id), '[]'::jsonb),
+           'history', COALESCE((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.at) FROM public.myhr_te_history h WHERE h.record_kind = 'claim' AND h.record_id = c.id), '[]'::jsonb));
+  END IF;
+  RAISE EXCEPTION 'Unknown record type.';
+END $$;
+
+-- te_org_record (from myhr_travel_expenses.sql)
+-- The organization's owner opens any record in their organization (no store sign-in).
+CREATE OR REPLACE FUNCTION public.te_org_record(p_org_id uuid, p_kind text, p_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_store uuid;
+BEGIN
+  IF NOT public.te_is_org_owner(p_org_id) THEN RAISE EXCEPTION 'Only the organization''s owner can open this.'; END IF;
+  v_store := CASE WHEN p_kind = 'travel' THEN (SELECT store_id FROM public.myhr_travel_requests WHERE id = p_id)
+                  ELSE (SELECT store_id FROM public.myhr_expense_claims WHERE id = p_id) END;
+  IF v_store IS NULL OR public.te_store_org(v_store) IS DISTINCT FROM p_org_id THEN RAISE EXCEPTION 'That record isn''t in this organization.'; END IF;
+  RETURN public.te_record(v_store, p_kind, p_id);
+END $$;
+
+-- te_org_decide (from myhr_travel_expenses.sql)
+CREATE OR REPLACE FUNCTION public.te_org_decide(p_org_id uuid, p_kind text, p_id uuid, p_decision text, p_note text, p_lines jsonb DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_store uuid;
+BEGIN
+  IF NOT public.te_is_org_owner(p_org_id) THEN RAISE EXCEPTION 'Only the organization''s owner can decide this.'; END IF;
+  v_store := CASE WHEN p_kind = 'travel' THEN (SELECT store_id FROM public.myhr_travel_requests WHERE id = p_id)
+                  ELSE (SELECT store_id FROM public.myhr_expense_claims WHERE id = p_id) END;
+  IF v_store IS NULL OR public.te_store_org(v_store) IS DISTINCT FROM p_org_id THEN RAISE EXCEPTION 'That record isn''t in this organization.'; END IF;
+  PERFORM public.te_decide(v_store, p_kind, p_id, p_decision, p_note, p_lines);
+END $$;
+
+-- te_org_record_payment (from myhr_travel_expenses.sql)
+DROP FUNCTION IF EXISTS public.te_org_record_payment(uuid, uuid, date, text);
+CREATE OR REPLACE FUNCTION public.te_org_record_payment(p_org_id uuid, p_claim_id uuid, p_paid_on date, p_amount numeric, p_method text, p_reference text, p_processed_by text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE c public.myhr_expense_claims; v_org_name text; v_outstanding numeric; v_paid numeric;
+BEGIN
+  IF NOT public.te_is_org_owner(p_org_id) THEN RAISE EXCEPTION 'Only the organization''s owner can record reimbursements.'; END IF;
+  SELECT * INTO c FROM public.myhr_expense_claims WHERE id = p_claim_id FOR UPDATE;
+  IF c.id IS NULL OR public.te_store_org(c.store_id) IS DISTINCT FROM p_org_id THEN RAISE EXCEPTION 'That claim isn''t in this organization.'; END IF;
+  IF c.payment_status NOT IN ('awaiting','partial') THEN RAISE EXCEPTION 'This claim isn''t waiting for reimbursement.'; END IF;
+  IF p_paid_on IS NULL OR COALESCE(btrim(p_reference), '') = '' OR COALESCE(btrim(p_method), '') = '' OR COALESCE(btrim(p_processed_by), '') = '' THEN
+    RAISE EXCEPTION 'Enter the payment date, method, reference and who processed it.';
+  END IF;
+  v_outstanding := COALESCE(c.approved_total, 0) - COALESCE(c.reimbursed_total, 0);
+  IF p_amount IS NULL OR p_amount <= 0 THEN RAISE EXCEPTION 'Enter the amount paid.'; END IF;
+  -- Protects against paying more than was approved, or paying twice.
+  IF round(p_amount, 2) > round(v_outstanding, 2) THEN RAISE EXCEPTION 'That''s more than the % still owing.', to_char(v_outstanding, 'FM999,999,990.00'); END IF;
+  IF EXISTS (SELECT 1 FROM public.myhr_expense_payments WHERE claim_id = c.id AND lower(reference) = lower(btrim(p_reference))) THEN
+    RAISE EXCEPTION 'A payment with reference % is already recorded on this claim.', btrim(p_reference);
+  END IF;
+  v_org_name := COALESCE((SELECT name FROM public.organizations WHERE id = p_org_id), 'Organization');
+  INSERT INTO public.myhr_expense_payments (claim_id, paid_on, amount, method, reference, processed_by_name, recorded_by_name)
+  VALUES (c.id, p_paid_on, round(p_amount, 2), btrim(p_method), btrim(p_reference), btrim(p_processed_by), v_org_name);
+  v_paid := COALESCE(c.reimbursed_total, 0) + round(p_amount, 2);
+  UPDATE public.myhr_expense_claims SET reimbursed_total = v_paid,
+         payment_status = CASE WHEN v_paid >= COALESCE(approved_total, 0) THEN 'paid' ELSE 'partial' END,
+         paid_on = p_paid_on, payment_reference = btrim(p_reference), paid_recorded_by = btrim(p_processed_by), paid_recorded_at = now(), updated_at = now()
+   WHERE id = c.id;
+  INSERT INTO public.myhr_te_history (record_kind, record_id, action, by_name, note)
+  VALUES ('claim', c.id, CASE WHEN v_paid >= COALESCE(c.approved_total, 0) THEN 'reimbursement paid' ELSE 'partial reimbursement' END, btrim(p_processed_by),
+          'Paid ' || to_char(p_amount, 'FM999,999,990.00') || ' by ' || btrim(p_method) || ' on ' || p_paid_on || ' · ref ' || btrim(p_reference));
 END $$;
 
 -- tx_access (from transactions.sql)
@@ -417,10 +521,10 @@ CREATE OR REPLACE FUNCTION public.tx_access(p_store_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_emp uuid; v_role text; v_perm jsonb := '{}'::jsonb; v_boss boolean; v_lead boolean;
 BEGIN
-  IF p_store_id IS NULL OR p_store_id NOT IN (SELECT public.user_store_ids()) THEN RAISE EXCEPTION 'not authorised for this store'; END IF;
+  IF p_store_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.user_store_ids() AS u(id) WHERE u.id = p_store_id) THEN RAISE EXCEPTION 'not authorised for this store'; END IF;
   v_emp := public.current_store_employee_id(p_store_id);
   SELECT lower(COALESCE(e.role, '')), COALESCE(e.action_permissions, e.permissions, '{}'::jsonb) INTO v_role, v_perm FROM public.store_employees e WHERE e.id = v_emp;
-  v_boss := EXISTS (SELECT 1 FROM public.stores s WHERE s.id = p_store_id AND (s.owner_user_id = auth.uid() OR s.organization_id IN (SELECT public.user_org_ids())));
+  v_boss := EXISTS (SELECT 1 FROM public.stores s WHERE s.id = p_store_id AND (s.owner_user_id = auth.uid() OR EXISTS (SELECT 1 FROM public.user_org_ids() AS u(id) WHERE u.id = s.organization_id)));
   v_lead := COALESCE(v_boss, false) OR COALESCE(v_role, '') IN ('owner', 'manager', 'store_manager', 'assistant_manager', 'supervisor');
   v_perm := COALESCE(v_perm, '{}'::jsonb);
   -- Always true or false: a missing permission setting means "not allowed" (never null, which would skip checks).
@@ -566,5 +670,17 @@ BEGIN
   VALUES (p_store_id, t.id, t.location_id, public.current_store_employee_id(p_store_id), auth.uid(), 'voided', btrim(p_reason),
           jsonb_build_object('previous_status', t.status, 'approved_by', v_approver));
 END $$;
+
+-- Permissions for the functions above (kept if they already existed; needed if one was just created).
+GRANT EXECUTE ON FUNCTION public.te_record(uuid, text, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.te_org_record(uuid, text, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.te_org_decide(uuid, text, uuid, text, text, jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.te_org_record_payment(uuid, uuid, date, numeric, text, text, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.tx_access(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.tx_refund(uuid, uuid, uuid, jsonb, numeric, text, text, uuid, jsonb, boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.tx_void(uuid, uuid, text, jsonb) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.te_is_org_owner(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.te_approver_name(uuid, uuid, uuid, numeric) FROM PUBLIC;
 
 NOTIFY pgrst, 'reload schema';

@@ -382,6 +382,16 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     if (draft?.cloud) deleteCloudReviewDraft(draft).catch(() => {})
   }
 
+  // Deletes several review drafts at once (one save), and their cloud copies so other
+  // computers don't pull them back. Scan image files stay until "Delete unused files".
+  async function deleteScanDrafts(draftIds) {
+    const ids = new Set(draftIds)
+    const removed = scanDraftsRef.current.filter((entry) => ids.has(entry.id))
+    await saveScanDrafts((drafts) => drafts.filter((entry) => !ids.has(entry.id)), { fromCloud: true })
+    await Promise.allSettled(removed.filter((draft) => draft.cloud).map((draft) => deleteCloudReviewDraft(draft)))
+    return removed.length
+  }
+
   // ---- Local scan archive: once a card is approved (its photos are in the
   // catalogue) its large local files are replaced by one small JPEG per side.
   // Runs in the background, one card at a time; cards in review are untouched.
@@ -948,7 +958,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
             }}
           />
         ) : null}
-        {activeView === 'review' ? <PendingReview cloud={{ ...cloudState, pendingUpload: scanDrafts.filter((draft) => !draft.cloud && !draft.cloudUpload && !['queued', 'analysing', 'failed'].includes(draft.recognition?.status) && draft.status !== 'Rejected' && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status) && (draft.recognition || draft.scanAnalysis)).length, onUploadExisting: uploadExistingQueue, onRefresh: () => pullCloudDrafts({ full: true }) }} drafts={scanDrafts} onUpdateDraft={updateScanDraft} onDeleteDraft={deleteScanDraft} onCreateMore={() => setActiveView('scan')} onRetryAi={retryAi} aiBusy={Boolean(aiAnalysis)} queuedCount={aiQueue.length} /> : null}
+        {activeView === 'review' ? <PendingReview cloud={{ ...cloudState, pendingUpload: scanDrafts.filter((draft) => !draft.cloud && !draft.cloudUpload && !['queued', 'analysing', 'failed'].includes(draft.recognition?.status) && draft.status !== 'Rejected' && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status) && (draft.recognition || draft.scanAnalysis)).length, onUploadExisting: uploadExistingQueue, onRefresh: () => pullCloudDrafts({ full: true }) }} drafts={scanDrafts} onUpdateDraft={updateScanDraft} onDeleteDraft={deleteScanDraft} onDeleteDrafts={deleteScanDrafts} onCreateMore={() => setActiveView('scan')} onRetryAi={retryAi} aiBusy={Boolean(aiAnalysis)} queuedCount={aiQueue.length} /> : null}
         {activeView === 'explorer' ? <DataExplorer /> : null}
         {activeView === 'taxonomy' ? <TaxonomyAdmin /> : null}
         {activeView === 'media' ? <AdminSectionBrowser title="Images & Media" kicker="Catalogue media administration" loader={loadImagesMediaData} /> : null}
@@ -3674,7 +3684,7 @@ function draftIdentityKey(draft) {
 
 const COMPLETED_SCAN_REVIEW_STATUSES = new Set(['Catalogue Item Created', 'Matched and Updated', 'Matched'])
 
-function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
+function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onDeleteDrafts, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
   // Cards still waiting for (or being retried by) local AI live in the Scan
   // Intake queue; every analysed card comes here for review.
   const rows = (drafts || []).filter((draft) => (
@@ -3692,6 +3702,7 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
     return groups
   }, [drafts])
   const [bulkWork, setBulkWork] = useState(null)
+  const [deletingAll, setDeletingAll] = useState('')
   const [busyId, setBusyId] = useState('')
   const [reviewDraftId, setReviewDraftId] = useState('')
   // category_id -> name, so matches stored from before the category filter
@@ -4159,8 +4170,27 @@ function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onC
           <p className="admin-kicker">Exception-based review</p>
           <h2>Pending Review Queue</h2>
         </div>
-        <button className="admin-gold-button" type="button" onClick={onCreateMore}>Scan New Item</button>
+        <div className="review-header-actions">
+          {onDeleteDrafts ? (
+            <button className="danger" type="button" disabled={!rows.length || Boolean(deletingAll)} onClick={async () => {
+              const count = rows.length
+              const typed = window.prompt(`Delete all ${count} pending scan${count === 1 ? '' : 's'} from the review queue? Cards already added or linked to the catalogue aren't affected. This can't be undone. Type DELETE to confirm.`)
+              adminDesktopApi().refocusWindow?.()
+              if (String(typed || '').trim().toUpperCase() !== 'DELETE') return
+              setDeletingAll(`Deleting ${count}…`)
+              try {
+                const removed = await onDeleteDrafts(rows.map((draft) => draft.id))
+                setDeletingAll(`Deleted ${removed} pending scan${removed === 1 ? '' : 's'}.`)
+              } catch (error) {
+                setDeletingAll(`Couldn't delete them: ${error?.message || error}`)
+              }
+              setTimeout(() => setDeletingAll(''), 4000)
+            }}>{deletingAll && deletingAll.startsWith('Deleting') ? deletingAll : `Delete all pending (${rows.length})`}</button>
+          ) : null}
+          <button className="admin-gold-button" type="button" onClick={onCreateMore}>Scan New Item</button>
+        </div>
       </div>
+      {deletingAll && !deletingAll.startsWith('Deleting') ? <div className="review-queue-note"><span>{deletingAll}</span></div> : null}
       {queuedCount ? (
         <div className="review-queue-note">
           <span>{queuedCount} scanned card{queuedCount === 1 ? ' is' : 's are'} waiting in the Scan Intake queue for analysis.</span>

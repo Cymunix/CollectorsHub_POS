@@ -89,10 +89,10 @@ CREATE OR REPLACE FUNCTION public.tx_access(p_store_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_emp uuid; v_role text; v_perm jsonb := '{}'::jsonb; v_boss boolean; v_lead boolean;
 BEGIN
-  IF p_store_id IS NULL OR p_store_id NOT IN (SELECT public.user_store_ids()) THEN RAISE EXCEPTION 'not authorised for this store'; END IF;
+  IF p_store_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.user_store_ids() AS u(id) WHERE u.id = p_store_id) THEN RAISE EXCEPTION 'not authorised for this store'; END IF;
   v_emp := public.current_store_employee_id(p_store_id);
   SELECT lower(COALESCE(e.role, '')), COALESCE(e.action_permissions, e.permissions, '{}'::jsonb) INTO v_role, v_perm FROM public.store_employees e WHERE e.id = v_emp;
-  v_boss := EXISTS (SELECT 1 FROM public.stores s WHERE s.id = p_store_id AND (s.owner_user_id = auth.uid() OR s.organization_id IN (SELECT public.user_org_ids())));
+  v_boss := EXISTS (SELECT 1 FROM public.stores s WHERE s.id = p_store_id AND (s.owner_user_id = auth.uid() OR EXISTS (SELECT 1 FROM public.user_org_ids() AS u(id) WHERE u.id = s.organization_id)));
   v_lead := COALESCE(v_boss, false) OR COALESCE(v_role, '') IN ('owner', 'manager', 'store_manager', 'assistant_manager', 'supervisor');
   v_perm := COALESCE(v_perm, '{}'::jsonb);
   -- Always true or false: a missing permission setting means "not allowed" (never null, which would skip checks).
