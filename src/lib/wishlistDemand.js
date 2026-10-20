@@ -25,11 +25,8 @@ export function useWishlistDemand(storeId, catalogItemIds = []) {
   return demand
 }
 
-// "Wanted by Joe Test and 1 other"
+// "Wanted by 3 users"
 export function wantedLabel(entry) {
   if (!entry?.members) return ''
-  const names = (entry.names || []).filter(Boolean)
-  if (!names.length) return `Wanted by ${entry.members} member${entry.members === 1 ? '' : 's'}`
-  const others = entry.members - Math.min(names.length, 2)
-  return `Wanted by ${names.slice(0, 2).join(', ')}${others > 0 ? ` and ${others} other${others === 1 ? '' : 's'}` : ''}`
+  return `Wanted by ${entry.members} user${entry.members === 1 ? '' : 's'}`
 }
