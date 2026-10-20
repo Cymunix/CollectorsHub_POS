@@ -174,8 +174,9 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             item: best?.item ? pickItem(best.item) : scanAnalysis.matchStatus === 'likely' && scanAnalysis.bestMatch?.item ? pickItem(scanAnalysis.bestMatch.item) : null,
             status: best ? 'ready' : candidates.length ? 'choose' : 'unmatched',
           })
-          // The AI's suggested condition, unless staff already chose one.
-          const suggested = response.result?.suggested_condition
+          // The AI's suggested condition (test stores only, while it's being
+          // tested), unless staff already chose one.
+          const suggested = session?.aiCondition ? response.result?.suggested_condition : null
           if (suggested) {
             save((list) => list.map((entry) => (entry.id === card.id
               ? { ...entry, conditionSuggestion: { condition: suggested, notes: response.result.condition_notes || [] }, ...(entry.conditionTouched ? {} : { condition: suggested }) }
@@ -233,7 +234,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
 
   async function addToStock(card, { forReview = false } = {}) {
     if (!card.condition && !forReview) {
-      patch(card.id, { error: "Pick a condition (the AI didn't suggest one)." })
+      patch(card.id, { error: session?.aiCondition ? "Pick a condition (the AI didn't suggest one)." : 'Pick a condition.' })
       return false
     }
     const previous = card.status
@@ -381,7 +382,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             {['ready', 'choose', 'unmatched'].includes(card.status) ? (
               <div className="store-scan-card-fields">
                 <span className="store-scan-condition">
-                  <select value={card.condition || ''} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true, error: '' })} title="Condition (set by the AI; change it if needed)">
+                  <select value={card.condition || ''} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true, error: '' })} title={session?.aiCondition ? 'Condition (set by the AI; change it if needed)' : 'Condition'}>
                     {!card.condition ? <option value="">Condition…</option> : null}
                     {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
                     {card.condition && !CARD_CONDITIONS.includes(card.condition) ? <option>{card.condition}</option> : null}

@@ -553,6 +553,9 @@ function App() {
     loadStoreFeatures(authSession?.storeId).then((flags) => { if (!cancelled) setStoreFeatures(flags) })
     return () => { cancelled = true }
   }, [authSession?.storeId])
+  // The AI's suggested condition on scanned cards is still being tested: test stores only.
+  const aiCondition = Boolean(storeFeatures.test_store)
+  const scanSession = useMemo(() => (authSession ? { ...authSession, aiCondition } : authSession), [authSession, aiCondition])
   const needsClockIn = clockStatus.required && !clockStatus.clockedInAt
   // An organization sign-in doesn't sell: no Register (it starts on MyHR).
   const isOrgSession = authSession?.type === 'organization'
@@ -1105,6 +1108,7 @@ function App() {
         {activeView === 'register' && !needsClockIn ? (
           <RegisterView
             authSession={authSession}
+            aiCondition={aiCondition}
             customers={store.customers || []}
             inventory={store.inventory}
             isSyncing={isSyncing}
@@ -1155,7 +1159,7 @@ function App() {
 
         {activeView === 'scan' ? (
           <ScanCentre
-            session={authSession}
+            session={scanSession}
             storeQueue={store.storeScanQueue || []}
             onSaveStoreQueue={(queue) => persist({ ...storeRef.current, storeScanQueue: queue })}
             onStockChanged={handleSyncNow}
@@ -1460,6 +1464,7 @@ function viewTitle(activeView) {
 
 function RegisterView({
   authSession,
+  aiCondition = false,
   customers,
   inventory,
   inventoryValue,
@@ -2259,7 +2264,7 @@ function RegisterView({
         await addScanSessionItem({
           event,
           eventId: event.scanId,
-          ...conditionSeed(recognition.result),
+          ...conditionSeed(recognition.result, aiCondition),
           sourceDevice: event.sourceDevice,
           scanImageUrl: event.image?.url || '',
           scanImagePath: event.image?.path || '',
@@ -2275,7 +2280,7 @@ function RegisterView({
         await addScanSessionItem({
           event,
           eventId: event.scanId,
-          ...conditionSeed(recognition.result),
+          ...conditionSeed(recognition.result, aiCondition),
           sourceDevice: event.sourceDevice,
           scanImageUrl: event.image?.url || '',
           scanImagePath: event.image?.path || '',
@@ -3996,9 +4001,10 @@ function ScanStat({ label, value }) {
   )
 }
 
-// The AI's suggested condition for a scanned card, as item fields.
-function conditionSeed(result) {
-  if (!result?.suggested_condition) return {}
+// The AI's suggested condition for a scanned card, as item fields (test
+// stores only, while it's being tested).
+function conditionSeed(result, enabled) {
+  if (!enabled || !result?.suggested_condition) return {}
   return { condition: result.suggested_condition, conditionSuggestion: { condition: result.suggested_condition, notes: result.condition_notes || [] } }
 }
 

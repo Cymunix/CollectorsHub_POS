@@ -17,12 +17,15 @@ ALTER TABLE public.store_features ADD CONSTRAINT store_features_feature_check CH
 ALTER TABLE public.store_features ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.store_features FROM anon, authenticated;
 
--- POS: which optional features this store has on.
+-- POS: which optional features this store has on, plus test_store
+-- (stores.is_test_store): features still in testing, like the AI's suggested
+-- condition on scanned cards, show only at test stores.
 CREATE OR REPLACE FUNCTION public.store_feature_flags(p_store_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   IF p_store_id NOT IN (SELECT public.user_store_ids()) THEN RAISE EXCEPTION 'not authorised for this store'; END IF;
-  RETURN COALESCE((SELECT jsonb_object_agg(f.feature, f.enabled) FROM public.store_features f WHERE f.store_id = p_store_id), '{}'::jsonb);
+  RETURN COALESCE((SELECT jsonb_object_agg(f.feature, f.enabled) FROM public.store_features f WHERE f.store_id = p_store_id), '{}'::jsonb)
+      || jsonb_build_object('test_store', COALESCE((SELECT s.is_test_store FROM public.stores s WHERE s.id = p_store_id), false));
 END $$;
 
 -- Head office: every store's features.
