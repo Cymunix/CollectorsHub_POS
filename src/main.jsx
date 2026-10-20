@@ -3511,6 +3511,7 @@ function RegisterView({
                         ) : null}
                         <div className={`transaction-save-state ${transactionSaveState}`}>
                           {transactionSaveState === 'saving' ? 'Saving transaction...' : transactionSaveState === 'failed' ? 'Save failed. Review before retrying.' : appliedPayments.length ? 'Payments saved locally' : 'Ready'}
+                          {transactionSaveState === 'failed' && transactionError ? <small className="transaction-save-reason">{transactionError}</small> : null}
                         </div>
                         <button className="pay-button" type="button" onClick={completeTransaction} disabled={!canComplete}>
                           <ReceiptText size={20} />

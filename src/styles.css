@@ -6747,6 +6747,14 @@ button:disabled {
   color: #b3261e;
 }
 
+.transaction-save-reason {
+  display: block;
+  font-weight: 600;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
 .checkout-disabled-reason {
   color: #667896;
   font-size: 13px;
