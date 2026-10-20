@@ -43,7 +43,10 @@ export async function emailApprovalRequest(jobId) {
   if (error || data?.error) {
     let message = data?.error || error?.message || 'The approval email could not be sent.'
     try { const details = await error?.context?.json?.(); if (details?.error) message = details.error } catch {}
-    if (error?.context?.status === 404 && !/collector|email/i.test(message)) message = 'Approval emails are not set up yet (deploy the send-scan-approval Edge Function in Supabase).'
+    // An undeployed function answers 404 without CORS headers, which reaches the app as a failed request.
+    if ((error?.context?.status === 404 && !/collector|email/i.test(message)) || error?.name === 'FunctionsFetchError' || /failed to send a request/i.test(message)) {
+      message = "The approval email couldn't be sent: the send-scan-approval Edge Function isn't deployed in Supabase yet, or the internet connection dropped."
+    }
     throw new Error(message)
   }
   return { sentTo: data?.sentTo || '' }
