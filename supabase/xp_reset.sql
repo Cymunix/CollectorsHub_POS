@@ -39,18 +39,35 @@ SELECT 'after', 'XP events', count(*)::text FROM public.xp_events
 UNION ALL SELECT 'after', 'profiles by level', COALESCE(string_agg(level || ': ' || n, ', ' ORDER BY level), 'none')
   FROM (SELECT COALESCE(collector_level::text, 'null') AS level, count(*) AS n FROM public.profiles GROUP BY 1) l;
 
--- Any other column that looks like XP or level and still holds a value.
-INSERT INTO xp_reset_report
-SELECT 'check', c.table_name || '.' || c.column_name,
-       (xpath('/row/c/text()', query_to_xml(format(
-          'SELECT count(*) AS c FROM public.%I WHERE %I IS NOT NULL AND %I::text NOT IN (''0'', '''')',
-          c.table_name, c.column_name, c.column_name), false, true, '')))[1]::text || ' rows with a value'
-  FROM information_schema.columns c
-  JOIN information_schema.tables t
-    ON t.table_schema = c.table_schema AND t.table_name = c.table_name AND t.table_type = 'BASE TABLE'
- WHERE c.table_schema = 'public'
-   AND NOT (c.table_name = 'profiles' AND c.column_name = 'collector_level')
-   AND (c.column_name ~* '(^|_)xp($|_)' OR c.column_name ~* 'experience' OR c.column_name ~* '(^|_)level($|_)');
+-- Any other column in the app's own tables that looks like XP or level and still holds a value.
+-- Only ordinary tables in the public schema are looked at; a column that can't be counted is
+-- listed as such rather than stopping the reset.
+DO $$
+DECLARE
+  col record;
+  n bigint;
+BEGIN
+  FOR col IN
+    SELECT cl.relname AS table_name, a.attname AS column_name
+      FROM pg_catalog.pg_attribute a
+      JOIN pg_catalog.pg_class cl ON cl.oid = a.attrelid
+      JOIN pg_catalog.pg_namespace ns ON ns.oid = cl.relnamespace
+     WHERE ns.nspname = 'public'
+       AND cl.relkind IN ('r', 'p')
+       AND a.attnum > 0 AND NOT a.attisdropped
+       AND NOT (cl.relname = 'profiles' AND a.attname = 'collector_level')
+       AND (a.attname ~* '(^|_)xp($|_)' OR a.attname ~* 'experience' OR a.attname ~* '(^|_)level($|_)')
+  LOOP
+    BEGIN
+      EXECUTE format('SELECT count(*) FROM public.%I WHERE %I IS NOT NULL AND %I::text NOT IN (''0'', '''')',
+                     col.table_name, col.column_name, col.column_name) INTO n;
+      INSERT INTO xp_reset_report VALUES ('check', col.table_name || '.' || col.column_name, n || ' rows with a value');
+    EXCEPTION WHEN OTHERS THEN
+      INSERT INTO xp_reset_report VALUES ('check', col.table_name || '.' || col.column_name, 'could not count: ' || SQLERRM);
+    END;
+  END LOOP;
+END
+$$;
 
 SELECT step, what, value FROM xp_reset_report
  ORDER BY CASE step WHEN 'before' THEN 1 WHEN 'info' THEN 2 WHEN 'after' THEN 3 ELSE 4 END, what;
