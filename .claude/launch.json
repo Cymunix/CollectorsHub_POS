@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pos-vite",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5177", "--strictPort"],
+      "port": 5177
+    },
+    {
+      "name": "website-vite",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["F:/Nordvik-main/Nordvik-main/node_modules/vite/bin/vite.js", "F:/Nordvik-main/Nordvik-main", "--port", "5178", "--strictPort"],
+      "port": 5178
+    }
+  ]
+}

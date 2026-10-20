@@ -4590,5 +4590,21 @@
  "Correct this identification record": "Corriger cette fiche d’identification",
  "The original record is kept; the correction is added alongside it.": "La fiche originale est conservée; la correction est ajoutée à côté.",
  "Reason for the correction": "Raison de la correction",
- "Save correction": "Enregistrer la correction"
+ "Save correction": "Enregistrer la correction",
+ "+ Graded slab": "+ Carte gradée",
+ "Already in your stock": "Déjà dans votre stock",
+ "Cert": "Certificat",
+ "Cert number": "Numéro de certificat",
+ "Check on": "Vérifier chez",
+ "Check the slab and the grader’s record before buying.": "Vérifiez la carte et le dossier de l’évaluateur avant d’acheter.",
+ "Checking where this cert is on record…": "Recherche des autres dossiers de ce certificat…",
+ "In a collector’s collection (bought from a store)": "Dans la collection d’un collectionneur (achetée en magasin)",
+ "In a collector’s collection (could be the seller’s own)": "Dans la collection d’un collectionneur (peut-être celle du vendeur)",
+ "In another store’s stock": "Dans le stock d’un autre magasin",
+ "No other record of this cert.": "Aucun autre dossier pour ce certificat.",
+ "Open this cert on {0}'s website": "Ouvrir ce certificat sur le site de {0}",
+ "Recorded with a different grader or grade.": "Enregistré avec un autre évaluateur ou une autre cote.",
+ "The cert record check isn’t available:": "La vérification du certificat n’est pas disponible :",
+ "This cert is already on record": "Ce certificat est déjà enregistré",
+ "Your store had this slab before (none in stock now)": "Votre magasin a déjà eu cette carte (aucune en stock maintenant)"
 }

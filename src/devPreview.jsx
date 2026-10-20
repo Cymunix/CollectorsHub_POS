@@ -26,6 +26,7 @@ import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
 import { BulkEditDialog, PendingReview } from './AdminWorkspace'
 import StoreScanIntake from './StoreScanIntake'
 import CollectorListings from './CollectorListings'
+import SlabCertFields from './SlabCertFields'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
 // data, no sign-in and nothing saved, so they can be looked at and
@@ -211,6 +212,7 @@ Object.defineProperty(supabase, 'functions', { configurable: true, get: () => mo
 const realInvoke = realFunctions.invoke.bind(realFunctions)
 mockFunctions.invoke = async (name, options = {}) => {
   // MOCK approval email (preview only): nothing is sent.
+  if (name === 'send-listing-message') return { data: { ok: true, sent: true }, error: null }
   if (name === 'send-scan-approval') {
     await new Promise((resolve) => setTimeout(resolve, 600))
     return { data: { ok: true, sentTo: 'j***@example.com' }, error: null }
@@ -248,7 +250,14 @@ mockFunctions.invoke = async (name, options = {}) => {
 Object.defineProperty(supabase, 'storage', { configurable: true, get: () => ({ from: () => ({ uploadToSignedUrl: async () => ({ data: {}, error: null }), upload: async () => ({ data: {}, error: null }), createSignedUrls: async (paths) => ({ data: paths.map(() => ({ signedUrl: '/nordvik-identity/demo/joetest-demo-headshot.png' })), error: null }) }) }) })
 window.__mockIdentity = mockIdentity
 
-SAMPLE.buyback_id_record = (params) => { window.__lastIdentification = params; return 'mock-identification-0001' }
+// Cert 11111111 is on record elsewhere; any other cert has no other record.
+SAMPLE.pos_cert_matches = ({ p_cert }) => ({
+  cert: p_cert,
+  matches: String(p_cert).replace(/[^0-9A-Z]/gi, '') === '11111111'
+    ? [{ source: 'other_store', name: 'Connor Bedard', grading_company: 'PSA', grade: '10' }, { source: 'collector', name: 'Connor Bedard', grading_company: 'PSA', grade: '9', from_store: false }]
+    : [],
+})
+SAMPLE.buyback_id_record =(params) => { window.__lastIdentification = params; return 'mock-identification-0001' }
 SAMPLE.org_buyback_id_rules = () => []
 SAMPLE.org_store_features = () => [{ store_id: 'st1', feature: 'pawns_loans', enabled: true }]
 SAMPLE.org_set_store_feature = () => null
@@ -279,6 +288,12 @@ SAMPLE.cs_create_job = ({ p_kind, p_details }) => {
 }
 // MOCK collector listings (preview only).
 SAMPLE.store_collector_listings = ({ p_filter }) => { const rows = [{ copy_id: 'l1', catalog_item_id: 'i1', name: 'Yoda', card_number: '47', release_year: 2008, category: 'Trading Cards', condition: 'Near Mint', asking_price: 18, seller_username: 'TestJoe', seller_area: 'Halifax, NS', listed_at: new Date(Date.now() - 86400000).toISOString(), wanted_members: 3, wanted_priced: 2, wanted_average_price: 15, store_in_stock: 0 }, { copy_id: 'l2', catalog_item_id: 'i2', name: 'Captain Rex', card_number: '57', release_year: 2008, category: 'Trading Cards', grading_company: 'PSA', grade: '9', asking_price: 45, seller_username: null, seller_area: 'Truro, NS', listed_at: new Date(Date.now() - 3 * 86400000).toISOString(), wanted_members: 1, wanted_priced: 0, wanted_average_price: null, store_in_stock: 1 }, { copy_id: 'l3', catalog_item_id: 'i3', name: 'Ambush', card_number: '1', release_year: 2008, category: 'Trading Cards', condition: 'Lightly Played', asking_price: 2.5, seller_username: 'CaseyL', seller_area: 'Moncton, NB', listed_at: new Date().toISOString(), wanted_members: 0, wanted_priced: 0, wanted_average_price: null, store_in_stock: 0 }]; return { total_listed: 3, rows: p_filter === 'wanted' ? rows.filter((r) => r.wanted_members) : rows } }
+// MOCK listing messages (preview only).
+const lmMock = { conversations: { c1: { id: 'c1', copy_id: 'l2', item_title: 'Captain Rex #57 (2008)', asking_price: 45, still_listed: true, collector_username: null, collector_blocked: false, messages: [{ id: 'm1', sender: 'store', sender_name: 'HaydenM8', body: 'Hi! Would you take $38 for the PSA 9 Rex? We can pay cash in store.', created_at: new Date(Date.now() - 2 * 86400000).toISOString() }, { id: 'm2', sender: 'collector', body: 'Could do $42, it is a clean 9. I can drop it off Saturday.', created_at: new Date(Date.now() - 3600000).toISOString() }], unread: true } } }
+SAMPLE.store_listing_unread_count = () => Object.values(lmMock.conversations).filter((c) => c.unread).length
+SAMPLE.store_listing_conversations = () => Object.values(lmMock.conversations).map((c) => { const last = c.messages[c.messages.length - 1]; return { ...c, messages: undefined, last_message_at: last.created_at, last_sender: last.sender, last_body: last.body } })
+SAMPLE.store_listing_conversation = ({ p_conversation_id, p_copy_id }) => { const c = Object.values(lmMock.conversations).find((x) => x.id === p_conversation_id || (!p_conversation_id && x.copy_id === p_copy_id)); if (!c) return null; c.unread = false; return { ...c } }
+SAMPLE.store_listing_send_message = ({ p_copy_id, p_conversation_id, p_body, p_sender_name }) => { let c = p_conversation_id ? lmMock.conversations[p_conversation_id] : Object.values(lmMock.conversations).find((x) => x.copy_id === p_copy_id); if (!c) { const id = 'c' + Date.now(); c = lmMock.conversations[id] = { id, copy_id: p_copy_id, item_title: 'Yoda #47 (2008)', asking_price: 18, still_listed: true, collector_username: 'TestJoe', collector_blocked: false, messages: [] } } const m = { id: 'm' + Date.now(), sender: 'store', sender_name: p_sender_name, body: p_body, created_at: new Date().toISOString() }; c.messages = [...c.messages, m]; return { conversation_id: c.id, message_id: m.id } }
 // MOCK wishlist demand (preview only).
 SAMPLE.store_wishlist_demand = ({ p_catalog_item_ids }) => (p_catalog_item_ids || []).filter((id) => id === 'cat-wanted').map((id) => ({ catalog_item_id: id, members: 3, priced: 2, average_price: 12.5 }))
 SAMPLE.cs_job = ({ p_job_id }) => { const j = csMock.jobs[p_job_id]; return { job: j.job, collector: { id: 'col1', username: 'TestJoe', name: 'Joe Test' }, store: { name: 'Nordvik Test Store' }, location: { name: 'Main Store', address: '1 Main St, Halifax, NS' }, authorisation: j.authorisation, containers: j.containers, counts: csCounts(j), events: j.events } }
@@ -531,9 +546,23 @@ function ReviewQueuePreview() {
     onDeleteDrafts={async (ids) => { setDrafts((list) => list.filter((d) => !ids.includes(d.id))); return ids.length }} onCreateMore={() => {}} />
 }
 
+// Slab cert fields on a bought card: a clean cert, and one already on record (11111111).
+function SlabCertPreview() {
+  const [slabs, setSlabs] = React.useState([{ gradingCompany: 'PSA', grade: '10', certificationNumber: '87654321' }, { gradingCompany: 'PSA', grade: '10', certificationNumber: '11111111' }])
+  return (
+    <section style={{ display: 'grid', gap: 24, maxWidth: 460, padding: 24 }}>
+      {slabs.map((slab, index) => (
+        <SlabCertFields key={index} storeId={storeId} gradingCompany={slab.gradingCompany} grade={slab.grade} cert={slab.certificationNumber}
+          onChange={(patch) => setSlabs((list) => list.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)))} />
+      ))}
+    </section>
+  )
+}
+
 function Preview() {
   let content
-  if (screen === 'listings') content = <CollectorListings session={{ storeId, storeName: 'Nordvik Test Store', locationId: 'loc1' }} />
+  if (screen === 'slab-cert') content = <SlabCertPreview />
+  else if (screen === 'listings') content = <CollectorListings session={{ storeId, storeName: 'Nordvik Test Store', locationId: 'loc1' }} />
   else if (screen === 'store-scan-wanted') content = <StoreScanIntake session={{ storeId, storeName: 'Nordvik Test Store', locationId: 'loc1' }} savedQueue={[{ id: 'c1', status: 'ready', quantity: 1, condition: 'Near Mint', sellPrice: '4.00', result: { subject: 'Yoda', id_number: '47', release_year: 2008 }, item: { item_id: 'cat-wanted', name: 'Yoda', card_number: '47', release_year: 2008 } }, { id: 'c2', status: 'ready', quantity: 1, condition: 'Near Mint', sellPrice: '1.00', result: { subject: 'Ambush', id_number: '1', release_year: 2008 }, item: { item_id: 'cat-other', name: 'Ambush', card_number: '1', release_year: 2008 } }]} onSaveQueue={() => {}} onStockChanged={() => {}} />
   else if (screen === 'bulk-edit') content = <BulkEditDialog itemIds={Array.from({ length: 412 }, (_, i) => 'id' + i)} filterSummary="Trading Cards · Star Wars · Clone Wars Tactics" onClose={() => {}} onDone={() => {}} />
   else if (screen === 'review-queue') content = <section className='admin-shell'><ReviewQueuePreview /></section>

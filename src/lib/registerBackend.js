@@ -465,6 +465,9 @@ function tradeLine(line, payoutMethod) {
     sku_snapshot: uuidOrNull(line.inventoryId) ? line.sku || null : uniqueTradeSku(line),
     condition: line.condition || null,
     grade: line.grade || null,
+    // A graded slab keeps its grader and cert on the new stock record.
+    grading_company: line.graded ? String(line.gradingCompany || '').trim() || null : null,
+    cert_number: line.graded ? String(line.certificationNumber || '').trim() || null : null,
     unit_price: roundMoney(offer),
     quantity,
     discount_total: 0,

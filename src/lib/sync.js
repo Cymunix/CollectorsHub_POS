@@ -217,7 +217,7 @@ export async function syncInventoryFromSupabase(session) {
   for (let index = 0; index < inventoryIds.length; index += 200) {
     const { data, error: inventoryError } = await supabase
       .from('store_inventory')
-      .select('id, store_id, catalog_item_id, sku, barcode, condition, grade, grading_company, buy_price, sell_price, in_store_price, name_snapshot, status, is_trade_in, listed_for_sale')
+      .select('id, store_id, catalog_item_id, sku, barcode, condition, grade, grading_company, cert_number, buy_price, sell_price, in_store_price, name_snapshot, status, is_trade_in, listed_for_sale')
       .eq('store_id', storeId)
       .eq('status', 'active')
       .in('id', inventoryIds.slice(index, index + 200))
@@ -265,6 +265,7 @@ export async function syncInventoryFromSupabase(session) {
       rawCondition: row.condition || '',
       grade: row.grade || '',
       gradingCompany: row.grading_company || '',
+      certificationNumber: row.cert_number || '',
       quantity: available,
       onHand,
       reserved,

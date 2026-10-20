@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Archive,
@@ -52,6 +52,7 @@ import AdminWorkspace from './AdminWorkspace'
 import ScanCentre from './scan/ScanCentre'
 import CustomersView from './customers/CustomersView'
 import CollectorListings from './CollectorListings'
+import { loadListingUnreadCount } from './lib/collectorListings'
 import TransactionsView from './transactions/TransactionsView'
 import PawnView from './pawn/PawnView'
 import ReportsView from './reports/ReportsView'
@@ -62,6 +63,7 @@ import { deviceLanguage, setLanguage } from './i18n/runtime'
 // The sign-in screen uses the last language chosen on this computer.
 setLanguage(deviceLanguage())
 import ConditionHint from './ConditionHint'
+import SlabCertFields from './SlabCertFields'
 import MyHRView from './MyHR'
 import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
@@ -331,6 +333,18 @@ function App() {
   }, [authSession?.storeId, store.sync?.lastSyncAt])
 
   const favoriteAlerts = useMemo(() => favoriteStockAlerts(favorites, store.inventory, inventoryStock), [favorites, store.inventory])
+
+  // Collector replies to the store's messages about their listings (Collector Listings badge).
+  const [listingUnread, setListingUnread] = useState(0)
+  const refreshListingUnread = useCallback(() => {
+    if (!authSession?.storeId) { setListingUnread(0); return }
+    loadListingUnreadCount(authSession.storeId).then(setListingUnread).catch(() => {})
+  }, [authSession?.storeId])
+  useEffect(() => {
+    refreshListingUnread()
+    const timer = window.setInterval(refreshListingUnread, 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [refreshListingUnread])
 
   // A favourite newly going low or out shows a notice (once per change).
   useEffect(() => {
@@ -1018,7 +1032,7 @@ function App() {
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
           {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan Centre" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
           {authSession?.storeId ? <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} /> : null}
-          {authSession?.storeId ? <NavButton icon={Tag} label="Collector Listings" active={activeView === 'listings'} onClick={() => requestNavigate('listings')} /> : null}
+          {authSession?.storeId ? <NavButton icon={Tag} label="Collector Listings" active={activeView === 'listings'} onClick={() => requestNavigate('listings')} badge={listingUnread || null} badgeTitle={`${listingUnread} new repl${listingUnread === 1 ? 'y' : 'ies'} from sellers`} /> : null}
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
           {storeFeatures.pawns_loans ? <NavButton icon={HandCoins} label="Pawns & Loans" active={activeView === 'pawns'} onClick={() => requestNavigate('pawns')} /> : null}
           <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} />
@@ -1159,7 +1173,7 @@ function App() {
 
         {activeView === 'dashboard' ? <PlaceholderView icon={Home} title="Dashboard" copy="Store operating overview, register status, daily sales, and urgent tasks will live here." /> : null}
         {activeView === 'catalog' ? <PlaceholderView icon={PackageSearch} title="Catalog" copy="Catalogue search, product records, category data, and item references will live here." /> : null}
-        {activeView === 'listings' && authSession?.storeId ? <CollectorListings session={authSession} /> : null}
+        {activeView === 'listings' && authSession?.storeId ? <CollectorListings session={authSession} unreadCount={listingUnread} onMessagesChanged={refreshListingUnread} /> : null}
         {activeView === 'customers' ? (
           <CustomersView
             session={authSession}
@@ -2783,6 +2797,10 @@ function RegisterView({
           name: line.name,
           sku: line.sku || '',
           condition: line.condition || '',
+          graded: !!line.graded,
+          grade: line.grade || '',
+          gradingCompany: line.gradingCompany || '',
+          certificationNumber: line.certificationNumber || '',
           direction: line.direction,
           quantity: Number(line.quantity || 1),
           unitPrice: Number(line.unitPrice || 0),
@@ -3082,6 +3100,7 @@ function RegisterView({
           {mode === 'scan_intake' ? (
             <ScanIntakePanel
               activeSession={activeScanSession}
+              storeId={authSession?.storeId}
               customer={effectiveCustomer}
               filters={['All', 'Needs Review', 'Unidentified', 'Ambiguous Match', 'Duplicate', 'Graded', 'Pricing Missing']}
               onAddManualMatch={addScanIntakeManualMatch}
@@ -3241,6 +3260,11 @@ function RegisterView({
                                 <strong>{line.name}</strong>
                                 <small>{[line.sku ? `SKU ${line.sku}` : '', incoming ? 'Customer item' : line.category].filter(Boolean).join(' | ')}</small>
                                 {incoming && wishlistDemand[line.catalogItemId] ? <small className="wanted-badge" title={wantedTitle(wishlistDemand[line.catalogItemId])}>♥ {wantedLabel(wishlistDemand[line.catalogItemId])}</small> : null}
+                                {incoming && !line.inventoryId ? (
+                                  line.graded
+                                    ? <SlabCertFields storeId={authSession?.storeId} gradingCompany={line.gradingCompany} grade={line.grade} cert={line.certificationNumber} onChange={(patch) => updateLine(line.localId, patch)} />
+                                    : <button type="button" className="slab-cert-add" onClick={() => updateLine(line.localId, { graded: true })}>+ Graded slab</button>
+                                ) : null}
                               </span>
                             </span>
                           </td>
@@ -3858,6 +3882,7 @@ function RegisterView({
 
 function ScanIntakePanel({
   activeSession,
+  storeId,
   customer,
   filters,
   onAbandon,
@@ -3954,7 +3979,7 @@ function ScanIntakePanel({
           ) : !reviewItems.length ? (
             <div className="scan-empty-state">No items match this review filter.</div>
           ) : reviewItems.map((item) => (
-            <ScannedItemRow key={item.id} item={item} onRemove={() => onRemoveItem(item.id)} onUpdate={(patch) => onUpdateItem(item.id, patch)} />
+            <ScannedItemRow key={item.id} item={item} storeId={storeId} onRemove={() => onRemoveItem(item.id)} onUpdate={(patch) => onUpdateItem(item.id, patch)} />
           ))}
         </div>
       </section>
@@ -4003,7 +4028,7 @@ function QuantityInput({ value, onChange }) {
   )
 }
 
-function ScannedItemRow({ item, onRemove, onUpdate }) {
+function ScannedItemRow({ item, storeId, onRemove, onUpdate }) {
   const [reviewing, setReviewing] = useState(false)
   const [zoomed, setZoomed] = useState(false)
   useEffect(() => {
@@ -4058,9 +4083,7 @@ function ScannedItemRow({ item, onRemove, onUpdate }) {
       </label>
       {item.graded ? (
         <div className="scan-graded-fields">
-          <input value={item.gradingCompany || ''} onChange={(event) => onUpdate({ gradingCompany: event.target.value })} placeholder="Company" />
-          <input value={item.grade || ''} onChange={(event) => onUpdate({ grade: event.target.value })} placeholder="Grade" />
-          <input value={item.certificationNumber || ''} onChange={(event) => onUpdate({ certificationNumber: event.target.value })} placeholder="Cert #" />
+          <SlabCertFields storeId={storeId} gradingCompany={item.gradingCompany} grade={item.grade} cert={item.certificationNumber} onChange={onUpdate} />
         </div>
       ) : null}
       <div className="scan-row-actions">
@@ -4812,6 +4835,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
         item.category,
         item.condition,
         item.gradingCompany,
+        item.certificationNumber,
         item.catalogItemId,
       ].some((value) => String(value || '').toLowerCase().includes(term))
     })
@@ -4887,6 +4911,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
         <span className="inventory-condition">
           <strong>{item.grade ? `${item.gradingCompany ? `${item.gradingCompany} ` : 'Grade '}${item.grade}` : (item.rawCondition || item.condition || '—')}</strong>
           {item.grade && item.rawCondition ? <small>{item.rawCondition}</small> : null}
+          {item.certificationNumber ? <small>Cert {item.certificationNumber}</small> : null}
         </span>
         <span>
           <strong>{item.sku || '—'}</strong>
