@@ -2730,6 +2730,8 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
         if (releaseMatch) { score += 15; reasons.push('Same set') } else differences.push('set')
       }
     }
+    // Whether the release agreed before the year was compared (to spot "only the year differs").
+    const releaseBeforeYear = releaseMatch
     const seasonAgrees = trading ? null : sameSeason(card.season, item.season)
     if (seasonAgrees !== null) {
       // Season read and season on the item: it decides (not the copyright year).
@@ -2746,6 +2748,10 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
     // Trading cards often show no number (or the AI can't read it): the name
     // and set/year decide, and several same-named cards go to the picker.
     const identity = subjectMatch && releaseMatch && (numberMatch || (trading && !number))
+    // A trading card with the same name and number whose only disagreement is the year: often the
+    // checklist's year (or the card's copyright year) is off, so a person confirms it rather than it
+    // being proposed as a new catalogue item.
+    const yearOnly = trading && subjectMatch && numberMatch && releaseBeforeYear && !releaseMatch && differences.includes('year')
     let refineAllMatch = true
     REFINE_FIELDS.forEach((field) => {
       const outcome = field.compare(cardForRefine, item)
@@ -2766,6 +2772,7 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
       // Same name and set/year but another number (trading card numbers are
       // often misread, or listed differently by the checklist source).
       nameAndRelease: trading && subjectMatch && releaseMatch,
+      yearOnly,
     }
   })
     .filter((candidate) => candidate.score > 0)
@@ -2781,6 +2788,10 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
     const sameName = candidates.filter((candidate) => candidate.nameAndRelease)
     if (sameName.length === 1) return { status: 'likely', best: sameName[0], candidates }
     if (sameName.length > 1) return { status: 'multiple', best: null, candidates }
+    // Same name and number, only the year differs: a person confirms (never a new item).
+    const yearOnly = candidates.filter((candidate) => candidate.yearOnly)
+    if (yearOnly.length === 1) return { status: 'likely', best: yearOnly[0], candidates }
+    if (yearOnly.length > 1) return { status: 'multiple', best: null, candidates }
     return { status: 'none', best: null, candidates }
   }
   if (identities.length === 1 || identities[0].score > identities[1].score) return { status: 'likely', best: identities[0], candidates }

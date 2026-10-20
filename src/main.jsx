@@ -622,6 +622,12 @@ function App() {
           context: syncResult.context,
           failedRecords: syncResult.status.failedRecords || [],
         },
+      ]).catch((error) => [
+        // The transaction is already saved; only the refresh failed. Keep what's on screen and
+        // say so; the next sync picks up the changes.
+        store.inventory,
+        store.customers || [],
+        { ...(store.sync || {}), error: `Transaction saved, but refreshing inventory failed: ${error?.message || error}. Use Sync Now.` },
       ])
 
     // Scan intakes whose cards were bought in this transaction are complete
@@ -2733,7 +2739,9 @@ function RegisterView({
     setTransactionError('')
     setTransactionSaveState('saving')
     try {
-      const automaticPayment = mode !== 'buy' && remaining > 0
+      // Whatever is still owed is paid with the chosen method, for a sale or for a trade-in
+      // plus sale where the sale is worth more (the customer pays the difference).
+      const automaticPayment = remaining > 0
         ? [{
           id: createId('payment'),
           method: paymentMethod || 'card',
