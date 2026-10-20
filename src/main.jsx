@@ -2820,6 +2820,8 @@ function RegisterView({
       })
       resetTransactionDraft()
     } catch (error) {
+      // Recorded in the app's log (renderer.log) so a failed save can be diagnosed afterwards.
+      console.error('Transaction save failed:', mode, error?.message || error, error?.details || '', error?.hint || '', error?.code || '')
       setTransactionSaveState('failed')
       setTransactionError(error?.message || 'The transaction was not completed.')
     } finally {
