@@ -277,7 +277,7 @@ SAMPLE.cs_create_job = ({ p_kind, p_details }) => {
   return { job_id: id, reference, authorisation_id: 'auth-' + id }
 }
 // MOCK wishlist demand (preview only).
-SAMPLE.store_wishlist_demand = ({ p_catalog_item_ids }) => (p_catalog_item_ids || []).filter((id) => id === 'cat-wanted').map((id) => ({ catalog_item_id: id, members: 3, names: ['Joe Test', 'Casey Lee'] }))
+SAMPLE.store_wishlist_demand = ({ p_catalog_item_ids }) => (p_catalog_item_ids || []).filter((id) => id === 'cat-wanted').map((id) => ({ catalog_item_id: id, members: 3, priced: 2, average_price: 12.5 }))
 SAMPLE.cs_job = ({ p_job_id }) => { const j = csMock.jobs[p_job_id]; return { job: j.job, collector: { id: 'col1', username: 'TestJoe', name: 'Joe Test' }, store: { name: 'Nordvik Test Store' }, location: { name: 'Main Store', address: '1 Main St, Halifax, NS' }, authorisation: j.authorisation, containers: j.containers, counts: csCounts(j), events: j.events } }
 SAMPLE.cs_jobs = ({ p_kind }) => Object.values(csMock.jobs).filter((j) => j.job.kind === p_kind).map((j) => ({ id: j.job.id, reference: j.job.reference, kind: j.job.kind, status: j.job.status, custody_status: j.job.custody_status, collector_name: 'Joe Test', collector_username: 'TestJoe', location_name: 'Main Store', received_at: j.job.received_at, created_at: j.job.created_at, container_count: j.containers.length, authorisation_status: j.authorisation.status, estimated_items: j.job.estimated_items, scanned: csCounts(j).scanned, needs_review: csCounts(j).needs_review, imported: csCounts(j).imported, assigned_employee_name: 'HaydenM8', last_activity_at: j.job.last_activity_at }))
 SAMPLE.cs_job_items = ({ p_job_id, p_status }) => csMock.jobs[p_job_id].items.filter((i) => !p_status || i.status === p_status)

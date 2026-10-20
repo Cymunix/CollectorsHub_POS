@@ -9,7 +9,8 @@
 -- declining) hides it again, whatever the rule above says.
 --
 -- store_wishlist_demand: while the store is buying, which catalogue items members it can see
--- have on their wishlist (for the "Wanted" badge on the register and the stock scanner).
+-- have on their wishlist, and the average price they would pay (wishlist_items.wanted_price),
+-- for the "Wanted" badge on the register and the stock scanner.
 
 -- Is the member's profile open (shared)? Missing column or profile: no.
 CREATE OR REPLACE FUNCTION public.customers_profile_open(p_profile_id uuid)
@@ -33,11 +34,16 @@ RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 $$;
 REVOKE ALL ON FUNCTION public.customers_wishlist_status(uuid, uuid) FROM PUBLIC, anon, authenticated;
 
--- For each catalogue item: how many members whose wishlist this store can see want it,
--- and up to three of their names (staff of the store only).
+-- The price a member would pay for a wishlist item (set on the website's Wishlist page).
+ALTER TABLE public.wishlist_items ADD COLUMN IF NOT EXISTS wanted_price numeric(12,2)
+  CHECK (wanted_price IS NULL OR wanted_price >= 0);
+
+-- For each catalogue item: how many members whose wishlist this store can see want it, and
+-- the average of the prices they'd pay (only members who set one; staff of the store only).
+-- No names: the store sees counts, not who.
 DROP FUNCTION IF EXISTS public.store_wishlist_demand(uuid, uuid[]);
 CREATE OR REPLACE FUNCTION public.store_wishlist_demand(p_store_id uuid, p_catalog_item_ids uuid[])
-RETURNS TABLE (catalog_item_id uuid, members integer, names text[])
+RETURNS TABLE (catalog_item_id uuid, members integer, priced integer, average_price numeric)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   IF p_store_id IS NULL OR p_store_id NOT IN (SELECT public.user_store_ids()) THEN RAISE EXCEPTION 'not authorised for this store'; END IF;
@@ -45,9 +51,9 @@ BEGIN
   RETURN QUERY
   SELECT w.catalog_item_id,
          count(DISTINCT w.user_id)::integer,
-         (array_agg(DISTINCT COALESCE(NULLIF(btrim(p.display_name), ''), p.username)) FILTER (WHERE p.id IS NOT NULL))[1:3]
+         count(w.wanted_price)::integer,
+         round(avg(w.wanted_price), 2)
     FROM public.wishlist_items w
-    LEFT JOIN public.profiles p ON p.id = w.user_id
    WHERE w.catalog_item_id = ANY (p_catalog_item_ids[1:200])
      AND public.customers_wishlist_granted(p_store_id, w.user_id)
    GROUP BY w.catalog_item_id;

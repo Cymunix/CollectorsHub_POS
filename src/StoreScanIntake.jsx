@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { ScanLine, Search, X } from 'lucide-react'
 import { analyseRecognizedCard } from './lib/adminData'
 import { searchDesktopTradeCatalogue } from './lib/registerBackend'
-import { sendWishlistAlerts, useWishlistDemand, wantedLabel } from './lib/wishlistDemand'
+import { sendWishlistAlerts, useWishlistDemand, wantedLabel, wantedTitle } from './lib/wishlistDemand'
 import { addScannedCardToStock, CARD_CONDITIONS } from './lib/storeScan'
 import ConditionHint from './ConditionHint'
 import { readScannerPref, writeScannerPref } from './AdminWorkspace'
@@ -366,7 +366,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
               <small>{card.result ? [card.result.release_year, card.result.property || card.result.subfranchise, card.result.parallel].filter(Boolean).join(' · ') : ''}</small>
               <span className={`store-scan-status ${card.status}`}>{statusText(card.status)}</span>
               {card.item ? <span className="store-scan-match">Catalogue: {itemLabel(card.item)}</span> : null}
-              {card.item && wishlistDemand[card.item.item_id] ? <span className="wanted-badge" title="On the wishlist of members who share their wishlist with this store">♥ {wantedLabel(wishlistDemand[card.item.item_id])}</span> : null}
+              {card.item && wishlistDemand[card.item.item_id] ? <span className="wanted-badge" title={wantedTitle(wishlistDemand[card.item.item_id])}>♥ {wantedLabel(wishlistDemand[card.item.item_id])}</span> : null}
               {card.status === 'choose' ? (
                 <select value="" onChange={(event) => { const chosen = card.candidates.find((candidate) => candidate.item.item_id === event.target.value); if (chosen) patch(card.id, { item: pickItem(chosen.item), status: 'ready' }) }}>
                   <option value="">Choose the matching item…</option>
