@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { ScanLine, Search, X } from 'lucide-react'
 import { analyseRecognizedCard } from './lib/adminData'
 import { searchDesktopTradeCatalogue } from './lib/registerBackend'
-import { useWishlistDemand, wantedLabel } from './lib/wishlistDemand'
+import { sendWishlistAlerts, useWishlistDemand, wantedLabel } from './lib/wishlistDemand'
 import { addScannedCardToStock, CARD_CONDITIONS } from './lib/storeScan'
 import ConditionHint from './ConditionHint'
 import { readScannerPref, writeScannerPref } from './AdminWorkspace'
@@ -251,6 +251,8 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     try {
       const outcome = await addScannedCardToStock({ session, item: card.item, condition: card.condition, quantity: card.quantity, sellPrice: card.sellPrice, buyPrice: card.buyPrice })
       patch(card.id, { status: 'added', addedAt: new Date().toISOString(), inventoryId: outcome.inventoryId, addedAsNew: outcome.created })
+      // Stock in: members with this item on their wishlist get an email (in the background).
+      sendWishlistAlerts(session?.storeId)
       return true
     } catch (addError) {
       patch(card.id, { status: 'ready', error: addError.message || 'Could not add this card to stock.' })

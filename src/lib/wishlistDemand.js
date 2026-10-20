@@ -30,3 +30,15 @@ export function wantedLabel(entry) {
   if (!entry?.members) return ''
   return `Wanted by ${entry.members} user${entry.members === 1 ? '' : 's'}`
 }
+
+// After stock comes in (a buy at the register, a stock scan): email members whose wishlist
+// items just became available (supabase/functions/send-wishlist-alerts; the queue is filled by
+// supabase/wishlist_stock_emails.sql). Fire and forget: it never blocks or fails the buy.
+export function sendWishlistAlerts(storeId) {
+  if (!storeId) return
+  try {
+    supabase.functions.invoke('send-wishlist-alerts', { body: { storeId } })
+      .then(({ data, error }) => { if (error || data?.error) console.warn('Wishlist alert emails:', data?.error || error?.message || error) })
+      .catch(() => {})
+  } catch {}
+}

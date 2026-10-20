@@ -66,7 +66,7 @@ import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
-import { useWishlistDemand, wantedLabel } from './lib/wishlistDemand'
+import { sendWishlistAlerts, useWishlistDemand, wantedLabel } from './lib/wishlistDemand'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadDesktopCatalogueItem, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
 import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync'
 import { favoriteStockAlerts, loadStoreFavorites, setFavoriteThreshold, setStoreFavorite } from './lib/storeFavorites'
@@ -576,6 +576,8 @@ function App() {
         transaction_number: `TEST-${String(store.transactions.length + 1).padStart(6, '0')}`,
       }
       : await completeDesktopCheckout(authSession, draft)
+    // Items bought in may be on members' wishlists: email them (in the background).
+    if (!isTransientStore && (draft.items || []).some((item) => item.direction === 'incoming')) sendWishlistAlerts(authSession?.storeId)
     const transaction = {
       ...draft,
       id: backendResult?.transaction_id || createId('txn'),
