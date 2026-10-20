@@ -12,7 +12,8 @@
 import nodemailer from 'npm:nodemailer@6.9.14'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
-const APPROVAL_URL = 'https://collectorshub.ca/collection-scanning'
+// The website routes with the hash: #/collection-scanning/<request id> (pages/CollectionScanningPage.jsx).
+const APPROVAL_URL = 'https://collectorshub.ca/#/collection-scanning'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -96,7 +97,7 @@ Deno.serve(async (request) => {
   if (!email) return reply(404, { error: "This collector's account has no email address." })
 
   const storeName = plain(job.store?.name || 'A CollectorsHub store')
-  const link = `${APPROVAL_URL}?request=${encodeURIComponent(authorisation.id)}`
+  const link = `${APPROVAL_URL}/${encodeURIComponent(authorisation.id)}`
   try {
     const transport = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user: smtpUser, pass: smtpPass } })
     await transport.sendMail({

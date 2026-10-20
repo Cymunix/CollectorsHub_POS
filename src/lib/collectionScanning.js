@@ -6,7 +6,8 @@ import { supabase } from './supabaseClient'
 
 // Where collectors approve requests (signed in to their own account).
 export const COLLECTOR_APPROVAL_URL = 'https://collectorshub.ca/collection-scanning'
-export const approvalLink = (authorisationId) => `${COLLECTOR_APPROVAL_URL}?request=${encodeURIComponent(authorisationId)}`
+// The website routes with the hash: #/collection-scanning/<request id>.
+export const approvalLink = (authorisationId) => `https://collectorshub.ca/#/collection-scanning/${encodeURIComponent(authorisationId)}`
 
 export const JOB_STATUS = {
   pending_authorisation: 'Pending Authorisation',
