@@ -289,6 +289,8 @@ export function ReviewItems({ jobId, containers = [], editable = true, onChanged
                   <td>{containerCode(item.container_id) || '—'}</td>
                   <td><span className={`cs-pill ${item.status}`}>{ITEM_STATUS[item.status] || item.status}</span></td>
                   <td className="cs-row-actions">
+                    {/* The AI's match is right: confirm it and the entry is ready to add. */}
+                    {!locked && item.status === 'needs_review' && item.catalog_item_id ? <button type="button" className="gold-button" onClick={() => change(item, { status: 'draft' })} title="The catalogue match is right; mark this entry ready">Looks right</button> : null}
                     {!locked ? <button type="button" onClick={() => setSearching(item)}>{item.catalog_item_id ? 'Change item' : 'Identify'}</button> : null}
                     {!locked && item.status !== 'excluded' ? <button type="button" onClick={() => change(item, { status: 'excluded' })}>Leave out</button> : null}
                     {!locked && item.status === 'excluded' ? <button type="button" onClick={() => change(item, { status: item.catalog_item_id ? 'draft' : 'needs_review' })}>Include</button> : null}
