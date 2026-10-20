@@ -29,6 +29,7 @@ import {
   loadCatalogueItems,
   loadCatalogueItemIds,
   loadFranchiseOptions,
+  loadSubfranchiseOptions,
   deleteCatalogueItems,
   loadExplorerRecords,
   loadImagesMediaData,
@@ -1215,11 +1216,13 @@ function AdminCatalogue() {
   const [search, setSearch] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [franchiseId, setFranchiseId] = useState('')
+  const [subsetId, setSubsetId] = useState('')
   const [releaseYear, setReleaseYear] = useState('')
   const [missingImages, setMissingImages] = useState(false)
   const [missingPricing, setMissingPricing] = useState(false)
   const [categories, setCategories] = useState([])
   const [franchises, setFranchises] = useState([])
+  const [subfranchises, setSubfranchises] = useState([])
   const [rows, setRows] = useState([])
   const [selectedId, setSelectedId] = useState('')
   const [total, setTotal] = useState(0)
@@ -1232,7 +1235,7 @@ function AdminCatalogue() {
   const [selectingAll, setSelectingAll] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [notice, setNotice] = useState('')
-  const filters = { search, categoryId, franchiseId, releaseYear, missingImages, missingPricing }
+  const filters = { search, categoryId, franchiseId, subsetId, releaseYear, missingImages, missingPricing }
 
   useEffect(() => {
     loadAdminCategories().then(setCategories).catch(() => setCategories([]))
@@ -1251,10 +1254,22 @@ function AdminCatalogue() {
     return () => { alive = false }
   }, [categoryId])
 
+  // The subfranchise list follows the franchise filter; changing franchise clears it.
+  useEffect(() => {
+    let alive = true
+    setSubsetId('')
+    setSubfranchises([])
+    if (!franchiseId) return undefined
+    loadSubfranchiseOptions(franchiseId)
+      .then((list) => { if (alive) setSubfranchises(list) })
+      .catch(() => { if (alive) setSubfranchises([]) })
+    return () => { alive = false }
+  }, [franchiseId])
+
   useEffect(() => {
     setPage(1)
     setChecked(new Set())
-  }, [search, categoryId, franchiseId, releaseYear, missingImages, missingPricing])
+  }, [search, categoryId, franchiseId, subsetId, releaseYear, missingImages, missingPricing])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1269,7 +1284,7 @@ function AdminCatalogue() {
         .finally(() => setLoading(false))
     }, 220)
     return () => window.clearTimeout(timer)
-  }, [search, categoryId, franchiseId, releaseYear, missingImages, missingPricing, page, reloadToken])
+  }, [search, categoryId, franchiseId, subsetId, releaseYear, missingImages, missingPricing, page, reloadToken])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -1305,6 +1320,7 @@ function AdminCatalogue() {
   const filterSummary = [
     categories.find((category) => category.category_id === categoryId)?.name,
     franchises.find((franchise) => franchise.id === franchiseId)?.name,
+    subfranchises.find((subset) => subset.id === subsetId)?.name,
     releaseYear ? `Year ${releaseYear}` : '',
     search ? `"${search}"` : '',
     missingImages ? 'missing images' : '',
@@ -1337,6 +1353,10 @@ function AdminCatalogue() {
           <select value={franchiseId} onChange={(event) => setFranchiseId(event.target.value)}>
             <option value="">All Franchises</option>
             {franchises.map((franchise) => <option key={franchise.id} value={franchise.id}>{franchise.name}</option>)}
+          </select>
+          <select value={subsetId} onChange={(event) => setSubsetId(event.target.value)} disabled={!franchiseId || !subfranchises.length} title={franchiseId ? '' : 'Choose a franchise first'}>
+            <option value="">{franchiseId && !subfranchises.length ? 'No Subfranchises' : 'All Subfranchises'}</option>
+            {subfranchises.map((subset) => <option key={subset.id} value={subset.id}>{subset.name}</option>)}
           </select>
           <input className="admin-year-filter" type="number" min="1800" max="2100" value={releaseYear} onChange={(event) => setReleaseYear(event.target.value)} placeholder="Year" />
           <label className="admin-check"><input type="checkbox" checked={missingImages} onChange={(event) => setMissingImages(event.target.checked)} /> Missing Images</label>

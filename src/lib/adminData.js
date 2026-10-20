@@ -153,7 +153,7 @@ export async function loadAdminOverview() {
 }
 
 // Filters shared by the catalogue list and "select all matching".
-function applyCatalogueFilters(query, { search = '', categoryId = '', franchiseId = '', releaseYear = '', missingImages = false, missingPricing = false } = {}) {
+function applyCatalogueFilters(query, { search = '', categoryId = '', franchiseId = '', subsetId = '', releaseYear = '', missingImages = false, missingPricing = false } = {}) {
   const term = String(search || '').trim()
   if (term) {
     const searchFilters = [
@@ -170,6 +170,7 @@ function applyCatalogueFilters(query, { search = '', categoryId = '', franchiseI
   }
   if (categoryId) query = query.eq('category_id', categoryId)
   if (franchiseId) query = query.eq('franchise_id', franchiseId)
+  if (subsetId) query = query.eq('subset_id', subsetId)
   if (String(releaseYear || '').trim()) query = query.eq('release_year', Number(releaseYear))
   if (missingImages) query = query.or('image_path.is.null,image_path.eq.')
   if (missingPricing) query = query.is('market_price', null)
@@ -232,6 +233,19 @@ export async function loadFranchiseOptions(categoryId = '') {
   return [...byName.values()]
 }
 
+// Subfranchises (subsets) of one franchise, for the catalogue filter.
+export async function loadSubfranchiseOptions(franchiseId = '') {
+  if (!franchiseId) return []
+  const { data, error } = await supabase.from('subsets').select('subset_id, name').eq('franchise_id', franchiseId).order('name')
+  if (error) throw error
+  const byName = new Map()
+  ;(data || []).forEach((row) => {
+    const name = String(row.name || '').trim()
+    if (name && !byName.has(name.toLowerCase())) byName.set(name.toLowerCase(), { id: row.subset_id, name })
+  })
+  return [...byName.values()]
+}
+
 // Tables whose rows keep pointing at a catalogue item that is in use (store
 // stock, sales, orders, in-store sales history, customer collections).
 // Deleting such an item would unlink or block them, so bulk delete skips it.
@@ -289,7 +303,7 @@ export async function deleteCatalogueItems(itemIds = [], onProgress = () => {}) 
   return { deleted, skipped, failed }
 }
 
-export async function loadCatalogueItems({ search = '', categoryId = '', franchiseId = '', releaseYear = '', missingImages = false, missingPricing = false, page = 1, limit = 25 } = {}) {
+export async function loadCatalogueItems({ search = '', categoryId = '', franchiseId = '', subsetId = '', releaseYear = '', missingImages = false, missingPricing = false, page = 1, limit = 25 } = {}) {
   const from = Math.max(0, (page - 1) * limit)
   const to = from + limit - 1
   let query = supabase
@@ -298,7 +312,7 @@ export async function loadCatalogueItems({ search = '', categoryId = '', franchi
     .order('name', { ascending: true, nullsFirst: false })
     .range(from, to)
 
-  query = applyCatalogueFilters(query, { search, categoryId, franchiseId, releaseYear, missingImages, missingPricing })
+  query = applyCatalogueFilters(query, { search, categoryId, franchiseId, subsetId, releaseYear, missingImages, missingPricing })
 
   const { data, error, count: total } = await query
   if (error) throw error
