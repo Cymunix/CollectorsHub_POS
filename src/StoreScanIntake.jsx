@@ -423,7 +423,18 @@ export function CatalogueSearchDialog({ initialQuery, onClose, onPick }) {
 
   async function run() {
     setBusy(true)
-    try { setResults(await searchDesktopTradeCatalogue(query)) } catch { setResults([]) } finally { setBusy(false) }
+    try {
+      // The register search returns register candidates (catalogItemId, number, releaseYear);
+      // callers here work with catalogue rows (item_id, card_number, release_year).
+      const found = await searchDesktopTradeCatalogue(query)
+      setResults(found.map((row) => ({
+        ...row,
+        item_id: row.item_id || row.catalogItemId || row.catalogueItemId,
+        subject: row.subject || row.name,
+        card_number: row.card_number || row.number || '',
+        release_year: row.release_year || row.releaseYear || '',
+      })).filter((row) => row.item_id))
+    } catch { setResults([]) } finally { setBusy(false) }
   }
   useEffect(() => { if (initialQuery && initialQuery.length >= 2) run() }, [])
 
