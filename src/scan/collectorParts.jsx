@@ -168,7 +168,7 @@ export function AuthorisationPanel({ jobId, authorisation, kind, onChange }) {
           <p className="cs-auth-title"><Clock3 size={16} /> Pending approval</p>
           <p>The collector gets an email with a link, signs in to their own CollectorsHub account and approves.</p>
           {email.state === 'sending' ? <p className="cs-auth-email"><Mail size={15} /> Sending the approval email…</p> : null}
-          {email.state === 'sent' ? <p className="cs-auth-email sent"><Mail size={15} /> Approval email sent{email.sentTo ? <> to <b>{email.sentTo}</b></> : null}{email.at ? ` at ${email.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}.</p> : null}
+          {email.state === 'sent' ? <p className="cs-auth-email sent"><Mail size={15} /> Approval email sent{email.sentTo ? <> to <b>{email.sentTo}</b></> : null}{email.at ? ` at ${email.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\.$/, '')}` : ''}.</p> : null}
           {email.state === 'failed' ? <p className="cs-auth-email failed"><AlertTriangle size={15} /> {email.message}</p> : null}
           <ul className="cs-scope">
             <li>The store may scan and identify {kind === 'express' ? 'the items brought in today' : 'the items in this drop-off'}, and add them to their collection.</li>
