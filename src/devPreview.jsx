@@ -25,6 +25,7 @@ import MyHRSchedule from './MyHRSchedule'
 import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
 import { BulkEditDialog, PendingReview } from './AdminWorkspace'
 import StoreScanIntake from './StoreScanIntake'
+import CollectorListings from './CollectorListings'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
 // data, no sign-in and nothing saved, so they can be looked at and
@@ -276,6 +277,8 @@ SAMPLE.cs_create_job = ({ p_kind, p_details }) => {
   csMock.jobs[id] = { job: { id, reference, kind: p_kind, status: 'pending_authorisation', custody_status: p_kind === 'express' ? 'not_applicable' : 'not_received', categories: p_details?.categories || [], estimated_items: p_details?.estimated_items ?? null, handling_instructions: p_details?.handling_instructions, customer_notes: p_details?.customer_notes, contact: p_details?.contact || {}, last_activity_at: new Date().toISOString(), created_at: new Date().toISOString() }, authorisation: { id: 'auth-' + id, status: 'pending', duration_minutes: p_kind === 'express' ? 60 : 43200 }, containers, items: [], events: [{ id: 1, created_at: new Date().toISOString(), actor_type: 'employee', action: 'job_created', detail: {}, employee_name: 'HaydenM8' }] }
   return { job_id: id, reference, authorisation_id: 'auth-' + id }
 }
+// MOCK collector listings (preview only).
+SAMPLE.store_collector_listings = ({ p_filter }) => { const rows = [{ copy_id: 'l1', catalog_item_id: 'i1', name: 'Yoda', card_number: '47', release_year: 2008, category: 'Trading Cards', condition: 'Near Mint', asking_price: 18, seller_username: 'TestJoe', seller_area: 'Halifax, NS', listed_at: new Date(Date.now() - 86400000).toISOString(), wanted_members: 3, wanted_priced: 2, wanted_average_price: 15, store_in_stock: 0 }, { copy_id: 'l2', catalog_item_id: 'i2', name: 'Captain Rex', card_number: '57', release_year: 2008, category: 'Trading Cards', grading_company: 'PSA', grade: '9', asking_price: 45, seller_username: null, seller_area: 'Truro, NS', listed_at: new Date(Date.now() - 3 * 86400000).toISOString(), wanted_members: 1, wanted_priced: 0, wanted_average_price: null, store_in_stock: 1 }, { copy_id: 'l3', catalog_item_id: 'i3', name: 'Ambush', card_number: '1', release_year: 2008, category: 'Trading Cards', condition: 'Lightly Played', asking_price: 2.5, seller_username: 'CaseyL', seller_area: 'Moncton, NB', listed_at: new Date().toISOString(), wanted_members: 0, wanted_priced: 0, wanted_average_price: null, store_in_stock: 0 }]; return { total_listed: 3, rows: p_filter === 'wanted' ? rows.filter((r) => r.wanted_members) : rows } }
 // MOCK wishlist demand (preview only).
 SAMPLE.store_wishlist_demand = ({ p_catalog_item_ids }) => (p_catalog_item_ids || []).filter((id) => id === 'cat-wanted').map((id) => ({ catalog_item_id: id, members: 3, priced: 2, average_price: 12.5 }))
 SAMPLE.cs_job = ({ p_job_id }) => { const j = csMock.jobs[p_job_id]; return { job: j.job, collector: { id: 'col1', username: 'TestJoe', name: 'Joe Test' }, store: { name: 'Nordvik Test Store' }, location: { name: 'Main Store', address: '1 Main St, Halifax, NS' }, authorisation: j.authorisation, containers: j.containers, counts: csCounts(j), events: j.events } }
@@ -530,7 +533,8 @@ function ReviewQueuePreview() {
 
 function Preview() {
   let content
-  if (screen === 'store-scan-wanted') content = <StoreScanIntake session={{ storeId, storeName: 'Nordvik Test Store', locationId: 'loc1' }} savedQueue={[{ id: 'c1', status: 'ready', quantity: 1, condition: 'Near Mint', sellPrice: '4.00', result: { subject: 'Yoda', id_number: '47', release_year: 2008 }, item: { item_id: 'cat-wanted', name: 'Yoda', card_number: '47', release_year: 2008 } }, { id: 'c2', status: 'ready', quantity: 1, condition: 'Near Mint', sellPrice: '1.00', result: { subject: 'Ambush', id_number: '1', release_year: 2008 }, item: { item_id: 'cat-other', name: 'Ambush', card_number: '1', release_year: 2008 } }]} onSaveQueue={() => {}} onStockChanged={() => {}} />
+  if (screen === 'listings') content = <CollectorListings session={{ storeId, storeName: 'Nordvik Test Store', locationId: 'loc1' }} />
+  else if (screen === 'store-scan-wanted') content = <StoreScanIntake session={{ storeId, storeName: 'Nordvik Test Store', locationId: 'loc1' }} savedQueue={[{ id: 'c1', status: 'ready', quantity: 1, condition: 'Near Mint', sellPrice: '4.00', result: { subject: 'Yoda', id_number: '47', release_year: 2008 }, item: { item_id: 'cat-wanted', name: 'Yoda', card_number: '47', release_year: 2008 } }, { id: 'c2', status: 'ready', quantity: 1, condition: 'Near Mint', sellPrice: '1.00', result: { subject: 'Ambush', id_number: '1', release_year: 2008 }, item: { item_id: 'cat-other', name: 'Ambush', card_number: '1', release_year: 2008 } }]} onSaveQueue={() => {}} onStockChanged={() => {}} />
   else if (screen === 'bulk-edit') content = <BulkEditDialog itemIds={Array.from({ length: 412 }, (_, i) => 'id' + i)} filterSummary="Trading Cards · Star Wars · Clone Wars Tactics" onClose={() => {}} onDone={() => {}} />
   else if (screen === 'review-queue') content = <section className='admin-shell'><ReviewQueuePreview /></section>
   else  if (screen === 'org-employees') content = <OrgEmployeesPreview />

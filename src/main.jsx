@@ -51,6 +51,7 @@ import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
 import ScanCentre from './scan/ScanCentre'
 import CustomersView from './customers/CustomersView'
+import CollectorListings from './CollectorListings'
 import TransactionsView from './transactions/TransactionsView'
 import PawnView from './pawn/PawnView'
 import ReportsView from './reports/ReportsView'
@@ -1017,6 +1018,7 @@ function App() {
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
           {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan Centre" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
           {authSession?.storeId ? <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} /> : null}
+          {authSession?.storeId ? <NavButton icon={Tag} label="Collector Listings" active={activeView === 'listings'} onClick={() => requestNavigate('listings')} /> : null}
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
           {storeFeatures.pawns_loans ? <NavButton icon={HandCoins} label="Pawns & Loans" active={activeView === 'pawns'} onClick={() => requestNavigate('pawns')} /> : null}
           <NavButton icon={BarChart3} label="Reports" active={activeView === 'reports'} onClick={() => requestNavigate('reports')} />
@@ -1041,7 +1043,7 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'customers' && activeView !== 'pawns' && activeView !== 'reports' && activeView !== 'settings' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
+        {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'customers' && activeView !== 'listings' && activeView !== 'pawns' && activeView !== 'reports' && activeView !== 'settings' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
           <>
             <header className="topbar">
               <div>
@@ -1157,6 +1159,7 @@ function App() {
 
         {activeView === 'dashboard' ? <PlaceholderView icon={Home} title="Dashboard" copy="Store operating overview, register status, daily sales, and urgent tasks will live here." /> : null}
         {activeView === 'catalog' ? <PlaceholderView icon={PackageSearch} title="Catalog" copy="Catalogue search, product records, category data, and item references will live here." /> : null}
+        {activeView === 'listings' && authSession?.storeId ? <CollectorListings session={authSession} /> : null}
         {activeView === 'customers' ? (
           <CustomersView
             session={authSession}

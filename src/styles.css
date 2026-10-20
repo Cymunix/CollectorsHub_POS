@@ -14686,3 +14686,33 @@ small.cs-warn { display: block; font-size: 12px; }
   padding: 1px 8px;
   width: fit-content;
 }
+
+/* Collector Listings (CollectorListings.jsx): collectors' items for sale, with customer demand. */
+.cl-page { display: grid; gap: 14px; padding: 24px 28px; }
+.cl-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.cl-head h1 { font-size: 28px; margin: 2px 0 4px; }
+.cl-kicker { color: #9a6b00; font-size: 12px; font-weight: 800; letter-spacing: 0.06em; margin: 0; text-transform: uppercase; }
+.cl-intro { color: #526176; margin: 0; max-width: 720px; }
+.cl-refresh { align-items: center; background: #fff; border: 1px solid #cfd8e3; border-radius: 8px; display: inline-flex; font-weight: 700; gap: 6px; min-height: 38px; padding: 0 14px; }
+.cl-filters { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; }
+.cl-tabs { background: #fff; border: 1px solid #dce5ef; border-radius: 10px; display: inline-flex; gap: 4px; padding: 4px; }
+.cl-tabs button { background: transparent; border: 0; border-radius: 7px; font-weight: 700; min-height: 34px; padding: 0 14px; }
+.cl-tabs button.active { background: #17253d; color: #fff; }
+.cl-search { align-items: center; background: #fff; border: 1px solid #cfd8e3; border-radius: 8px; display: flex; flex: 1 1 260px; gap: 8px; max-width: 420px; padding: 0 10px; }
+.cl-search input { border: 0; flex: 1; font: inherit; min-height: 38px; outline: none; }
+.cl-count { color: #68768a; font-size: 13px; }
+.cl-error { background: #fdecea; border: 1px solid #f3b7b0; border-radius: 8px; color: #a12a2a; font-weight: 600; margin: 0; padding: 10px 14px; }
+.cl-empty { align-items: center; background: #fff; border: 1px dashed #cfd8e3; border-radius: 12px; color: #526176; display: grid; gap: 6px; justify-items: center; padding: 40px 20px; text-align: center; }
+.cl-empty strong { color: #17253d; }
+.cl-list { display: grid; gap: 10px; }
+.cl-card { align-items: center; background: #fff; border: 1px solid #dce5ef; border-radius: 12px; display: grid; gap: 14px; grid-template-columns: 64px 1fr auto; padding: 10px 14px; }
+.cl-card.wanted { border-color: #f5b8c4; }
+.cl-card img, .cl-noimage { background: #eef2f7; border-radius: 6px; display: block; height: 88px; object-fit: contain; width: 64px; }
+.cl-body { display: grid; gap: 3px; min-width: 0; }
+.cl-body > strong { font-size: 15px; }
+.cl-body > small { color: #68768a; }
+.cl-seller { font-size: 12px; }
+.cl-price { display: grid; gap: 2px; justify-items: end; text-align: right; }
+.cl-price span { color: #68768a; font-size: 11px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
+.cl-price strong { font-size: 20px; }
+.cl-price small { color: #68768a; font-size: 12px; }
