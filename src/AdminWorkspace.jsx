@@ -30,6 +30,7 @@ import {
   loadCatalogueItemIds,
   loadFranchiseOptions,
   loadSubfranchiseOptions,
+  updateCatalogueItems,
   deleteCatalogueItems,
   loadExplorerRecords,
   loadImagesMediaData,
@@ -1234,6 +1235,7 @@ function AdminCatalogue() {
   const [checked, setChecked] = useState(() => new Set())
   const [selectingAll, setSelectingAll] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [notice, setNotice] = useState('')
   const filters = { search, categoryId, franchiseId, subsetId, releaseYear, missingImages, missingPricing }
 
@@ -1368,6 +1370,7 @@ function AdminCatalogue() {
             <button type="button" onClick={selectAllMatching} disabled={selectingAll || loading}>{selectingAll ? 'Selecting…' : `Select all ${formatNumber(total)} matching`}</button>
           ) : null}
           {checked.size ? <button type="button" onClick={() => setChecked(new Set())}>Clear selection</button> : null}
+          {checked.size ? <button type="button" onClick={() => setEditing(true)}>Edit Selected ({formatNumber(checked.size)})</button> : null}
           {checked.size ? <button type="button" className="danger" onClick={() => setDeleting(true)}>Delete Selected ({formatNumber(checked.size)})</button> : null}
         </div>
         {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
@@ -1378,6 +1381,19 @@ function AdminCatalogue() {
 
       {selectedId ? <CatalogueItemRecord itemId={selectedId} onClose={() => setSelectedId('')} /> : null}
       {checklistOpen ? <ChecklistImportDialog onClose={() => { setChecklistOpen(false); setReloadToken((token) => token + 1) }} /> : null}
+      {editing ? (
+        <BulkEditDialog
+          itemIds={[...checked]}
+          filterSummary={filterSummary}
+          onClose={() => setEditing(false)}
+          onDone={(result, label) => {
+            setEditing(false)
+            setNotice(`Updated ${label} on ${formatNumber(result.updated.length)} catalogue item${result.updated.length === 1 ? '' : 's'}.`
+              + (result.failed.length ? ` ${formatNumber(result.failed.length)} could not be updated.` : ''))
+            setReloadToken((token) => token + 1)
+          }}
+        />
+      ) : null}
       {deleting ? (
         <BulkDeleteDialog
           itemIds={[...checked]}
@@ -1394,6 +1410,70 @@ function AdminCatalogue() {
           }}
         />
       ) : null}
+    </div>
+  )
+}
+
+// Sets one field to the same value on every selected catalogue item (e.g. the release year).
+export function BulkEditDialog({ itemIds, filterSummary, onClose, onDone }) {
+  const [year, setYear] = useState('')
+  const [progress, setProgress] = useState(null)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState('')
+  const running = Boolean(progress) && !result
+  const yearNumber = Number(year)
+  const validYear = /^\d{4}$/.test(year.trim()) && yearNumber >= 1800 && yearNumber <= 2100
+  const count = formatNumber(itemIds.length)
+  const plural = itemIds.length === 1 ? '' : 's'
+
+  async function run() {
+    setError('')
+    setProgress({ done: 0, total: itemIds.length })
+    try {
+      setResult(await updateCatalogueItems(itemIds, { release_year: yearNumber }, setProgress))
+    } catch (err) {
+      setError(err.message || 'Update failed.')
+      setProgress(null)
+    }
+  }
+
+  return (
+    <div className="register-modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="bulk-edit-title">
+      <section className="bulk-delete-dialog">
+        <p className="update-prompt-kicker">Edit catalogue items</p>
+        <h2 id="bulk-edit-title">{result ? 'Update finished' : `Edit ${count} catalogue item${plural}`}</h2>
+        {!result ? (
+          <>
+            {filterSummary ? <p>Selected from: <strong>{filterSummary}</strong></p> : null}
+            {progress ? (
+              <div className="local-ai-progress">
+                <div className="local-ai-progress-bar"><span style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} /></div>
+                <small>Updating: {formatNumber(progress.done)} of {formatNumber(progress.total)}</small>
+              </div>
+            ) : (
+              <label className="bulk-delete-confirm"><span>New release year for all {count} item{plural}</span>
+                <input autoFocus type="number" min="1800" max="2100" value={year} onChange={(event) => setYear(event.target.value)} placeholder="e.g. 2008" />
+              </label>
+            )}
+          </>
+        ) : (
+          <div className="bulk-delete-result">
+            <p><strong>{formatNumber(result.updated.length)}</strong> updated to {yearNumber}.</p>
+            {result.failed.length ? <p><strong>{formatNumber(result.failed.length)}</strong> could not be updated: {result.failed[0].message}</p> : null}
+          </div>
+        )}
+        {error ? <p className="admin-error">{error}</p> : null}
+        <div className="modal-actions">
+          {result ? (
+            <button className="update-prompt-primary" type="button" onClick={() => onDone(result, `the release year (${yearNumber})`)}>Done</button>
+          ) : (
+            <>
+              <button type="button" onClick={onClose} disabled={running}>Cancel</button>
+              <button className="update-prompt-primary" type="button" onClick={run} disabled={running || !itemIds.length || !validYear}>{running ? 'Updating…' : `Update ${count}`}</button>
+            </>
+          )}
+        </div>
+      </section>
     </div>
   )
 }

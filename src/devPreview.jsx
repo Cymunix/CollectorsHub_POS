@@ -23,7 +23,7 @@ import ScheduleBuilder from './ScheduleBuilder'
 import StoreHoursModal from './org/StoreHours'
 import MyHRSchedule from './MyHRSchedule'
 import OrgPortal, { NAV as ORG_NAV } from './org/OrgPortal'
-import { PendingReview } from './AdminWorkspace'
+import { BulkEditDialog, PendingReview } from './AdminWorkspace'
 
 // Dev-only preview (dev-preview.html?screen=…): screens with made-up sample
 // data, no sign-in and nothing saved, so they can be looked at and
@@ -522,7 +522,8 @@ function ReviewQueuePreview() {
 
 function Preview() {
   let content
-  if (screen === 'review-queue') content = <section className='admin-shell'><ReviewQueuePreview /></section>
+  if (screen === 'bulk-edit') content = <BulkEditDialog itemIds={Array.from({ length: 412 }, (_, i) => 'id' + i)} filterSummary="Trading Cards · Star Wars · Clone Wars Tactics" onClose={() => {}} onDone={() => {}} />
+  else if (screen === 'review-queue') content = <section className='admin-shell'><ReviewQueuePreview /></section>
   else  if (screen === 'org-employees') content = <OrgEmployeesPreview />
   else if (screen === 'org') content = <OrgPortal session={{ type: 'organization', orgId: 'org', orgCode: 'ORG-0001', orgName: 'Nordvik Collectibles' }} activeModule={new URLSearchParams(window.location.search).get('module') || 'overview'} />
   else if (screen === 'store-hours') content = <StoreHoursModal orgId="org" store={{ storeId: 'st1', storeName: 'Nordvik Test Store' }} onClose={() => {}} />

@@ -860,6 +860,33 @@ function toLegacyDateMarketSaleRow(row) {
   }
 }
 
+// Applies the same change (e.g. { release_year: 2008 }) to many catalogue items, in batches.
+// Returns { updated: [ids], failed: [{ id, message }] }; an item the update didn't reach
+// (no permission or already removed) is reported as failed.
+export async function updateCatalogueItems(itemIds = [], patch = {}, onProgress = () => {}) {
+  const ids = [...new Set(itemIds)].filter(Boolean)
+  const cleanPatch = { ...patch }
+  delete cleanPatch.item_id
+  if (!Object.keys(cleanPatch).length) throw new Error('Nothing to change.')
+  const updated = []
+  const failed = []
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const { data, error } = await supabase.from('items').update(cleanPatch).in('item_id', chunk).select('item_id')
+    if (error) {
+      chunk.forEach((id) => failed.push({ id, message: error.message }))
+    } else {
+      const done = new Set((data || []).map((row) => row.item_id))
+      updated.push(...done)
+      chunk.filter((id) => !done.has(id)).forEach((id) => failed.push({ id, message: 'Not updated (no permission or already removed).' }))
+    }
+    onProgress({ done: Math.min(i + 200, ids.length), total: ids.length })
+  }
+  if (updated.length) backupCatalogueChange({ action: 'update', itemIds: updated, payload: cleanPatch })
+  if (failed.length) backupCatalogueChange({ action: 'update', ok: false, error: failed[0].message, itemIds: failed.map((entry) => entry.id), payload: cleanPatch })
+  return { updated, failed }
+}
+
 export async function updateCatalogueItemRecord(itemId, patch) {
   if (!itemId) throw new Error('Missing catalogue item ID.')
   const cleanPatch = { ...patch }
