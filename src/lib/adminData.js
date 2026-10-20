@@ -1493,6 +1493,46 @@ export async function findDuplicateCatalogueItems(values = {}, { category } = {}
   return candidates.filter((candidate) => candidate.likelyDuplicate)
 }
 
+// Scan review "find by card number": catalogue items in the category (and franchise, and
+// subfranchise when chosen) whose card number is the typed number, e.g. "12" finds "12" and
+// "12/90". If none, any card number containing it. Each is scored against the scan like the
+// automatic candidates, with its subfranchise name for telling sets apart.
+export async function findItemsByCardNumber(draft, category, { franchiseId = '', subsetId = '', cardNumber = '' } = {}) {
+  const number = String(cardNumber || '').trim().replace(/^#/, '')
+  if (!number) return []
+  const categoryId = await categoryIdForName(category)
+  if (!categoryId) return []
+  const like = (value) => String(value).replace(/[\\%_]/g, '\\$&')
+  const run = async (filter) => {
+    let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId).or(filter)
+    if (franchiseId) query = query.eq('franchise_id', franchiseId)
+    if (subsetId) query = query.eq('subset_id', subsetId)
+    const { data, error } = await query.order('name').limit(60)
+    if (error) throw error
+    return data || []
+  }
+  let rows = await run([`card_number.ilike.${orValue(like(number))}`, `card_number.ilike.${orValue(`${like(number)}/%`)}`].join(','))
+  if (!rows.length) rows = await run(orContains('card_number', number))
+  const subsetIds = [...new Set(rows.map((row) => row.subset_id).filter(Boolean))]
+  const subsetNames = new Map()
+  if (subsetIds.length) {
+    const { data } = await supabase.from('subsets').select('subset_id, name').in('subset_id', subsetIds)
+    ;(data || []).forEach((row) => subsetNames.set(row.subset_id, row.name))
+  }
+  const proposed = proposedScanFields(draft)
+  return rows.map((row) => {
+    const scored = scoreScanCandidate(row, proposed)
+    return {
+      item: { ...row, imageUrl: publicImageUrl(row.image_path) },
+      score: scored.score,
+      reasons: ['Found by card number', ...scored.reasons],
+      likelyDuplicate: scored.likelyDuplicate,
+      comparisons: compareScanFields(row, proposed),
+      subsetName: subsetNames.get(row.subset_id) || '',
+    }
+  }).sort((a, b) => b.score - a.score)
+}
+
 // Live candidate search for the review screen's currently selected category.
 export async function searchScanCandidates(draft, category) {
   return searchCatalogueCandidates(proposedScanFields(draft), { categoryId: await categoryIdForName(category) })

@@ -3641,6 +3641,134 @@ button:disabled {
   margin: 10px 20px 0;
 }
 
+.scan-review-summary-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.scan-review-summary-actions button {
+  background: #ffffff;
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  color: #23344d;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.scan-review-summary-actions button.active {
+  background: #fdf4dc;
+  border-color: #d6a632;
+}
+
+.scan-review-finder {
+  border-bottom: 1px solid #e3e8ef;
+  padding: 10px 20px 12px;
+}
+
+.scan-review-finder-controls {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.scan-review-finder-controls label {
+  color: #526176;
+  display: grid;
+  font-size: 11px;
+  font-weight: 700;
+  gap: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scan-review-finder-controls select,
+.scan-review-finder-controls input {
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  font-size: 14px;
+  min-height: 36px;
+  min-width: 180px;
+  padding: 0 10px;
+}
+
+.scan-review-finder-controls input {
+  min-width: 110px;
+  width: 110px;
+}
+
+.scan-review-finder-controls button {
+  min-height: 36px;
+}
+
+.scan-review-finder-results {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 10px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 0;
+}
+
+.scan-review-finder-results li {
+  align-items: center;
+  border: 1px solid #e3e8ef;
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 40px 1fr auto;
+  padding: 6px 8px;
+}
+
+.scan-review-finder-results li.selected {
+  background: #fdf4dc;
+  border-color: #d6a632;
+}
+
+.scan-review-finder-results img,
+.scan-review-finder-noimage {
+  background: #eef2f7;
+  border-radius: 4px;
+  display: block;
+  height: 54px;
+  object-fit: contain;
+  width: 40px;
+}
+
+.scan-review-finder-results div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.scan-review-finder-results strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-review-finder-results small {
+  color: #68768a;
+  font-size: 12px;
+}
+
+.scan-review-finder-results button {
+  font-size: 13px;
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.scan-review-finder-empty {
+  color: #68768a;
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
 .scan-review-table-wrap {
   min-height: 0;
   overflow: auto;

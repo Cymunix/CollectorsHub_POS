@@ -86,6 +86,7 @@ import {
   scanReviewGroups,
   scannedFieldValue,
   searchScanCandidates,
+  findItemsByCardNumber,
   updateCatalogueItemFromReview,
   updateCatalogueItemRecord,
   updateExplorerRecord,
@@ -5416,6 +5417,12 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const extrasReady = !matchItem || matchExtras.itemId === matchItem.item_id
   const reviewItem = matchItem ? { ...matchItem, _property_id: extrasReady ? matchExtras.propertyId : '' } : null
   const hasScanImages = Boolean(draft.frontImage?.path || draft.backImage?.path)
+  // "Find by card number": pick a franchise (and optionally subfranchise), type a number, and
+  // choose the right catalogue item from what comes back.
+  const [finder, setFinder] = useState({ open: false, franchiseId: '', subsetId: '', number: '' })
+  const [finderOptions, setFinderOptions] = useState({ franchises: [], subsets: [], franchisesFor: null })
+  const [finderResults, setFinderResults] = useState(null)
+  const [finderBusy, setFinderBusy] = useState(false)
 
   // Opening the review often follows the WIA scan window or a native confirm(),
   // after which Electron on Windows can stop delivering keystrokes to inputs.
@@ -5556,7 +5563,56 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     setAttachImages(true)
   }
 
+  // Franchises for the finder follow the review's category; subfranchises follow the franchise.
+  useEffect(() => {
+    if (!finder.open || !scopeReady || !categoryScope.categoryId) return undefined
+    let cancelled = false
+    loadFranchiseOptions(categoryScope.categoryId)
+      .then((franchises) => {
+        if (cancelled) return
+        setFinderOptions((current) => ({ ...current, franchises, franchisesFor: categoryScope.categoryId }))
+        setFinder((current) => {
+          if (current.franchiseId && franchises.some((franchise) => franchise.id === current.franchiseId)) return current
+          const fromReview = franchises.find((franchise) => franchise.id === values.franchise_id)
+          return { ...current, franchiseId: fromReview ? fromReview.id : '', subsetId: '' }
+        })
+      })
+      .catch(() => { if (!cancelled) setFinderOptions((current) => ({ ...current, franchises: [], franchisesFor: categoryScope.categoryId })) })
+    return () => { cancelled = true }
+  }, [finder.open, scopeReady, categoryScope.categoryId])
+
+  useEffect(() => {
+    if (!finder.open) return undefined
+    let cancelled = false
+    setFinderOptions((current) => ({ ...current, subsets: [] }))
+    if (!finder.franchiseId) return undefined
+    loadSubfranchiseOptions(finder.franchiseId)
+      .then((subsets) => { if (!cancelled) setFinderOptions((current) => ({ ...current, subsets })) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [finder.open, finder.franchiseId])
+
+  function openFinder() {
+    setFinder((current) => ({ ...current, open: !current.open, number: current.number || String(values.card_number || draft.scanAnalysis?.proposed?.card_number || '').trim() }))
+  }
+
+  async function runFinder(event) {
+    event?.preventDefault?.()
+    if (!finder.number.trim()) return
+    setFinderBusy(true)
+    setError('')
+    try {
+      setFinderResults(await findItemsByCardNumber(draft, category, { franchiseId: finder.franchiseId, subsetId: finder.subsetId, cardNumber: finder.number }))
+    } catch (err) {
+      setError(err.message || 'Could not search the catalogue by card number.')
+    } finally {
+      setFinderBusy(false)
+    }
+  }
+
   function chooseCategory(nextCategory) {
+    setFinderResults(null)
+    setFinder((current) => ({ ...current, franchiseId: '', subsetId: '' }))
     setCategory(nextCategory)
     setOptions({})
     // Keep edits already made; seed any fields the new category adds.
@@ -5848,10 +5904,58 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
               {' · '}{conflictCount ? `${conflictCount} field${conflictCount === 1 ? '' : 's'} differ` : 'no conflicting fields'}
             </span>
           ) : <span>No catalogue item selected. The final values below will be added as a new catalogue item.</span>}
-          {matchItem ? (
-            <label className="admin-check"><input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} /> Show all fields</label>
-          ) : null}
+          <div className="scan-review-summary-actions">
+            <button type="button" className={finder.open ? 'active' : ''} onClick={openFinder} disabled={Boolean(busy)}>Find by card number</button>
+            {matchItem ? (
+              <label className="admin-check"><input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} /> Show all fields</label>
+            ) : null}
+          </div>
         </div>
+
+        {finder.open ? (
+          <div className="scan-review-finder">
+            <form className="scan-review-finder-controls" onSubmit={runFinder}>
+              <label>Franchise
+                <select value={finder.franchiseId} onChange={(event) => setFinder((current) => ({ ...current, franchiseId: event.target.value, subsetId: '' }))}>
+                  <option value="">{finderOptions.franchisesFor === categoryScope.categoryId ? `All ${category} franchises` : 'Loading franchises…'}</option>
+                  {finderOptions.franchises.map((franchise) => <option key={franchise.id} value={franchise.id}>{franchise.name}</option>)}
+                </select>
+              </label>
+              <label>Subfranchise
+                <select value={finder.subsetId} onChange={(event) => setFinder((current) => ({ ...current, subsetId: event.target.value }))} disabled={!finder.franchiseId || !finderOptions.subsets.length}>
+                  <option value="">{finder.franchiseId && !finderOptions.subsets.length ? 'No subfranchises' : 'All subfranchises'}</option>
+                  {finderOptions.subsets.map((subset) => <option key={subset.id} value={subset.id}>{subset.name}</option>)}
+                </select>
+              </label>
+              <label>Card number
+                <input autoFocus value={finder.number} onChange={(event) => setFinder((current) => ({ ...current, number: event.target.value }))} placeholder="e.g. 12" />
+              </label>
+              <button type="submit" className="admin-gold-button" disabled={finderBusy || !finder.number.trim()}>{finderBusy ? 'Searching…' : 'Search'}</button>
+            </form>
+            {finderResults ? (
+              finderResults.length ? (
+                <ul className="scan-review-finder-results">
+                  {finderResults.map((candidate) => (
+                    <li key={candidate.item.item_id} className={candidate.item.item_id === matchId ? 'selected' : ''}>
+                      {candidate.item.imageUrl ? <img src={candidate.item.imageUrl} alt="" /> : <span className="scan-review-finder-noimage" />}
+                      <div>
+                        <strong>
+                          {candidate.item.name || candidate.item.subject || candidate.item.item_id}
+                          {candidate.item.card_number ? ` #${candidate.item.card_number}` : ''}
+                          {candidate.item.release_year ? ` (${candidate.item.release_year})` : ''}
+                        </strong>
+                        <small>{[candidate.subsetName, isChecklistPlaceholder(candidate.item) ? 'Placeholder' : '', candidate.score ? `${candidate.score}% match` : ''].filter(Boolean).join(' · ')}</small>
+                      </div>
+                      <button type="button" onClick={() => chooseMatch(candidate.item.item_id, candidate)} disabled={Boolean(busy) || candidate.item.item_id === matchId}>
+                        {candidate.item.item_id === matchId ? 'Selected' : 'Match to this'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="scan-review-finder-empty">No {category} items with card number “{finder.number.trim()}”{finder.franchiseId ? ' in this franchise' : ''}.</p>
+            ) : null}
+          </div>
+        ) : null}
 
         {error ? <AdminDismissibleAlert onDismiss={() => setError('')}>{error}</AdminDismissibleAlert> : null}
 
