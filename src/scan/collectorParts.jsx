@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import QRCode from 'qrcode'
-import { AlertTriangle, Ban, CheckCircle2, Clock3, QrCode, RefreshCw, Search, ShieldQuestion, UserRound, X, XCircle } from 'lucide-react'
+import { AlertTriangle, Ban, CheckCircle2, Clock3, Mail, QrCode, RefreshCw, Search, ShieldQuestion, UserRound, X, XCircle } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import StoreScanIntake, { CatalogueSearchDialog } from '../StoreScanIntake'
 import { CARD_CONDITIONS } from '../lib/storeScan'
-import { approvalLink, importPreview, loadJob, loadJobItems, memberQueryFrom, requestAuthorisation, saveScannedCard, updateItem } from '../lib/collectionScanning'
+import { emailApprovalRequest, importPreview, loadJob, loadJobItems, memberQueryFrom, requestAuthorisation, saveScannedCard, updateItem } from '../lib/collectionScanning'
 
 // Shared pieces of Scan Centre -> Collector Collection.
 
@@ -117,15 +116,39 @@ function useCountdown(until) {
   return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min left` : `${minutes}:${String(seconds).padStart(2, '0')} left`
 }
 
-// The collector approves on their own signed-in account. Pending: QR to the
-// approval page, refreshing on its own. Authorised: time left.
+// Approval emails already sent this session, by authorisation id (so reopening a job doesn't
+// email the collector again; "Resend email" does).
+const approvalEmails = new Map()
+
+// The collector approves on their own signed-in account. Pending: the approval link is emailed
+// to them (once per request; it can be resent), and the panel refreshes on its own.
+// Authorised: time left.
 export function AuthorisationPanel({ jobId, authorisation, kind, onChange }) {
-  const [qr, setQr] = useState('')
   const [busy, setBusy] = useState(false)
   const status = authorisation?.status || 'missing'
-  const link = authorisation?.id ? approvalLink(authorisation.id) : ''
+  const requestId = status === 'pending' ? authorisation?.id || '' : ''
+  const [email, setEmail] = useState(() => approvalEmails.get(requestId) || { state: 'idle' })
   const left = useCountdown(status === 'approved' ? authorisation?.expires_at : null)
-  useEffect(() => { if (link) QRCode.toDataURL(link, { margin: 1, width: 220, color: { dark: '#0B111B', light: '#FFFFFF' } }).then(setQr).catch(() => setQr('')) }, [link])
+
+  async function sendEmail(force = false) {
+    if (!requestId) return
+    const known = approvalEmails.get(requestId)
+    if (!force && known && known.state !== 'failed') { setEmail(known); return }
+    const sending = { state: 'sending' }
+    approvalEmails.set(requestId, sending)
+    setEmail(sending)
+    try {
+      const { sentTo } = await emailApprovalRequest(jobId)
+      const sent = { state: 'sent', sentTo, at: new Date() }
+      approvalEmails.set(requestId, sent)
+      setEmail(sent)
+    } catch (error) {
+      const failed = { state: 'failed', message: error?.message || String(error) }
+      approvalEmails.set(requestId, failed)
+      setEmail(failed)
+    }
+  }
+  useEffect(() => { if (requestId) sendEmail() }, [requestId])
   useEffect(() => {
     if (status !== 'pending' && status !== 'approved') return undefined
     const timer = setInterval(() => onChange?.(), status === 'pending' ? 3000 : 30000)
@@ -141,16 +164,18 @@ export function AuthorisationPanel({ jobId, authorisation, kind, onChange }) {
   if (status === 'pending') {
     return (
       <div className="cs-auth pending">
-        {qr ? <img src={qr} alt="Approval QR code" /> : null}
         <div>
           <p className="cs-auth-title"><Clock3 size={16} /> Pending approval</p>
-          <p>The collector scans this code with their phone, signs in to their own CollectorsHub account and approves.</p>
+          <p>The collector gets an email with a link, signs in to their own CollectorsHub account and approves.</p>
+          {email.state === 'sending' ? <p className="cs-auth-email"><Mail size={15} /> Sending the approval email…</p> : null}
+          {email.state === 'sent' ? <p className="cs-auth-email sent"><Mail size={15} /> Approval email sent{email.sentTo ? <> to <b>{email.sentTo}</b></> : null}{email.at ? ` at ${email.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}.</p> : null}
+          {email.state === 'failed' ? <p className="cs-auth-email failed"><AlertTriangle size={15} /> {email.message}</p> : null}
           <ul className="cs-scope">
             <li>The store may scan and identify {kind === 'express' ? 'the items brought in today' : 'the items in this drop-off'}, and add them to their collection.</li>
             <li>It can't change or remove anything already in their collection.</li>
             <li>{kind === 'express' ? 'Lasts 60 minutes.' : 'Lasts 30 days for this intake only; they can extend or revoke it.'} {kind === 'dropoff' ? 'They don\'t need to stay while it\'s scanned.' : ''}</li>
           </ul>
-          <p className="cs-link">{link}</p>
+          <button type="button" onClick={() => sendEmail(true)} disabled={email.state === 'sending'}><Mail size={15} /> {email.state === 'failed' ? 'Try again' : 'Resend email'}</button>
         </div>
       </div>
     )

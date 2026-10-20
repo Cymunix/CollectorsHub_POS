@@ -208,6 +208,11 @@ const mockFunctions = { invoke: null }
 Object.defineProperty(supabase, 'functions', { configurable: true, get: () => mockFunctions })
 const realInvoke = realFunctions.invoke.bind(realFunctions)
 mockFunctions.invoke = async (name, options = {}) => {
+  // MOCK approval email (preview only): nothing is sent.
+  if (name === 'send-scan-approval') {
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    return { data: { ok: true, sentTo: 'j***@example.com' }, error: null }
+  }
   if (!['nordvik-identity/', 'bright-action/'].some((prefix) => String(name).startsWith(prefix))) return realInvoke(name, options)
   const path = String(name).split('/v1/identity/')[1] || ''
   const body = options.body || {}

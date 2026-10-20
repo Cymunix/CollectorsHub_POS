@@ -34,6 +34,20 @@ async function call(name, params) {
 
 export const createJob = (storeId, locationId, collectorUserId, kind, details = {}) => call('cs_create_job', { p_store_id: storeId, p_location_id: locationId || null, p_collector_user_id: collectorUserId, p_kind: kind, p_details: details })
 export const requestAuthorisation = (jobId) => call('cs_request_authorisation', { p_job_id: jobId })
+
+// Emails the collector the approval link for the job's pending authorisation
+// (supabase/functions/send-scan-approval). Resolves to the masked address it went to.
+export const APPROVAL_EMAIL_FUNCTION = 'send-scan-approval'
+export async function emailApprovalRequest(jobId) {
+  const { data, error } = await supabase.functions.invoke(APPROVAL_EMAIL_FUNCTION, { body: { jobId } })
+  if (error || data?.error) {
+    let message = data?.error || error?.message || 'The approval email could not be sent.'
+    try { const details = await error?.context?.json?.(); if (details?.error) message = details.error } catch {}
+    if (error?.context?.status === 404 && !/collector|email/i.test(message)) message = 'Approval emails are not set up yet (deploy the send-scan-approval Edge Function in Supabase).'
+    throw new Error(message)
+  }
+  return { sentTo: data?.sentTo || '' }
+}
 export const listJobs = (storeId, { kind = 'dropoff', filter = 'active', search = '' } = {}) => call('cs_jobs', { p_store_id: storeId, p_kind: kind, p_filter: filter, p_search: search })
 export const loadJob = (jobId) => call('cs_job', { p_job_id: jobId })
 export const loadJobItems = (jobId, { status = null, containerId = null, limit = 200, offset = 0 } = {}) => call('cs_job_items', { p_job_id: jobId, p_status: status, p_container_id: containerId, p_limit: limit, p_offset: offset })

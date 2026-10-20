@@ -14648,3 +14648,18 @@ small.cs-warn { display: block; font-size: 12px; }
 .reason-dialog-actions button { background: #FFFFFF; border: 1px solid #E3E8EF; border-radius: 8px; cursor: pointer; font-weight: 800; min-height: 38px; padding: 0 14px; }
 .reason-dialog-actions button.gold-button { background: #D6A632; border-color: #D6A632; color: #0B111B; }
 .reason-dialog-actions button:disabled { cursor: default; opacity: .5; }
+
+.cs-auth-email {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.cs-auth-email.sent {
+  color: #1f6b3a;
+}
+
+.cs-auth-email.failed {
+  color: #a12a2a;
+}

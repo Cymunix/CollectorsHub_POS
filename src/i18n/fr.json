@@ -1,5 +1,9 @@
 {
  "-All": "-Tous",
+ "Approval email sent": "Courriel d’approbation envoyé",
+ "Resend email": "Renvoyer le courriel",
+ "Sending the approval email…": "Envoi du courriel d’approbation…",
+ "The collector gets an email with a link, signs in to their own CollectorsHub account and approves.": "Le collectionneur reçoit un courriel avec un lien, se connecte à son propre compte CollectorsHub et approuve.",
  "— non-persisting; created stores &amp; sales reset when the session ends.": "— non conservé; les magasins et ventes créés sont réinitialisés à la fin de la session.",
  "— required": "— obligatoire",
  "— Select —": "— Choisir —",

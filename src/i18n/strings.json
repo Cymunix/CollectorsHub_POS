@@ -1,5 +1,9 @@
 [
  "-All",
+ "Approval email sent",
+ "Resend email",
+ "Sending the approval email…",
+ "The collector gets an email with a link, signs in to their own CollectorsHub account and approves.",
  "— Auto —",
  "— Auto from province —",
  "— No address —",
