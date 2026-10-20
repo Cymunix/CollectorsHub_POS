@@ -3756,6 +3756,7 @@
  "The loan goes back to active (e.g. the customer is paying, or there's a dispute).": "Le prêt redevient actif (p. ex. le client paie, ou il y a une contestation).",
  "The local AI could not read this card.": "L’IA locale n’a pas pu lire cette carte.",
  "The local AI is not available.": "L’IA locale n’est pas disponible.",
+ "The local store could not be opened.": "Le magasin local n’a pas pu être ouvert.",
  "The local AI isn't ready, so scanned cards will wait in the queue.": "L’IA locale n’est pas prête; les cartes numérisées attendront dans la file.",
  "The member chose not to share their wishlist": "Le membre a choisi de ne pas partager sa liste de souhaits",
  "The member confirmed. Their store history, credit and notes are kept on this customer.": "Le membre a confirmé. Son historique en magasin, son crédit et ses notes sont conservés sur ce client.",

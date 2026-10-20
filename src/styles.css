@@ -66,6 +66,14 @@ button:disabled {
   color: #68768a;
 }
 
+.loading-screen .loading-error {
+  color: #a12a2a;
+  max-width: 560px;
+  padding: 0 16px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 .login-screen {
   align-items: center;
   background:

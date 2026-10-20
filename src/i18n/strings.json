@@ -4156,6 +4156,7 @@
  "The loan goes back to active (e.g. the customer is paying, or there's a dispute).",
  "The local AI could not read this card.",
  "The local AI is not available.",
+ "The local store could not be opened.",
  "The local AI isn't ready, so scanned cards will wait in the queue.",
  "The member chose not to share their wishlist",
  "The member confirmed. Their store history, credit and notes are kept on this customer.",

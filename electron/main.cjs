@@ -7,7 +7,7 @@ const path = require('node:path')
 if (process.env.NORDVIK_DESKTOP_RENDERER_URL) {
   app.setPath('userData', path.join(app.getPath('appData'), 'collectorshub-pos-dev'))
 }
-const { appendFile, copyFile, mkdir, readdir, readFile, stat, statfs, unlink, writeFile } = require('node:fs/promises')
+const { appendFile, copyFile, mkdir, readdir, readFile, rename, stat, statfs, unlink, writeFile } = require('node:fs/promises')
 const { existsSync, readFileSync } = require('node:fs')
 const { pathToFileURL } = require('node:url')
 const { randomUUID } = require('node:crypto')
@@ -622,11 +622,62 @@ async function ensureStore() {
   await mkdir(dataDir, { recursive: true })
 
   if (!existsSync(storeFile)) {
-    await writeFile(storeFile, JSON.stringify(createInitialStore(), null, 2))
+    if (existsSync(getStoreBackupFile())) return readStoreFile(getStoreBackupFile())
+    await writeStoreFile(createInitialStore())
   }
 
-  const raw = await readFile(storeFile, 'utf8')
-  return JSON.parse(raw)
+  try {
+    return await readStoreFile(storeFile)
+  } catch (error) {
+    // A damaged store (e.g. the app was closed mid-save by an older version) is kept aside,
+    // never deleted, and the last good copy is used instead.
+    const aside = path.join(dataDir, `store.damaged-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+    await copyFile(storeFile, aside).catch(() => {})
+    if (existsSync(getStoreBackupFile())) {
+      const backup = await readStoreFile(getStoreBackupFile())
+      await writeStoreFile(backup)
+      return backup
+    }
+    throw new Error(`The local store file is damaged and there is no backup to restore. It was kept at ${aside}. (${error.message})`)
+  }
+}
+
+function getStoreBackupFile() {
+  return path.join(getDataDir(), 'store.backup.json')
+}
+
+async function readStoreFile(file) {
+  return JSON.parse(await readFile(file, 'utf8'))
+}
+
+// Saves are written to a temporary file and then swapped in, one at a time, so the store file
+// is never left half-written if the app is closed (or updated) during a save. The previous good
+// copy is kept as store.backup.json.
+let storeWriteChain = Promise.resolve()
+function writeStoreFile(store) {
+  const run = storeWriteChain.then(async () => {
+    const file = getStoreFile()
+    const temp = `${file}.tmp`
+    await mkdir(getDataDir(), { recursive: true })
+    await writeFile(temp, JSON.stringify(store, null, 2))
+    if (existsSync(file)) await copyFile(file, getStoreBackupFile()).catch(() => {})
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await rename(temp, file)
+        break
+      } catch (error) {
+        // Windows can briefly lock the file (antivirus, indexer): retry, then copy over it.
+        if (attempt >= 4) {
+          await copyFile(temp, file)
+          await unlink(temp).catch(() => {})
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
+      }
+    }
+  })
+  storeWriteChain = run.catch(() => {})
+  return run
 }
 
 async function saveStore(nextStore) {
@@ -639,8 +690,7 @@ async function saveStore(nextStore) {
     },
   }
 
-  await mkdir(getDataDir(), { recursive: true })
-  await writeFile(getStoreFile(), JSON.stringify(store, null, 2))
+  await writeStoreFile(store)
   return store
 }
 

@@ -219,6 +219,8 @@ function App() {
   const storeRef = useRef(store)
   storeRef.current = store
   const [isLoaded, setIsLoaded] = useState(false)
+  // Why the local store couldn't be opened (shown instead of an endless loading screen).
+  const [loadError, setLoadError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [dataPath, setDataPath] = useState('')
   const [search, setSearch] = useState('')
@@ -284,7 +286,9 @@ function App() {
       }
     }
 
-    load()
+    load().catch((error) => {
+      if (!cancelled) setLoadError(error?.message || String(error))
+    })
 
     return () => {
       cancelled = true
@@ -920,7 +924,12 @@ function App() {
       <main className="loading-screen">
         <div>
           <strong>CollectorsHub Desktop</strong>
-          <span>Preparing local store...</span>
+          {loadError ? (
+            <>
+              <span>The local store could not be opened.</span>
+              <small className="loading-error">{loadError}</small>
+            </>
+          ) : <span>Preparing local store...</span>}
         </div>
       </main>
     )
