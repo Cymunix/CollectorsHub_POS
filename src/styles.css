@@ -14853,3 +14853,6 @@ small.cs-warn { display: block; font-size: 12px; }
   font-style: normal;
   font-weight: 700;
 }
+
+/* Store scan intake: a graded slab's grading company, grade and cert, under its card. */
+.store-scan-slab { grid-column: 2 / -1; grid-row: 2; }

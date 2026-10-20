@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient'
 import { resolvePrimaryLocation } from './sync'
+import { GRADED, UNGRADED, isRawCardCondition } from './cardCondition'
 
 // Store scan intake: scanned cards that matched a catalogue item are added to
 // the signed-in store's stock exactly the way the website adds stock - a
@@ -8,7 +9,9 @@ import { resolvePrimaryLocation } from './sync'
 // batch is its own record (own cost, condition and price); the Inventory
 // screen groups copies of a card. Never creates catalogue items.
 
-export const CARD_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged']
+// Store stock cards are Ungraded or Graded (lib/cardCondition). Cards scanned
+// into a collector's collection keep the collection's condition scale.
+export const COLLECTION_CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged']
 
 function money(value) {
   if (value === '' || value == null) return null
@@ -22,13 +25,14 @@ function makeSku(name) {
 }
 
 // Returns { inventoryId, created }.
-export async function addScannedCardToStock({ session, item, condition = 'Near Mint', quantity = 1, sellPrice = '', buyPrice = '' }) {
+export async function addScannedCardToStock({ session, item, condition = UNGRADED, gradingCompany = '', grade = '', certNumber = '', quantity = 1, sellPrice = '', buyPrice = '' }) {
   if (!session?.storeId) throw new Error('No store is signed in.')
   if (!session?.locationId) throw new Error('This store has no location to receive stock into.')
   if (!item?.item_id) throw new Error('Pick the catalogue item for this card first.')
   const count = Math.max(1, parseInt(quantity, 10) || 1)
   const sell = money(sellPrice)
   const buy = money(buyPrice)
+  const graded = condition === GRADED
 
   // Each scanned batch of a card becomes its own stock record (its own cost,
   // condition and price), never merged into an existing one.
@@ -36,7 +40,11 @@ export async function addScannedCardToStock({ session, item, condition = 'Near M
     store_id: session.storeId,
     catalog_item_id: item.item_id,
     sku: makeSku(item.card_number || item.name || item.subject),
-    condition,
+    // A card queued before Ungraded/Graded (Near Mint etc.) goes in as Ungraded.
+    condition: graded ? GRADED : isRawCardCondition(condition) || !condition ? UNGRADED : condition,
+    grade: graded ? String(grade || '').trim() || null : null,
+    grading_company: graded ? String(gradingCompany || '').trim() || null : null,
+    cert_number: graded ? String(certNumber || '').trim() || null : null,
     cost_basis: buy,
     buy_price: buy,
     sell_price: sell,

@@ -3,13 +3,16 @@ import { ScanLine, Search, X } from 'lucide-react'
 import { analyseRecognizedCard } from './lib/adminData'
 import { searchDesktopTradeCatalogue } from './lib/registerBackend'
 import { sendWishlistAlerts, useWishlistDemand, wantedLabel, wantedTitle } from './lib/wishlistDemand'
-import { addScannedCardToStock, CARD_CONDITIONS } from './lib/storeScan'
+import { addScannedCardToStock, COLLECTION_CONDITIONS } from './lib/storeScan'
+import { CARD_CONDITIONS, GRADED, UNGRADED } from './lib/cardCondition'
 import ConditionHint from './ConditionHint'
+import SlabCertFields from './SlabCertFields'
 import { readScannerPref, writeScannerPref } from './AdminWorkspace'
 
 // Store scan intake (store staff): scan cards on the FastFoto or flatbed, the
 // local AI identifies them, each is matched to the catalogue, and matched
-// cards are added to this store's stock with a condition, quantity and price.
+// cards are added to this store's stock as Ungraded or Graded (with the
+// slab's grading company, grade and cert), with a quantity and price.
 // Cards the catalogue doesn't have are never created here - staff can search
 // for the right item or skip the card.
 //
@@ -127,8 +130,9 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       backImage,
       feed: feedInfo,
       category: categoryRef.current,
-      // Set by the AI once the card is identified; staff can change it.
-      condition: '',
+      // Store stock: Ungraded unless staff mark it Graded. Collection: set by
+      // the AI once the card is identified (test stores); staff can change it.
+      condition: toCollection ? '' : UNGRADED,
       quantity: 1,
       sellPrice: defaultsRef.current.sellPrice,
       buyPrice: defaultsRef.current.buyPrice,
@@ -175,8 +179,9 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             status: best ? 'ready' : candidates.length ? 'choose' : 'unmatched',
           })
           // The AI's suggested condition (test stores only, while it's being
-          // tested), unless staff already chose one.
-          const suggested = session?.aiCondition ? response.result?.suggested_condition : null
+          // tested) for a collector's collection, unless staff already chose
+          // one. Store stock is Ungraded/Graded, so it doesn't apply there.
+          const suggested = session?.aiCondition && toCollection ? response.result?.suggested_condition : null
           if (suggested) {
             save((list) => list.map((entry) => (entry.id === card.id
               ? { ...entry, conditionSuggestion: { condition: suggested, notes: response.result.condition_notes || [] }, ...(entry.conditionTouched ? {} : { condition: suggested }) }
@@ -237,6 +242,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       patch(card.id, { error: session?.aiCondition ? "Pick a condition (the AI didn't suggest one)." : 'Pick a condition.' })
       return false
     }
+    if (!toCollection && card.condition === GRADED && !String(card.gradingCompany || '').trim()) {
+      patch(card.id, { error: 'Pick the grading company for this slab.' })
+      return false
+    }
     const previous = card.status
     patch(card.id, { status: 'adding', error: '' })
     if (toCollection) {
@@ -250,7 +259,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       }
     }
     try {
-      const outcome = await addScannedCardToStock({ session, item: card.item, condition: card.condition, quantity: card.quantity, sellPrice: card.sellPrice, buyPrice: card.buyPrice })
+      const outcome = await addScannedCardToStock({ session, item: card.item, condition: card.condition, gradingCompany: card.gradingCompany, grade: card.grade, certNumber: card.certificationNumber, quantity: card.quantity, sellPrice: card.sellPrice, buyPrice: card.buyPrice })
       patch(card.id, { status: 'added', addedAt: new Date().toISOString(), inventoryId: outcome.inventoryId, addedAsNew: outcome.created })
       // Stock in: members with this item on their wishlist get an email (in the background).
       sendWishlistAlerts(session?.storeId)
@@ -381,16 +390,29 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             </div>
             {['ready', 'choose', 'unmatched'].includes(card.status) ? (
               <div className="store-scan-card-fields">
-                <span className="store-scan-condition">
-                  <select value={card.condition || ''} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true, error: '' })} title={session?.aiCondition ? 'Condition (set by the AI; change it if needed)' : 'Condition'}>
-                    {!card.condition ? <option value="">Condition…</option> : null}
-                    {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
-                    {card.condition && !CARD_CONDITIONS.includes(card.condition) ? <option>{card.condition}</option> : null}
-                  </select>
-                  <ConditionHint suggestion={card.conditionSuggestion} current={card.condition} />
-                </span>
+                {toCollection ? (
+                  <span className="store-scan-condition">
+                    <select value={card.condition || ''} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true, error: '' })} title={session?.aiCondition ? 'Condition (set by the AI; change it if needed)' : 'Condition'}>
+                      {!card.condition ? <option value="">Condition…</option> : null}
+                      {COLLECTION_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+                      {card.condition && !COLLECTION_CONDITIONS.includes(card.condition) ? <option>{card.condition}</option> : null}
+                    </select>
+                    <ConditionHint suggestion={card.conditionSuggestion} current={card.condition} />
+                  </span>
+                ) : (
+                  <span className="store-scan-condition">
+                    <select value={card.condition === GRADED ? GRADED : UNGRADED} onChange={(event) => patch(card.id, { condition: event.target.value, error: '' })} title="Ungraded, or a graded slab">
+                      {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+                    </select>
+                  </span>
+                )}
                 <input type="number" min="1" value={card.quantity} onChange={(event) => patch(card.id, { quantity: event.target.value })} title="Quantity" />
                 {toCollection ? null : <input inputMode="decimal" value={card.sellPrice} onChange={(event) => patch(card.id, { sellPrice: event.target.value })} placeholder="Price" title="Sell price" />}
+              </div>
+            ) : null}
+            {!toCollection && card.condition === GRADED && ['ready', 'choose', 'unmatched'].includes(card.status) ? (
+              <div className="store-scan-slab">
+                <SlabCertFields storeId={session?.storeId} gradingCompany={card.gradingCompany} grade={card.grade} cert={card.certificationNumber} onChange={(fields) => patch(card.id, { ...fields, error: '' })} />
               </div>
             ) : null}
             <div className="store-scan-card-actions">
@@ -406,7 +428,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       {done.length ? (
         <details className="store-scan-done">
           <summary>{done.length} {toCollection ? 'saved' : 'added to stock'} this session</summary>
-          <ul>{done.slice(0, 200).map((card) => <li key={card.id}>{card.savedForReview ? `${card.result ? cardTitle(card.result) : 'Unidentified card'} · saved for review` : `${itemLabel(card.item)} · ${card.condition} · ×${card.quantity}`}{toCollection ? '' : `${card.sellPrice ? ` · $${card.sellPrice}` : ''}${card.addedAsNew ? '' : ' (quantity added to existing stock)'}`}</li>)}</ul>
+          <ul>{done.slice(0, 200).map((card) => <li key={card.id}>{card.savedForReview ? `${card.result ? cardTitle(card.result) : 'Unidentified card'} · saved for review` : `${itemLabel(card.item)} · ${card.condition === GRADED ? [card.gradingCompany, card.grade].filter(Boolean).join(' ') || GRADED : card.condition} · ×${card.quantity}`}{toCollection ? '' : `${card.sellPrice ? ` · $${card.sellPrice}` : ''}${card.addedAsNew ? '' : ' (quantity added to existing stock)'}`}</li>)}</ul>
           <button type="button" onClick={() => save((list) => list.filter((card) => !['added', 'skipped'].includes(card.status)))}>Clear finished</button>
         </details>
       ) : null}

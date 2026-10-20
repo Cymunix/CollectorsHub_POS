@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Ban, CheckCircle2, Clock3, Mail, QrCode, RefreshCw, Search, ShieldQuestion, UserRound, X, XCircle } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import StoreScanIntake, { CatalogueSearchDialog } from '../StoreScanIntake'
-import { CARD_CONDITIONS } from '../lib/storeScan'
+import { COLLECTION_CONDITIONS } from '../lib/storeScan'
 import { emailApprovalRequest, importPreview, loadJob, loadJobItems, memberQueryFrom, requestAuthorisation, saveScannedCard, updateItem } from '../lib/collectionScanning'
 
 // Shared pieces of Scan Centre -> Collector Collection.
@@ -281,8 +281,8 @@ export function ReviewItems({ jobId, containers = [], editable = true, onChanged
                   <td>{locked ? item.condition || '—' : (
                     <select value={item.condition || ''} onChange={(event) => change(item, { condition: event.target.value })}>
                       {!item.condition ? <option value="">Condition…</option> : null}
-                      {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
-                      {item.condition && !CARD_CONDITIONS.includes(item.condition) ? <option>{item.condition}</option> : null}
+                      {COLLECTION_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+                      {item.condition && !COLLECTION_CONDITIONS.includes(item.condition) ? <option>{item.condition}</option> : null}
                     </select>
                   )}</td>
                   <td>{locked ? item.quantity : <input type="number" min="1" max="999" defaultValue={item.quantity} onBlur={(event) => { const value = Number(event.target.value); if (value && value !== item.quantity) change(item, { quantity: value }) }} />}</td>

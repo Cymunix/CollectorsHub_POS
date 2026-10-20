@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient'
+import { UNGRADED, isCardCategory, ungradedStat } from './cardCondition'
 
 const CATALOGUE_IMAGE_BUCKET = 'item-images'
 
@@ -318,10 +319,13 @@ function normalizeMarketCondition(condition) {
 function preferredConditionForCategory(category) {
   const text = String(category || '').toLowerCase()
   if (text.includes('lego') || text.includes('building')) return 'New/Sealed'
+  if (isCardCategory(text)) return UNGRADED
   return 'Near Mint'
 }
 
 function marketValueForCondition(marketStats, condition) {
+  // Ungraded cards: every raw-card sale (Near Mint, Lightly Played…) together.
+  if (condition === UNGRADED) return ungradedStat(marketStats?.byCondition)
   const normalized = normalizeMarketCondition(condition)
   return marketStats?.byCondition?.[normalized] || null
 }

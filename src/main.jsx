@@ -64,6 +64,7 @@ import { deviceLanguage, setLanguage } from './i18n/runtime'
 setLanguage(deviceLanguage())
 import ConditionHint from './ConditionHint'
 import SlabCertFields from './SlabCertFields'
+import { CARD_CONDITIONS, GRADED, UNGRADED, isCardCategory, isRawCardCondition, ungradedStat } from './lib/cardCondition'
 import MyHRView from './MyHR'
 import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
@@ -2061,7 +2062,7 @@ function RegisterView({
     // one row, counted by quantity.
     const stackWith = (session.items || []).find((existing) => stacksWith(existing, {
       catalogItemId: seed.catalogItemId || candidate?.catalogItemId || '',
-      condition: seed.condition || 'Near Mint',
+      condition: seed.graded ? GRADED : UNGRADED,
       graded: !!seed.graded,
     }))
     if (stackWith) {
@@ -2094,7 +2095,7 @@ function RegisterView({
       name,
       sku,
       category: seed.category || candidate?.category || '',
-      condition: seed.condition || 'Near Mint',
+      condition: seed.graded ? GRADED : UNGRADED,
       quantity: 1,
       graded: !!seed.graded,
       gradingCompany: seed.gradingCompany || '',
@@ -2394,7 +2395,8 @@ function RegisterView({
         sku: item.sku || '',
         category: item.category || '',
         image: item.scanImageUrl || '',
-        condition: item.graded ? `${item.gradingCompany || 'Graded'} ${item.grade || ''}`.trim() : item.condition || 'Near Mint',
+        // Scanned cards: Ungraded or Graded (the slab's company, grade and cert go with it).
+        condition: item.graded ? GRADED : UNGRADED,
         quantity: Number(item.quantity || 1),
         unitPrice: 0,
         marketValue: Number(item.marketValue || 0),
@@ -2513,7 +2515,9 @@ function RegisterView({
     const name = sourceItem?.name || sourceItem?.title || query.trim()
     if (!name) return
     const category = sourceItem?.category || ''
-    const condition = sourceItem?.condition || conditionOptions('buy', category)[0] || 'Near Mint'
+    const condition = isCardCategory(category) && (!sourceItem?.condition || isRawCardCondition(sourceItem.condition))
+      ? UNGRADED
+      : sourceItem?.condition || conditionOptions('buy', category)[0] || 'Near Mint'
     const priced = marketValueForLineCondition(sourceItem, condition)
     const marketValue = Number(priced.value ?? sourceItem?.marketValue ?? sourceItem?.price ?? sourceItem?.inStorePrice ?? 0)
     setLines((current) => [
@@ -3268,7 +3272,7 @@ function RegisterView({
                                 {incoming && !line.inventoryId ? (
                                   line.graded
                                     ? <SlabCertFields storeId={authSession?.storeId} gradingCompany={line.gradingCompany} grade={line.grade} cert={line.certificationNumber} onChange={(patch) => updateLine(line.localId, patch)} />
-                                    : <button type="button" className="slab-cert-add" onClick={() => updateLine(line.localId, { graded: true })}>+ Graded slab</button>
+                                    : <button type="button" className="slab-cert-add" onClick={() => updateLine(line.localId, isCardCategory(line.category) ? { graded: true, condition: GRADED } : { graded: true })}>+ Graded slab</button>
                                 ) : null}
                               </span>
                             </span>
@@ -3285,7 +3289,8 @@ function RegisterView({
                                   return
                                 }
                                 const priced = marketValueForLineCondition(line, condition)
-                                const patch = { condition }
+                                // A card bought as Graded gets the slab's company, grade and cert.
+                                const patch = isCardCategory(line.category) ? { condition, graded: condition === GRADED } : { condition }
                                 if (priced.value != null) {
                                   patch.marketValue = priced.value
                                   patch.marketValueSource = priced.source
@@ -3296,6 +3301,7 @@ function RegisterView({
                               }}
                             >
                               {conditionOptions(mode, line.category).map((option) => <option key={option}>{option}</option>)}
+                              {line.condition && !conditionOptions(mode, line.category).includes(line.condition) ? <option>{line.condition}</option> : null}
                             </select>
                           </td>
                           <td>
@@ -4001,18 +4007,19 @@ function ScanStat({ label, value }) {
   )
 }
 
-// The AI's suggested condition for a scanned card, as item fields (test
-// stores only, while it's being tested).
+// The AI's read of a scanned card's condition, shown behind the ? icon (test
+// stores only, while it's being tested). Cards are Ungraded/Graded, so it
+// doesn't set the condition.
 function conditionSeed(result, enabled) {
   if (!enabled || !result?.suggested_condition) return {}
-  return { condition: result.suggested_condition, conditionSuggestion: { condition: result.suggested_condition, notes: result.condition_notes || [] } }
+  return { conditionSuggestion: { condition: result.suggested_condition, notes: result.condition_notes || [] } }
 }
 
 // Same identified card in the same condition, neither graded: they share a
 // row and count by quantity.
 function stacksWith(a, b) {
   return Boolean(a?.catalogItemId) && a.catalogItemId === b?.catalogItemId && !a.graded && !b.graded
-    && (a.condition || 'Near Mint') === (b.condition || 'Near Mint')
+    && (a.condition || UNGRADED) === (b.condition || UNGRADED)
 }
 
 // Quantity typed freely (cleared while typing), saved on Enter or leaving
@@ -4066,9 +4073,9 @@ function ScannedItemRow({ item, storeId, onRemove, onUpdate }) {
         {item.duplicateWarning ? <em>Possible duplicate: verify this is another physical copy.</em> : null}
       </div>
       <label>
-        <span className="condition-label">Condition <ConditionHint suggestion={item.conditionSuggestion} current={item.condition} /></span>
-        <select value={item.condition || 'Near Mint'} onChange={(event) => onUpdate({ condition: event.target.value })}>
-          {conditionOptions('buy', item.category).map((option) => <option key={option}>{option}</option>)}
+        <span className="condition-label">Condition <ConditionHint suggestion={item.conditionSuggestion} /></span>
+        <select value={item.graded ? GRADED : UNGRADED} onChange={(event) => onUpdate({ condition: event.target.value, graded: event.target.value === GRADED })}>
+          {CARD_CONDITIONS.map((option) => <option key={option}>{option}</option>)}
         </select>
       </label>
       <label>
@@ -4082,10 +4089,6 @@ function ScannedItemRow({ item, storeId, onRemove, onUpdate }) {
       <label>
         Cash Offer
         <MoneyInput value={item.cashOffer} onChange={(value) => onUpdate({ cashOffer: value })} />
-      </label>
-      <label className="scan-graded-toggle">
-        Graded
-        <input type="checkbox" checked={!!item.graded} onChange={(event) => onUpdate({ graded: event.target.checked })} />
       </label>
       {item.graded ? (
         <div className="scan-graded-fields">
@@ -4599,7 +4602,8 @@ function suggestedStoreCreditOffer(marketValue) {
 function marketValueForLineCondition(item, condition) {
   const normalized = normalizeRegisterCondition(condition)
   const values = item?.conditionMarketValues || item?.marketStats?.byCondition || {}
-  const stat = values[normalized] || Object.entries(values).find(([key]) => normalizeRegisterCondition(key) === normalized)?.[1]
+  // Ungraded cards: every raw-card sale (Near Mint, Lightly Played…) together.
+  const stat = normalized === UNGRADED ? ungradedStat(values) : values[normalized] || Object.entries(values).find(([key]) => normalizeRegisterCondition(key) === normalized)?.[1]
   if (!stat) return { value: null, source: '', count: 0 }
   const value = Number(stat.average30Day ?? stat.average ?? stat.marketValue ?? stat.value)
   if (!Number.isFinite(value)) return { value: null, source: '', count: Number(stat.count || 0) }
@@ -4742,8 +4746,8 @@ function conditionOptions(mode, category) {
   if (!isCollectibleCategory(category)) {
     return ['New', 'Open Box', 'Used - Like New', 'Used - Good', 'Used - Fair', 'Damaged', 'N/A']
   }
-  // Single cards (sports and trading cards) use the card grading scale only.
-  if (categoryText.includes('card')) return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged']
+  // Single cards (sports and trading cards): Ungraded or Graded.
+  if (categoryText.includes('card')) return CARD_CONDITIONS
 
   return ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged', 'New/Sealed', 'Used/Complete']
 }
