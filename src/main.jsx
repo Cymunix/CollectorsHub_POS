@@ -66,6 +66,7 @@ import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
 import { analyseRecognizedCard } from './lib/adminData'
 import { signInAdmin, signInStaff, signOutSupabase } from './lib/auth'
+import { useWishlistDemand, wantedLabel } from './lib/wishlistDemand'
 import { calcLocationTax, closeRegisterShift, completeDesktopCheckout, completeDesktopRefund, loadActiveStorePromotions, loadDesktopCatalogueItem, loadReceiptBranding, loadRegisterLocation, openRegisterShift, searchDesktopTradeCatalogue, verifyRegisterManagerApproval } from './lib/registerBackend'
 import { syncCustomersFromSupabase, syncInventoryFromSupabase } from './lib/sync'
 import { favoriteStockAlerts, loadStoreFavorites, setFavoriteThreshold, setStoreFavorite } from './lib/storeFavorites'
@@ -1688,6 +1689,8 @@ function RegisterView({
   const tax = taxApplies ? calcLocationTax(registerLocation, taxableSubtotal).total : 0
   const saleTotal = taxableSubtotal + tax
   const netDue = mode === 'buy' ? saleTotal - tradeOfferTotal : saleTotal
+  // Items being bought that members (whose wishlist the store can see) are looking for.
+  const wishlistDemand = useWishlistDemand(authSession?.storeId, lines.filter((line) => line.direction === 'incoming').map((line) => line.catalogItemId))
   const amountDue = Math.max(0, netDue)
   const payoutDue = Math.max(0, -netDue)
   const paidTotal = appliedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
@@ -3232,6 +3235,7 @@ function RegisterView({
                               <span>
                                 <strong>{line.name}</strong>
                                 <small>{[line.sku ? `SKU ${line.sku}` : '', incoming ? 'Customer item' : line.category].filter(Boolean).join(' | ')}</small>
+                                {incoming && wishlistDemand[line.catalogItemId] ? <small className="wanted-badge" title="On the wishlist of members who share their wishlist with this store">♥ {wantedLabel(wishlistDemand[line.catalogItemId])}</small> : null}
                               </span>
                             </span>
                           </td>

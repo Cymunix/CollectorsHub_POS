@@ -14671,3 +14671,18 @@ small.cs-warn { display: block; font-size: 12px; }
 .cs-auth-email.failed {
   color: #a12a2a;
 }
+
+/* Item a member is looking for (wishlist), shown while the store is buying. */
+.wanted-badge {
+  align-self: flex-start;
+  background: #fdecef;
+  border: 1px solid #f5b8c4;
+  border-radius: 10px;
+  color: #a3203f;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 3px;
+  padding: 1px 8px;
+  width: fit-content;
+}
