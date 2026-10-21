@@ -4783,13 +4783,16 @@ function ChecklistImportDialog({ onClose }) {
   const [error, setError] = useState('')
   const [result, setResult] = useState(null)
   const categoryRow = categories.find((row) => row.name === category)
-  const trading = category === 'Trading Cards'
+  // Sports Cards list a team and pick a season; every other category is
+  // number + name with a release year (Trading Cards, comics, LEGO, ...).
+  const trading = category !== 'Sports Cards'
+  const cards = category === 'Sports Cards' || category === 'Trading Cards'
   const rows = useMemo(() => parseChecklist(text, { teams: !trading }).map((row) => (row.error || row.collection ? row : { ...row, collection: collection.trim() })), [text, trading, collection])
   const good = rows.filter((row) => !row.error)
   const bad = rows.filter((row) => row.error)
 
   useEffect(() => {
-    loadAdminCategories().then((list) => setCategories(list.filter((row) => ['Sports Cards', 'Trading Cards'].includes(row.name)))).catch(() => setCategories([]))
+    loadAdminCategories().then((list) => setCategories(list)).catch(() => setCategories([]))
   }, [])
 
   useEffect(() => {
@@ -4920,10 +4923,10 @@ function ChecklistImportDialog({ onClose }) {
               {categories.map((row) => <option key={row.category_id}>{row.name}</option>)}
             </select>
           </label>
-          {select('subcategory_id', trading ? 'Subcategory (brand)' : 'Subcategory (sport)', options.subcategory, false)}
+          {select('subcategory_id', !cards ? 'Subcategory' : trading ? 'Subcategory (brand)' : 'Subcategory (sport)', options.subcategory, false)}
           {select('franchise_id', trading ? 'Franchise' : 'Franchise (league)', options.franchise, !chosen.subcategory_id)}
-          {select('subset_id', trading ? 'Subfranchise (set / era)' : 'Subfranchise (product line)', options.subset, !chosen.franchise_id)}
-          {select('property_id', trading ? 'Property (release)' : 'Property (set)', options.property, !chosen.franchise_id)}
+          {select('subset_id', !cards ? 'Subfranchise' : trading ? 'Subfranchise (set / era)' : 'Subfranchise (product line)', options.subset, !chosen.franchise_id)}
+          {select('property_id', !cards ? 'Property' : trading ? 'Property (release)' : 'Property (set)', options.property, !chosen.franchise_id)}
           {trading ? (
             <label>Release year
               <input type="number" value={releaseYear} onChange={(event) => { setReleaseYear(event.target.value); setExisting(null) }} placeholder="e.g. 2025" disabled={Boolean(busy)} />
@@ -4940,7 +4943,7 @@ function ChecklistImportDialog({ onClose }) {
           {select('publisher_id', 'Publisher', options.publisher, false)}
         </div>
         <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection or parallel in [brackets] overrides the Collection box and /99 sets the print run, so one card can be listed once per parallel. Lists copied from a price guide ("Aaron Jones [Cracked Ice Ticket] #64 /25") work too)
-          <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
+          <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={!cards ? '1 First item\n2 Second item\n75192 Millennium Falcon' : trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
         </label>
         <div className="checklist-summary">
           <span>{good.length} card{good.length === 1 ? '' : 's'} read{bad.length ? ` · ${bad.length} line${bad.length === 1 ? '' : 's'} skipped` : ''}</span>
@@ -4952,7 +4955,7 @@ function ChecklistImportDialog({ onClose }) {
         {good.length ? (
           <div className="checklist-preview">
             <table className="admin-table">
-              <thead><tr><th>#</th><th>{trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}{showSerial ? <th>Numbered</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
+              <thead><tr><th>#</th><th>{!cards ? 'Name' : trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}{showSerial ? <th>Numbered</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
               <tbody>
                 {good.slice(0, 400).map((row, index) => (
                   <tr key={`${index}-${row.number}`}>
