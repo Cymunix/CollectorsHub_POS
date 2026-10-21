@@ -7392,6 +7392,27 @@ button:disabled {
   border-top-color: #b42318;
 }
 
+.update-prompt section.bulk-edit-dialog {
+  max-height: 88vh;
+  max-width: 880px;
+  overflow: auto;
+  width: min(880px, 92vw);
+}
+
+.bulk-edit-dialog .modal-actions {
+  align-items: center;
+  background: #ffffff;
+  bottom: -28px;
+  padding: 10px 0;
+  position: sticky;
+}
+
+.bulk-edit-count {
+  color: #64748b;
+  font-size: 13px;
+  margin-right: auto;
+}
+
 .bulk-delete-confirm {
   display: grid;
   font-weight: 700;

@@ -2309,6 +2309,81 @@ export async function saveCatalogueItemEdits({ item, propertyId = '', values, dy
   return { item: updated, changed, warnings }
 }
 
+const BULK_EDIT_COLUMNS = CATALOGUE_EDIT_GROUPS.flatMap((group) => group.fields).filter((field) => !field.link).map((field) => field.key)
+
+// The selected items' editable values, for editing them together: each
+// item's columns and dynamic_fields, plus its Property link.
+export async function loadBulkEditItems(itemIds = []) {
+  const ids = [...new Set(itemIds)].filter(Boolean)
+  const items = []
+  const propertyByItem = new Map()
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const [{ data, error }, { data: links, error: linkError }] = await Promise.all([
+      supabase.from('items').select(['item_id', ...BULK_EDIT_COLUMNS, 'dynamic_fields'].join(',')).in('item_id', chunk),
+      supabase.from('item_properties').select('item_id, property_id').in('item_id', chunk),
+    ])
+    if (error) throw error
+    if (linkError) throw linkError
+    items.push(...(data || []))
+    ;(links || []).forEach((row) => { if (!propertyByItem.has(row.item_id)) propertyByItem.set(row.item_id, row.property_id) })
+  }
+  return items.map((item) => ({ item, values: catalogueEditValues(item, propertyByItem.get(item.item_id) || '') }))
+}
+
+// Bulk edit: sets the changed columns on every item, merges dynamic_fields
+// key by key into each item's own (dynamicRemove keys are deleted), and
+// relinks Property. values holds only the fields the admin changed.
+export async function saveBulkCatalogueEdits({ items = [], values = {}, dynamicSet = {}, dynamicRemove = [], onProgress = () => {} }) {
+  const fields = CATALOGUE_EDIT_GROUPS.flatMap((group) => group.fields)
+  const ids = items.map(({ item }) => item.item_id)
+  const updated = new Set()
+  const failed = new Map()
+  const fail = (id, message) => { if (!failed.has(id)) failed.set(id, { id, message }) }
+
+  const patch = {}
+  fields.filter((field) => !field.link && field.key in values).forEach((field) => { patch[field.key] = editColumnValue(field, values[field.key]) })
+  if (Object.keys(patch).length) {
+    const result = await updateCatalogueItems(ids, patch, (progress) => onProgress({ phase: 'Updating fields', ...progress }))
+    result.updated.forEach((id) => updated.add(id))
+    result.failed.forEach((entry) => fail(entry.id, entry.message))
+  }
+
+  if (Object.keys(dynamicSet).length || dynamicRemove.length) {
+    const done = []
+    for (let i = 0; i < items.length; i += 10) {
+      await Promise.all(items.slice(i, i + 10).map(async ({ item }) => {
+        const dynamic = { ...(item.dynamic_fields || {}), ...dynamicSet }
+        dynamicRemove.forEach((key) => { delete dynamic[key] })
+        const { data, error } = await supabase.from('items').update({ dynamic_fields: dynamic }).eq('item_id', item.item_id).select('item_id')
+        if (error) fail(item.item_id, error.message)
+        else if (!data?.length) fail(item.item_id, 'Not updated (no permission or already removed).')
+        else { updated.add(item.item_id); done.push(item.item_id) }
+      }))
+      onProgress({ phase: 'Updating category data', done: Math.min(i + 10, items.length), total: items.length })
+    }
+    if (done.length) backupCatalogueChange({ action: 'update', itemIds: done, payload: { dynamic_fields_set: dynamicSet, dynamic_fields_removed: dynamicRemove } })
+  }
+
+  if ('property_id' in values) {
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200)
+      const { error: deleteError } = await supabase.from('item_properties').delete().in('item_id', chunk)
+      if (deleteError) { chunk.forEach((id) => fail(id, `Property was not changed: ${deleteError.message}`)); continue }
+      if (values.property_id) {
+        const { error: insertError } = await supabase.from('item_properties').insert(chunk.map((itemId) => ({ item_id: itemId, property_id: values.property_id })))
+        if (insertError) { chunk.forEach((id) => fail(id, `Property was not changed: ${insertError.message}`)); continue }
+      }
+      chunk.forEach((id) => updated.add(id))
+      onProgress({ phase: 'Updating property', done: Math.min(i + 200, ids.length), total: ids.length })
+    }
+    backupCatalogueChange({ action: 'update', itemIds: ids, payload: { property_id: values.property_id || null } })
+  }
+
+  failed.forEach((entry) => updated.delete(entry.id))
+  return { updated: [...updated], failed: [...failed.values()] }
+}
+
 export async function loadSportsTaxonomyOptions({ category = 'Sports Cards', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
   return loadTaxonomyLevels({ categoryId: await categoryIdForName(category), subcategoryId, franchiseId, subsetId })
 }
@@ -3030,8 +3105,24 @@ export function checklistItemKey({ number, collection = '', parallel = '' }) {
   return [cardNumberText(number), collectionKey(collection), matchText(parallel)].join('|')
 }
 
-const CHECKLIST_NOISE = /^(\*\s*)?(\+\s*(collection|wishlist)\b|(un)?graded\b|price\b|\$)/i
-const CHECKLIST_LEADING_NUMBER = /^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)[.):]?\s+(.+)$/
+// Where a checklist number is stored, as the website does: LEGO minifigs keep
+// theirs in minifig_code (pha009, sw0001a), other LEGO in lego_set_number.
+export function checklistNumberColumn(category = '', itemTypeName = '') {
+  if (category === 'Sports Cards' || category === 'Trading Cards') return 'card_number'
+  if (/minifig/i.test(itemTypeName)) return 'minifig_code'
+  if (/lego|building block/i.test(category)) return 'lego_set_number'
+  return 'card_number'
+}
+
+// An item's number in its set, whichever column holds it.
+export function checklistItemNumber(item = {}) {
+  return item.card_number || item.minifig_code || item.lego_set_number || item.catalog_code || ''
+}
+
+const CHECKLIST_NOISE =/^(\*\s*)?(\+\s*(collection|wishlist)\b|(un)?graded\b|price\b|\$)/i
+// The number, then a space, ".", ")", ":" or "," before the name
+// ("1 Bulbasaur", "pha009, Mummy", "sw0001a,Battle Droid").
+const CHECKLIST_LEADING_NUMBER = /^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)(?:[.):,]\s*|\s+)(.+)$/
 
 export function parseChecklist(text, { teams = true, brackets = 'collection' } = {}) {
   const rows = []
@@ -3098,7 +3189,7 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
   const rows = []
   for (let from = 0; ; from += 1000) {
     let query = supabase.from('items')
-      .select(propertyId ? 'item_id, name, subject, card_number, release_year, season, image_path, dynamic_fields, item_properties!inner(property_id)' : 'item_id, name, subject, card_number, release_year, season, image_path, dynamic_fields')
+      .select(`item_id, name, subject, card_number, minifig_code, lego_set_number, catalog_code, release_year, season, image_path, dynamic_fields${propertyId ? ', item_properties!inner(property_id)' : ''}`)
       .eq('category_id', categoryId)
     if (subcategoryId) query = query.eq('subcategory_id', subcategoryId)
     if (franchiseId) query = query.eq('franchise_id', franchiseId)
@@ -3116,11 +3207,12 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
 
 // Creates a placeholder item for each checklist row that the set doesn't have
 // yet. Returns { created: [ids], skipped: number }.
-export async function createChecklistPlaceholders({ category, ids, releaseYear = '', season = '', rows = [], existing = [] }) {
+export async function createChecklistPlaceholders({ category, ids, itemTypeName = '', releaseYear = '', season = '', rows = [], existing = [] }) {
   const categoryId = await categoryIdForName(category)
   if (!categoryId || !ids?.subcategory_id) throw new Error('Choose the set (at least the category and subcategory) first.')
+  const numberColumn = checklistNumberColumn(category, itemTypeName)
   // Already in the catalogue: same number in the same collection.
-  const have = new Set(existing.map((item) => checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel })))
+  const have = new Set(existing.map((item) => checklistItemKey({ number: checklistItemNumber(item), collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel })))
   const todo = rows.filter((row) => !row.error && !have.has(checklistItemKey(row)))
   const created = []
   for (let index = 0; index < todo.length; index += 100) {
@@ -3142,7 +3234,7 @@ export async function createChecklistPlaceholders({ category, ids, releaseYear =
         publisher_id: ids.publisher_id || null,
         name: row.name,
         subject: row.name,
-        card_number: row.number,
+        [numberColumn]: row.number,
         season: seasonKey(season) || null,
         release_year: releaseYear ? Number(releaseYear) : seasonStartYear(season),
         completion_eligible: true,

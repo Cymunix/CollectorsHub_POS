@@ -31,6 +31,8 @@ import {
   loadFranchiseOptions,
   loadSubfranchiseOptions,
   updateCatalogueItems,
+  loadBulkEditItems,
+  saveBulkCatalogueEdits,
   deleteCatalogueItems,
   loadExplorerRecords,
   loadImagesMediaData,
@@ -49,6 +51,7 @@ import {
   swapItemFrontBack,
   parseChecklist,
   checklistItemKey,
+  checklistItemNumber,
   loadSetItems,
   createChecklistPlaceholders,
   isChecklistPlaceholder,
@@ -1415,32 +1418,214 @@ function AdminCatalogue() {
   )
 }
 
-// Sets one field to the same value on every selected catalogue item (e.g. the release year).
+// Edits the selected catalogue items together: every field the item editor
+// has, showing the value they share (or "Mixed"). Only the fields changed
+// here are written; category data is merged key by key into each item's own.
+const BULK_KEEP = '__keep__'
 export function BulkEditDialog({ itemIds, filterSummary, onClose, onDone }) {
-  const [year, setYear] = useState('')
+  const [loaded, setLoaded] = useState(null)
+  // Field key -> new text, for the fields changed here only.
+  const [edits, setEdits] = useState({})
+  // dynamic_fields key -> { kind, value } or { remove: true }.
+  const [dynamicEdits, setDynamicEdits] = useState({})
+  const [newKey, setNewKey] = useState('')
+  const [options, setOptions] = useState({})
+  const [names, setNames] = useState({})
   const [progress, setProgress] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const running = Boolean(progress) && !result
-  const yearNumber = Number(year)
-  const validYear = /^\d{4}$/.test(year.trim()) && yearNumber >= 1800 && yearNumber <= 2100
   const count = formatNumber(itemIds.length)
   const plural = itemIds.length === 1 ? '' : 's'
+  const fields = CATALOGUE_EDIT_GROUPS.flatMap((group) => group.fields)
+
+  useEffect(() => {
+    let cancelled = false
+    loadBulkEditItems(itemIds)
+      .then(async (rows) => {
+        if (cancelled) return
+        setLoaded(rows)
+        const first = rows[0]?.values || {}
+        const common = Object.fromEntries(Object.entries(first).filter(([key, value]) => rows.every((row) => row.values[key] === value)))
+        setNames(await loadCatalogueValueNames(common).catch(() => ({})))
+      })
+      .catch((err) => { if (!cancelled) setError(err.message || 'Could not load the selected items.') })
+    return () => { cancelled = true }
+  }, [])
+
+  // Each field's value when every selected item has the same one, else null (mixed).
+  const shared = useMemo(() => {
+    if (!loaded?.length) return {}
+    return Object.fromEntries(fields.map((field) => {
+      const values = new Set(loaded.map((row) => row.values[field.key]))
+      return [field.key, values.size === 1 ? [...values][0] : null]
+    }))
+  }, [loaded])
+  const current = (key) => (key in edits ? edits[key] : shared[key])
+
+  useEffect(() => {
+    if (!loaded) return undefined
+    let cancelled = false
+    loadCatalogueTaxonomyOptions({ categoryId: current('category_id') || '', subcategoryId: current('subcategory_id') || '', franchiseId: current('franchise_id') || '', subsetId: current('subset_id') || '' })
+      .then((next) => { if (!cancelled) setOptions(next) })
+      .catch((err) => { if (!cancelled) setError(err.message || 'Could not load the catalogue choices.') })
+    return () => { cancelled = true }
+  }, [loaded, current('category_id'), current('subcategory_id'), current('franchise_id'), current('subset_id')])
+
+  const categoryId = current('category_id')
+  const categoryName = ((options.category || []).find((option) => option.id === categoryId)?.name || names[`category:${categoryId}`] || '').toLowerCase()
+  const presetKeys = categoryName === 'sports cards' ? SPORTS_DYNAMIC_KEYS : categoryName === 'trading cards' ? TRADING_EDITOR_KEYS : []
+
+  // Every dynamic_fields key on any selected item, with the shared value or null.
+  const dynamicKeys = useMemo(() => {
+    if (!loaded) return []
+    const byKey = new Map()
+    loaded.forEach(({ item }) => Object.entries(item.dynamic_fields || {}).forEach(([key, value]) => {
+      const entry = byKey.get(key) || { key, count: 0, values: new Set(), sample: value }
+      entry.count += 1
+      entry.values.add(stableJson(value))
+      byKey.set(key, entry)
+    }))
+    presetKeys.filter((key) => !byKey.has(key)).forEach((key) => byKey.set(key, { key, count: 0, values: new Set(), sample: LIST_DYNAMIC_KEYS.has(key) ? [] : '' }))
+    Object.keys(dynamicEdits).filter((key) => !byKey.has(key)).forEach((key) => byKey.set(key, { key, count: 0, values: new Set(), sample: '' }))
+    return [...byKey.values()].map((entry) => {
+      const kind = dynamicRowKind(entry.sample)
+      const same = entry.count === loaded.length && entry.values.size === 1
+      return { key: entry.key, count: entry.count, kind, value: same ? dynamicValueText(kind, entry.sample) : entry.count ? null : '' }
+    }).sort((a, b) => a.key.localeCompare(b.key))
+  }, [loaded, presetKeys, dynamicEdits])
+
+  function setValue(key, value) {
+    setEdits((currentEdits) => {
+      const next = { ...currentEdits }
+      const children = CATALOGUE_EDIT_CHILDREN[key] || []
+      if (value === BULK_KEEP || value === shared[key]) {
+        delete next[key]
+        children.forEach((child) => { delete next[child] })
+      } else {
+        const changed = next[key] !== value
+        next[key] = value
+        // A new parent clears the levels below it (their choices depend on it).
+        if (changed) children.forEach((child) => { if (shared[child] === '') delete next[child]; else next[child] = '' })
+      }
+      return next
+    })
+  }
+
+  function setDynamic(row, value) {
+    setDynamicEdits((currentEdits) => {
+      const next = { ...currentEdits }
+      if (value === BULK_KEEP || (value === row.value && row.count)) delete next[row.key]
+      else next[row.key] = { kind: row.kind, value }
+      return next
+    })
+  }
+
+  function toggleRemove(row) {
+    setDynamicEdits((currentEdits) => {
+      const next = { ...currentEdits }
+      if (next[row.key]?.remove) delete next[row.key]
+      else next[row.key] = { remove: true }
+      return next
+    })
+  }
+
+  function addDynamicField() {
+    const key = newKey.trim().toLowerCase().replace(/\s+/g, '_')
+    if (!key || dynamicKeys.some((row) => row.key === key)) return
+    setDynamicEdits((currentEdits) => ({ ...currentEdits, [key]: { kind: 'text', value: '' } }))
+    setNewKey('')
+  }
+
+  const changedLabels = [
+    ...fields.filter((field) => field.key in edits).map((field) => field.label),
+    ...Object.keys(dynamicEdits).map((key) => dynamicFieldLabel(key)),
+  ]
 
   async function run() {
     setError('')
-    setProgress({ done: 0, total: itemIds.length })
+    const dynamicSet = {}
+    const dynamicRemove = []
     try {
-      setResult(await updateCatalogueItems(itemIds, { release_year: yearNumber }, setProgress))
+      Object.entries(dynamicEdits).forEach(([key, edit]) => {
+        if (edit.remove) dynamicRemove.push(key)
+        else Object.assign(dynamicSet, dynamicFieldsFromRows([{ key, kind: edit.kind, value: edit.value, existed: true }]))
+      })
+    } catch (err) {
+      setError(err.message)
+      return
+    }
+    setProgress({ phase: 'Updating', done: 0, total: itemIds.length })
+    try {
+      setResult(await saveBulkCatalogueEdits({ items: loaded, values: edits, dynamicSet, dynamicRemove, onProgress: setProgress }))
     } catch (err) {
       setError(err.message || 'Update failed.')
       setProgress(null)
     }
   }
 
+  function renderInput(field) {
+    const value = current(field.key)
+    const mixed = value === null && !(field.key in edits)
+    const keep = mixed ? <option value={BULK_KEEP}>Mixed (keep each item's)</option> : null
+    if (field.taxonomy) {
+      const list = options[field.taxonomy] || []
+      const parent = TAXONOMY_PARENT[field.taxonomy]
+      const parentValue = parent ? current(parent) : 'none'
+      const ready = !parent || Boolean(parentValue)
+      const choices = value && !list.some((option) => option.id === value)
+        ? [{ id: value, name: names[`${field.taxonomy}:${value}`] || 'Current value' }, ...list]
+        : list
+      const blocked = parent && parentValue === null
+      return (
+        <select value={mixed ? BULK_KEEP : value} onChange={(event) => setValue(field.key, event.target.value)} disabled={running || Boolean(blocked && mixed)} title={blocked ? 'The selected items have different values in the level above: set it first.' : ''}>
+          {keep}
+          <option value="">{ready ? 'None' : blocked ? 'Mixed above: set the level above first' : 'Select the level above first'}</option>
+          {ready ? choices.map((option) => <option key={option.id} value={option.id}>{option.name}</option>) : null}
+        </select>
+      )
+    }
+    if (field.type === 'boolean') {
+      return (
+        <select value={mixed ? BULK_KEEP : value} onChange={(event) => setValue(field.key, event.target.value)} disabled={running}>
+          {keep}
+          <option value="">—</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      )
+    }
+    const props = { value: value ?? '', onChange: (event) => setValue(field.key, event.target.value), placeholder: mixed ? "Mixed (keep each item's)" : '', disabled: running }
+    if (field.multiline) return <textarea rows={3} {...props} />
+    return <input type={field.type === 'number' ? 'number' : 'text'} {...props} />
+  }
+
+  function renderDynamicInput(row) {
+    const edit = dynamicEdits[row.key]
+    const value = edit && !edit.remove ? edit.value : row.value
+    const mixed = !edit && row.value === null
+    const choices = DYNAMIC_FIELD_CHOICES[row.key]
+    const disabled = running || Boolean(edit?.remove)
+    const onChange = (event) => setDynamic(row, event.target.value)
+    if (row.kind === 'boolean' || (choices && row.kind === 'text')) {
+      const list = row.kind === 'boolean' ? [['true', 'Yes'], ['false', 'No']] : (value && !choices.includes(value) ? [value, ...choices] : choices).map((choice) => [choice, choice])
+      return (
+        <select value={mixed ? BULK_KEEP : value} onChange={onChange} disabled={disabled}>
+          {mixed ? <option value={BULK_KEEP}>Mixed (keep each item's)</option> : null}
+          {row.kind === 'boolean' ? null : <option value="">—</option>}
+          {list.map(([choice, label]) => <option key={choice} value={choice}>{label}</option>)}
+        </select>
+      )
+    }
+    const placeholder = mixed ? `Mixed (keep each item's)` : row.kind === 'list' ? 'One per line' : ''
+    if (row.kind === 'list' || row.kind === 'json') return <textarea className={row.kind === 'json' ? 'catalogue-editor-json' : ''} rows={Math.min(8, String(value ?? '').split('\n').length + 1)} value={value ?? ''} onChange={onChange} placeholder={placeholder} spellCheck={row.kind === 'json' ? 'false' : undefined} disabled={disabled} />
+    return <input type={row.kind === 'number' ? 'number' : 'text'} value={value ?? ''} onChange={onChange} placeholder={placeholder} disabled={disabled} />
+  }
+
+  const total = loaded?.length || 0
   return (
     <div className="register-modal update-prompt" role="dialog" aria-modal="true" aria-labelledby="bulk-edit-title">
-      <section className="bulk-delete-dialog">
+      <section className="bulk-edit-dialog">
         <p className="update-prompt-kicker">Edit catalogue items</p>
         <h2 id="bulk-edit-title">{result ? 'Update finished' : `Edit ${count} catalogue item${plural}`}</h2>
         {!result ? (
@@ -1449,28 +1634,79 @@ export function BulkEditDialog({ itemIds, filterSummary, onClose, onDone }) {
             {progress ? (
               <div className="local-ai-progress">
                 <div className="local-ai-progress-bar"><span style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} /></div>
-                <small>Updating: {formatNumber(progress.done)} of {formatNumber(progress.total)}</small>
+                <small>{progress.phase}: {formatNumber(progress.done)} of {formatNumber(progress.total)}</small>
               </div>
-            ) : (
-              <label className="bulk-delete-confirm"><span>New release year for all {count} item{plural}</span>
-                <input autoFocus type="number" min="1800" max="2100" value={year} onChange={(event) => setYear(event.target.value)} placeholder="e.g. 2008" />
-              </label>
-            )}
+            ) : null}
+            {!loaded && !error ? <p className="scan-mode-note">Loading the selected items…</p> : null}
+            {loaded ? (
+              <>
+                <small>Change any field to set it on all {count} item{plural}. Fields you leave alone keep each item's own value.</small>
+                <table className="scan-review-table catalogue-editor-table">
+                  {CATALOGUE_EDIT_GROUPS.map((group) => (
+                    <tbody key={group.id}>
+                      <tr className="scan-review-group"><th colSpan={2}>{group.label}</th></tr>
+                      {group.fields.map((field) => (
+                        <tr key={field.key} className={field.key in edits ? 'edited' : ''}>
+                          <th scope="row">{field.label}</th>
+                          <td>
+                            <div className="catalogue-editor-dynamic">
+                              {renderInput(field)}
+                              {field.key in edits ? <button type="button" onClick={() => setValue(field.key, BULK_KEEP)} disabled={running} title="Undo this change">Undo</button> : null}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  ))}
+                  <tbody>
+                    <tr className="scan-review-group"><th colSpan={2}>{presetKeys.length ? 'Card Metadata & Other Data' : 'Category Data'} <small>(dynamic_fields)</small></th></tr>
+                    {dynamicKeys.map((row) => {
+                      const edit = dynamicEdits[row.key]
+                      return (
+                        <tr key={row.key} className={edit ? 'edited' : ''}>
+                          <th scope="row">
+                            {dynamicFieldLabel(row.key)}
+                            <small className="catalogue-editor-key">{row.key}{row.count && row.count < total ? ` · on ${formatNumber(row.count)} of ${formatNumber(total)}` : ''}{edit?.remove ? ' · will be removed' : ''}</small>
+                          </th>
+                          <td>
+                            <div className="catalogue-editor-dynamic">
+                              {renderDynamicInput(row)}
+                              {edit && !edit.remove ? <button type="button" onClick={() => setDynamicEdits((currentEdits) => { const next = { ...currentEdits }; delete next[row.key]; return next })} disabled={running} title="Undo this change">Undo</button> : null}
+                              {row.count ? <button type="button" className="catalogue-editor-remove" onClick={() => toggleRemove(row)} disabled={running} aria-label={edit?.remove ? `Keep ${row.key}` : `Remove ${row.key} from every item`} title={edit?.remove ? 'Keep this field' : 'Remove this field from every selected item'}>{edit?.remove ? '↺' : '×'}</button> : null}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    <tr>
+                      <th scope="row">Add field</th>
+                      <td>
+                        <div className="catalogue-editor-dynamic">
+                          <input value={newKey} onChange={(event) => setNewKey(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addDynamicField() } }} placeholder="field_name" disabled={running} />
+                          <button type="button" onClick={addDynamicField} disabled={!newKey.trim() || running}>Add</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </>
+            ) : null}
           </>
         ) : (
           <div className="bulk-delete-result">
-            <p><strong>{formatNumber(result.updated.length)}</strong> updated to {yearNumber}.</p>
+            <p><strong>{formatNumber(result.updated.length)}</strong> updated: {changedLabels.join(', ')}.</p>
             {result.failed.length ? <p><strong>{formatNumber(result.failed.length)}</strong> could not be updated: {result.failed[0].message}</p> : null}
           </div>
         )}
         {error ? <p className="admin-error">{error}</p> : null}
         <div className="modal-actions">
           {result ? (
-            <button className="update-prompt-primary" type="button" onClick={() => onDone(result, `the release year (${yearNumber})`)}>Done</button>
+            <button className="update-prompt-primary" type="button" onClick={() => onDone(result, changedLabels.length === 1 ? changedLabels[0] : `${changedLabels.length} fields`)}>Done</button>
           ) : (
             <>
+              <span className="bulk-edit-count">{changedLabels.length ? `${changedLabels.length} field${changedLabels.length === 1 ? '' : 's'} to change` : 'No changes'}</span>
               <button type="button" onClick={onClose} disabled={running}>Cancel</button>
-              <button className="update-prompt-primary" type="button" onClick={run} disabled={running || !itemIds.length || !validYear}>{running ? 'Updating…' : `Update ${count}`}</button>
+              <button className="update-prompt-primary" type="button" onClick={run} disabled={running || !loaded?.length || !changedLabels.length}>{running ? 'Updating…' : `Update ${count}`}</button>
             </>
           )}
         </div>
@@ -1624,12 +1860,15 @@ function dynamicRowKind(value) {
   return 'text'
 }
 
+function dynamicValueText(kind, value) {
+  return kind === 'json' ? JSON.stringify(value, null, 2) : kind === 'list' ? value.join('\n') : value == null ? '' : String(value)
+}
+
 // presetKeys: the category's card-metadata keys, shown even when empty.
 function dynamicRowsFrom(dynamicFields = {}, presetKeys = []) {
   const rows = Object.entries(dynamicFields || {}).map(([key, value]) => {
     const kind = dynamicRowKind(value)
-    const text = kind === 'json' ? JSON.stringify(value, null, 2) : kind === 'list' ? value.join('\n') : value == null ? '' : String(value)
-    return { key, kind, value: text, existed: true }
+    return { key, kind, value: dynamicValueText(kind, value), existed: true }
   })
   presetKeys.filter((key) => !rows.some((row) => row.key === key)).forEach((key) => rows.push({ key, kind: LIST_DYNAMIC_KEYS.has(key) ? 'list' : 'text', value: '', existed: false }))
   return rows.sort((a, b) => a.key.localeCompare(b.key))
@@ -4847,7 +5086,8 @@ function ChecklistImportDialog({ onClose }) {
     setBusy('create')
     setError('')
     try {
-      const outcome = await createChecklistPlaceholders({ category, ids: chosen, releaseYear: trading ? releaseYear : '', season: trading ? '' : season, rows: good, existing: existing || [] })
+      const itemTypeName = (options.item_type || []).find((option) => option.id === chosen.item_type_id)?.name || ''
+      const outcome = await createChecklistPlaceholders({ category, ids: chosen, itemTypeName, releaseYear: trading ? releaseYear : '', season: trading ? '' : season, rows: good, existing: existing || [] })
       setResult(outcome)
       await checkSet()
     } catch (createError) {
@@ -4858,7 +5098,7 @@ function ChecklistImportDialog({ onClose }) {
   }
 
   // Same card = same number in the same collection.
-  const byNumber = new Map((existing || []).map((item) => [checklistItemKey({ number: item.card_number, collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel }), item]))
+  const byNumber = new Map((existing || []).map((item) => [checklistItemKey({ number: checklistItemNumber(item), collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel }), item]))
   const status = (row) => {
     const item = byNumber.get(checklistItemKey(row))
     if (!item) return 'new'
@@ -4943,7 +5183,7 @@ function ChecklistImportDialog({ onClose }) {
           {select('publisher_id', 'Publisher', options.publisher, false)}
         </div>
         <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection or parallel in [brackets] overrides the Collection box and /99 sets the print run, so one card can be listed once per parallel. Lists copied from a price guide ("Aaron Jones [Cracked Ice Ticket] #64 /25") work too)
-          <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={!cards ? '1 First item\n2 Second item\n75192 Millennium Falcon' : trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
+          <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={!cards ? '75192 Millennium Falcon\npha009, Mummy Warrior\nsw0001a, Battle Droid' : trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
         </label>
         <div className="checklist-summary">
           <span>{good.length} card{good.length === 1 ? '' : 's'} read{bad.length ? ` · ${bad.length} line${bad.length === 1 ? '' : 's'} skipped` : ''}</span>
