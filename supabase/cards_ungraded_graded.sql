@@ -3,7 +3,7 @@
 -- Single cards no longer use a condition scale (Near Mint, Lightly Played…): a card in
 -- store stock is 'Ungraded', or 'Graded' with its grading company, grade and cert number
 -- in their own columns. This converts the store stock that's already there:
---   * a card with a grading company or cert, or whose condition names a grader
+--   * a card with a grading company, cert or grade, or whose condition names a grader
 --     ("PSA 10", "BGS 9.5", "Graded…"), becomes 'Graded';
 --   * every other card becomes 'Ungraded'.
 -- A grader written only in the condition ("PSA 10" with no grading company or grade
@@ -26,6 +26,15 @@ BEGIN
     FROM public.items i JOIN public.categories c ON c.category_id = i.category_id
    WHERE i.item_id = si.catalog_item_id AND c.name ILIKE '%card%'
      AND si.condition ~* v_grader
+     AND NULLIF(btrim(si.grading_company), '') IS NULL;
+
+  -- The website saved graded stock with no condition and the grader in the grade
+  -- ("PSA 10"): keep the grader in grading_company too.
+  UPDATE public.store_inventory si
+     SET grading_company = upper(substring(si.grade::text FROM v_grader))
+    FROM public.items i JOIN public.categories c ON c.category_id = i.category_id
+   WHERE i.item_id = si.catalog_item_id AND c.name ILIKE '%card%'
+     AND si.grade::text ~* v_grader
      AND NULLIF(btrim(si.grading_company), '') IS NULL;
 
   IF v_grade_is_text THEN
@@ -54,6 +63,7 @@ BEGIN
      SET condition = CASE
            WHEN NULLIF(btrim(si.grading_company), '') IS NOT NULL
              OR NULLIF(btrim(si.cert_number), '') IS NOT NULL
+             OR NULLIF(btrim(si.grade::text), '') IS NOT NULL
              OR si.condition ~* v_grader
              OR si.condition ~* '^\s*graded'
            THEN 'Graded' ELSE 'Ungraded' END
@@ -62,6 +72,7 @@ BEGIN
      AND si.condition IS DISTINCT FROM (CASE
            WHEN NULLIF(btrim(si.grading_company), '') IS NOT NULL
              OR NULLIF(btrim(si.cert_number), '') IS NOT NULL
+             OR NULLIF(btrim(si.grade::text), '') IS NOT NULL
              OR si.condition ~* v_grader
              OR si.condition ~* '^\s*graded'
            THEN 'Graded' ELSE 'Ungraded' END);
