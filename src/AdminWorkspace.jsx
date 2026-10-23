@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
   Boxes,
+  ClipboardCheck,
   CircleAlert,
   Database,
   FileUp,
@@ -41,7 +42,6 @@ import {
   fetchMarketSales,
   approveMarketSales,
   generateMarketSearchQuery,
-  loadStoresOrganizationsData,
   loadTaxonomyData,
   loadUsersData,
   identifyScannedDraft,
@@ -52,6 +52,10 @@ import {
   parseChecklist,
   checklistItemKey,
   checklistItemNumber,
+  parseSetRefs,
+  isLegoCategory,
+  propertyParentKey,
+  taxonomyChildren,
   loadSetItems,
   createChecklistPlaceholders,
   isChecklistPlaceholder,
@@ -109,6 +113,8 @@ import { looseCardKey, scanConfidence } from './lib/scanConfidence'
 import UpdateCheck from './UpdateCheck'
 import IdentityReviews from './identity/IdentityReviews'
 import PawnJurisdictions from './pawn/PawnJurisdictions'
+import StoreManagement from './org/StoreManagement'
+import OnboardingAdmin from './onboarding/OnboardingAdmin'
 import { SUPABASE_PUBLIC_CONFIG } from './lib/supabaseClient'
 
 const adminNav = [
@@ -121,7 +127,8 @@ const adminNav = [
   { key: 'media', label: 'Images & Media', icon: Image },
   { key: 'pricing', label: 'Pricing / Sales Data', icon: Layers3 },
   { key: 'market', label: 'Market Data', icon: FileSearch },
-  { key: 'stores', label: 'Stores & Organisations', icon: Store },
+  { key: 'stores', label: 'Store Management', icon: Store },
+  { key: 'onboarding', label: 'Onboarding', icon: ClipboardCheck },
   { key: 'users', label: 'Users', icon: Users },
   { key: 'identity', label: 'Identity Reviews', icon: Users },
   { key: 'pawn', label: 'Pawn Jurisdictions', icon: Scale },
@@ -970,7 +977,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         {activeView === 'media' ? <AdminSectionBrowser title="Images & Media" kicker="Catalogue media administration" loader={loadImagesMediaData} /> : null}
         {activeView === 'pricing' ? <AdminSectionBrowser title="Pricing / Sales Data" kicker="Valuation and sales inputs" loader={loadPricingData} /> : null}
         {activeView === 'market' ? <MarketDataAdmin storeContext={storeContext} /> : null}
-        {activeView === 'stores' ? <AdminSectionBrowser title="Stores & Organisations" kicker="Enterprise account administration" loader={loadStoresOrganizationsData} /> : null}
+        {activeView === 'stores' ? <StoreManagement /> : null}
+        {activeView === 'onboarding' ? <OnboardingAdmin session={session} /> : null}
         {activeView === 'users' ? <AdminSectionBrowser title="Users" kicker="Profiles and memberships" loader={loadUsersData} /> : null}
         {activeView === 'identity' ? <IdentityReviews /> : null}
         {activeView === 'pawn' ? <PawnJurisdictions /> : null}
@@ -1498,7 +1506,7 @@ export function BulkEditDialog({ itemIds, filterSummary, onClose, onDone }) {
   function setValue(key, value) {
     setEdits((currentEdits) => {
       const next = { ...currentEdits }
-      const children = CATALOGUE_EDIT_CHILDREN[key] || []
+      const children = taxonomyChildren(key, categoryName)
       if (value === BULK_KEEP || value === shared[key]) {
         delete next[key]
         children.forEach((child) => { delete next[child] })
@@ -1570,7 +1578,7 @@ export function BulkEditDialog({ itemIds, filterSummary, onClose, onDone }) {
     const keep = mixed ? <option value={BULK_KEEP}>Mixed (keep each item's)</option> : null
     if (field.taxonomy) {
       const list = options[field.taxonomy] || []
-      const parent = TAXONOMY_PARENT[field.taxonomy]
+      const parent = field.taxonomy === 'property' ? propertyParentKey(categoryName) : TAXONOMY_PARENT[field.taxonomy]
       const parentValue = parent ? current(parent) : 'none'
       const ready = !parent || Boolean(parentValue)
       const choices = value && !list.some((option) => option.id === value)
@@ -1645,7 +1653,7 @@ export function BulkEditDialog({ itemIds, filterSummary, onClose, onDone }) {
                   {CATALOGUE_EDIT_GROUPS.map((group) => (
                     <tbody key={group.id}>
                       <tr className="scan-review-group"><th colSpan={2}>{group.label}</th></tr>
-                      {group.fields.map((field) => (
+                      {group.fields.filter((field) => !field.lego || isLegoCategory(categoryName)).map((field) => (
                         <tr key={field.key} className={field.key in edits ? 'edited' : ''}>
                           <th scope="row">{field.label}</th>
                           <td>
@@ -1964,7 +1972,7 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
   function setValue(key, value) {
     setValues((current) => {
       const next = { ...current, [key]: value }
-      if (current[key] !== value) (CATALOGUE_EDIT_CHILDREN[key] || []).forEach((child) => { next[child] = '' })
+      if (current[key] !== value) taxonomyChildren(key, categoryName).forEach((child) => { next[child] = '' })
       return next
     })
   }
@@ -1997,7 +2005,7 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
     const value = values[field.key] ?? ''
     if (field.taxonomy) {
       const list = options[field.taxonomy] || []
-      const parent = TAXONOMY_PARENT[field.taxonomy]
+      const parent = field.taxonomy === 'property' ? propertyParentKey(categoryName) : TAXONOMY_PARENT[field.taxonomy]
       const ready = !parent || Boolean(values[parent])
       const choices = value && !list.some((option) => option.id === value)
         ? [{ id: value, name: names[`${field.taxonomy}:${value}`] || 'Current value' }, ...list]
@@ -2054,7 +2062,7 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
         {CATALOGUE_EDIT_GROUPS.map((group) => (
           <tbody key={group.id}>
             <tr className="scan-review-group"><th colSpan={2}>{group.label}</th></tr>
-            {group.fields.map((field) => (
+            {group.fields.filter((field) => !field.lego || isLegoCategory(categoryName)).map((field) => (
               <tr key={field.key} className={changedKeys.includes(field.key) ? 'edited' : ''}>
                 <th scope="row">{field.label}</th>
                 <td>{renderInput(field)}</td>
@@ -5026,7 +5034,12 @@ function ChecklistImportDialog({ onClose }) {
   // number + name with a release year (Trading Cards, comics, LEGO, ...).
   const trading = category !== 'Sports Cards'
   const cards = category === 'Sports Cards' || category === 'Trading Cards'
-  const rows = useMemo(() => parseChecklist(text, { teams: !trading }).map((row) => (row.error || row.collection ? row : { ...row, collection: collection.trim() })), [text, trading, collection])
+  // LEGO: lines (or the In set box) can name the sets each item comes in.
+  const lego = /lego|building block/i.test(category)
+  const [inSetText, setInSetText] = useState('')
+  const [seriesText, setSeriesText] = useState('')
+  const inSets = lego ? parseSetRefs(inSetText) : []
+  const rows = useMemo(() => parseChecklist(text, { teams: !trading, sets: lego }).map((row) => (row.error || row.collection ? row : { ...row, collection: collection.trim() })), [text, trading, lego, collection])
   const good = rows.filter((row) => !row.error)
   const bad = rows.filter((row) => row.error)
 
@@ -5052,7 +5065,7 @@ function ChecklistImportDialog({ onClose }) {
   }, [categoryRow?.category_id, chosen.subcategory_id, chosen.franchise_id, chosen.subset_id])
 
   function choose(key, value) {
-    const children = { subcategory_id: ['franchise_id', 'subset_id', 'property_id', 'item_type_id'], franchise_id: ['subset_id', 'property_id'], subset_id: ['property_id'] }[key] || []
+    const children = taxonomyChildren(key, category, { subcategory_id: ['franchise_id', 'subset_id', 'property_id', 'item_type_id'], franchise_id: ['subset_id', 'property_id'], subset_id: ['property_id'] })
     setChosen((current) => {
       const next = { ...current, [key]: value }
       children.forEach((child) => { next[child] = '' })
@@ -5068,7 +5081,8 @@ function ChecklistImportDialog({ onClose }) {
   }
 
   // Sports sets span seasons: the season picks one year's cards.
-  const setChosenEnough = Boolean(chosen.subcategory_id && chosen.franchise_id && (chosen.subset_id || chosen.property_id) && (trading || seasonKey(season)))
+  // LEGO: a Property (under the Subcategory) is enough on its own.
+  const setChosenEnough = Boolean(chosen.subcategory_id && (lego ? chosen.property_id || (chosen.franchise_id && chosen.subset_id) : chosen.franchise_id && (chosen.subset_id || chosen.property_id)) && (trading || seasonKey(season)))
 
   async function checkSet() {
     setBusy('check')
@@ -5087,7 +5101,7 @@ function ChecklistImportDialog({ onClose }) {
     setError('')
     try {
       const itemTypeName = (options.item_type || []).find((option) => option.id === chosen.item_type_id)?.name || ''
-      const outcome = await createChecklistPlaceholders({ category, ids: chosen, itemTypeName, releaseYear: trading ? releaseYear : '', season: trading ? '' : season, rows: good, existing: existing || [] })
+      const outcome = await createChecklistPlaceholders({ category, ids: chosen, itemTypeName, releaseYear: trading ? releaseYear : '', season: trading ? '' : season, series: lego ? seriesText : '', rows: good, existing: existing || [], inSets })
       setResult(outcome)
       await checkSet()
     } catch (createError) {
@@ -5106,6 +5120,9 @@ function ChecklistImportDialog({ onClose }) {
   }
   const counts = { new: 0, placeholder: 0, scanned: 0 }
   good.forEach((row) => { if (existing) counts[status(row)] += 1 })
+  // Rows to link to LEGO sets (their own sets, or the In set box).
+  const linkCount = lego ? good.filter((row) => row.sets?.length || inSets.length).length : 0
+  const showSets = lego && good.some((row) => row.sets?.length)
   const scannedInSet = (existing || []).filter((item) => !isChecklistPlaceholder(item)).length
   const missingNumbers = existing ? good.filter((row) => status(row) !== 'scanned').map((row) => (row.collection ? `${row.number} (${row.collection})` : row.number)) : []
   const showCollection = good.some((row) => row.collection)
@@ -5166,7 +5183,7 @@ function ChecklistImportDialog({ onClose }) {
           {select('subcategory_id', !cards ? 'Subcategory' : trading ? 'Subcategory (brand)' : 'Subcategory (sport)', options.subcategory, false)}
           {select('franchise_id', trading ? 'Franchise' : 'Franchise (league)', options.franchise, !chosen.subcategory_id)}
           {select('subset_id', !cards ? 'Subfranchise' : trading ? 'Subfranchise (set / era)' : 'Subfranchise (product line)', options.subset, !chosen.franchise_id)}
-          {select('property_id', !cards ? 'Property' : trading ? 'Property (release)' : 'Property (set)', options.property, !chosen.franchise_id)}
+          {select('property_id', !cards ? 'Property' : trading ? 'Property (release)' : 'Property (set)', options.property, lego ? !chosen.subcategory_id : !chosen.franchise_id)}
           {trading ? (
             <label>Release year
               <input type="number" value={releaseYear} onChange={(event) => { setReleaseYear(event.target.value); setExisting(null) }} placeholder="e.g. 2025" disabled={Boolean(busy)} />
@@ -5181,8 +5198,19 @@ function ChecklistImportDialog({ onClose }) {
           </label>
           {select('item_type_id', 'Item type', options.item_type, !chosen.subcategory_id)}
           {select('publisher_id', 'Publisher', options.publisher, false)}
+          {lego ? (
+            <label>Series (optional)
+              <input value={seriesText} onChange={(event) => setSeriesText(event.target.value)} placeholder="e.g. Agents 1.0" disabled={Boolean(busy)} />
+            </label>
+          ) : null}
+          {lego ? (
+            <label>In set (LEGO set numbers)
+              <input value={inSetText} onChange={(event) => { setInSetText(event.target.value); setResult(null) }} placeholder="e.g. 7306, links every line to it" disabled={Boolean(busy)} />
+              {inSetText.trim() && !inSets.length ? <small className="admin-error">Set numbers only, e.g. 7306 or 7306-1 7326</small> : null}
+            </label>
+          ) : null}
         </div>
-        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection or parallel in [brackets] overrides the Collection box and /99 sets the print run, so one card can be listed once per parallel. Lists copied from a price guide ("Aaron Jones [Cracked Ice Ticket] #64 /25") work too)
+        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection or parallel in [brackets] overrides the Collection box and /99 sets the print run, so one card can be listed once per parallel. Lists copied from a price guide ("Aaron Jones [Cracked Ice Ticket] #64 /25") work too{lego ? '. LEGO: end a line with the sets it comes in to link it to them ("pha009, Mummy Warrior, 7306 7326", "x2" for two in a set)' : ''})
           <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={!cards ? '75192 Millennium Falcon\npha009, Mummy Warrior\nsw0001a, Battle Droid' : trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
         </label>
         <div className="checklist-summary">
@@ -5195,7 +5223,7 @@ function ChecklistImportDialog({ onClose }) {
         {good.length ? (
           <div className="checklist-preview">
             <table className="admin-table">
-              <thead><tr><th>#</th><th>{!cards ? 'Name' : trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}{showSerial ? <th>Numbered</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
+              <thead><tr><th>#</th><th>{!cards ? 'Name' : trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}{showSerial ? <th>Numbered</th> : null}{showSets ? <th>In sets</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
               <tbody>
                 {good.slice(0, 400).map((row, index) => (
                   <tr key={`${index}-${row.number}`}>
@@ -5204,6 +5232,7 @@ function ChecklistImportDialog({ onClose }) {
                     {trading ? null : <td>{row.team || '—'}</td>}
                     {showCollection ? <td>{row.collection || 'Base'}</td> : null}
                     {showSerial ? <td>{row.serial || ''}</td> : null}
+                    {showSets ? <td>{(row.sets || []).map((ref) => (ref.quantity > 1 ? `${ref.number} ×${ref.quantity}` : ref.number)).join(', ')}</td> : null}
                     <td>{[row.rookie ? 'RC' : '', row.shortPrint ? 'SP' : ''].filter(Boolean).join(' ') || ''}</td>
                     {existing ? <td className={`checklist-status ${status(row)}`}>{{ new: 'Will be created', placeholder: 'Placeholder', scanned: 'Scanned' }[status(row)]}</td> : null}
                   </tr>
@@ -5212,11 +5241,12 @@ function ChecklistImportDialog({ onClose }) {
             </table>
           </div>
         ) : null}
-        {result ? <p className="admin-success">Created {result.created.length} placeholder{result.created.length === 1 ? '' : 's'}{result.skipped ? ` (${result.skipped} already in the catalogue)` : ''}.</p> : null}
+        {result ? <p className="admin-success">Created {result.created.length} placeholder{result.created.length === 1 ? '' : 's'}{result.skipped ? ` (${result.skipped} already in the catalogue)` : ''}.{result.linked ? ` Linked ${result.linked} to their set${result.linked === 1 ? '' : 's'}.` : ''}</p> : null}
+        {result?.missingSets?.length ? <p className="scan-mode-note">Not linked: set{result.missingSets.length === 1 ? '' : 's'} {result.missingSets.slice(0, 20).join(', ')}{result.missingSets.length > 20 ? ` and ${result.missingSets.length - 20} more` : ''} {result.missingSets.length === 1 ? 'is' : 'are'} not in the catalogue yet. Add {result.missingSets.length === 1 ? 'it' : 'them'}, then run this again to link.</p> : null}
         {error ? <p className="admin-error">{error}</p> : null}
         <div className="modal-actions">
           <button type="button" onClick={onClose} disabled={Boolean(busy)}>Close</button>
-          <button className="update-prompt-primary" type="button" onClick={create} disabled={!existing || !counts.new || Boolean(busy) || !chosen.item_type_id}>{busy === 'create' ? 'Creating…' : `Create ${counts.new} placeholder${counts.new === 1 ? '' : 's'}`}</button>
+          <button className="update-prompt-primary" type="button" onClick={create} disabled={!existing || !(counts.new || linkCount) || Boolean(busy) || !chosen.item_type_id}>{busy === 'create' ? 'Saving…' : [counts.new || !linkCount ? `Create ${counts.new} placeholder${counts.new === 1 ? '' : 's'}` : '', linkCount ? `${counts.new ? 'link' : 'Link'} ${linkCount} to sets` : ''].filter(Boolean).join(' and ')}</button>
         </div>
       </section>
     </div>
@@ -5555,7 +5585,7 @@ const TAXONOMY_PARENT_READY = {
   subcategory: () => true,
   franchise: (values) => Boolean(values.subcategory_id),
   subset: (values) => Boolean(values.franchise_id),
-  property: (values) => Boolean(values.franchise_id),
+  property: (values, category) => Boolean(values[propertyParentKey(category)]),
   item_type: (values) => Boolean(values.subcategory_id),
   publisher: () => true,
 }
@@ -5778,7 +5808,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
       let next = current
       groups.flatMap((group) => group.fields).filter((field) => field.taxonomy).forEach((field) => {
         const list = options[field.taxonomy]
-        if (!list || next[field.key] || touchedRef.current.has(field.key) || !TAXONOMY_PARENT_READY[field.taxonomy](next)) return
+        if (!list || next[field.key] || touchedRef.current.has(field.key) || !TAXONOMY_PARENT_READY[field.taxonomy](next, category)) return
         const pick = matchTaxonomyOption(list, scannedFieldValue(draft, field)) || (list.length === 1 && field.taxonomy !== 'publisher' ? list[0].id : '')
         if (pick) next = { ...next, [field.key]: pick }
       })
@@ -5867,7 +5897,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     setValues((current) => {
       const next = { ...current, [key]: value }
       if (TAXONOMY_CHILDREN[key] && current[key] !== value) {
-        TAXONOMY_CHILDREN[key].forEach((child) => {
+        taxonomyChildren(key, category, TAXONOMY_CHILDREN).forEach((child) => {
           next[child] = ''
           touchedRef.current.delete(child)
         })
@@ -6042,7 +6072,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
       const choices = finalValue && !list.some((option) => option.id === finalValue)
         ? [...list, { id: finalValue, name: taxonomyName(field.taxonomy, finalValue) }]
         : list
-      const ready = TAXONOMY_PARENT_READY[field.taxonomy](values)
+      const ready = TAXONOMY_PARENT_READY[field.taxonomy](values, category)
       return (
         <div className="scan-review-taxonomy">
           <select value={finalValue} onChange={(event) => setValue(field.key, event.target.value)} disabled={!ready}>
@@ -6082,7 +6112,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     const { field, scanned, finalValue } = row
     if (!scanned) return <span className="scan-review-value">—</span>
     if (field.taxonomy) {
-      const ready = TAXONOMY_PARENT_READY[field.taxonomy](values)
+      const ready = TAXONOMY_PARENT_READY[field.taxonomy](values, category)
       return (
         <>
           <span className="scan-review-value">{scanned}</span>

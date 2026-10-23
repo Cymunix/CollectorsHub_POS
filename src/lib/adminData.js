@@ -68,6 +68,7 @@ const CATALOGUE_SELECT = [
   'publisher_id',
   'card_number',
   'lego_set_number',
+  'series',
   'minifig_code',
   'catalog_code',
   'upc',
@@ -1615,6 +1616,7 @@ export const SCAN_REVIEW_GROUPS = [
       { key: 'upc', label: 'Barcode / UPC', column: 'upc' },
       { key: 'catalog_code', label: 'Catalogue code', column: 'catalog_code' },
       { key: 'lego_set_number', label: 'LEGO set number', column: 'lego_set_number', categories: ['LEGO / Building Blocks'] },
+      { key: 'series', label: 'Series (optional, e.g. Agents 1.0)', column: 'series', categories: ['LEGO / Building Blocks'] },
       { key: 'variant', label: 'Variant', path: ['variant'] },
       { key: 'language', label: 'Language', path: ['language'] },
       { key: 'country', label: 'Country', path: ['country'] },
@@ -2170,6 +2172,8 @@ export const CATALOGUE_EDIT_GROUPS = [
       { key: 'subcategory_id', label: 'Subcategory', taxonomy: 'subcategory' },
       { key: 'franchise_id', label: 'Franchise', taxonomy: 'franchise' },
       { key: 'subset_id', label: 'Subfranchise', taxonomy: 'subset' },
+      // Building Blocks only: the optional Series under the Subfranchise (Agents 1.0).
+      { key: 'series', label: 'Series', lego: true },
       // Linked through item_properties, not an items column.
       { key: 'property_id', label: 'Property', taxonomy: 'property', link: true },
       { key: 'item_type_id', label: 'Item Type', taxonomy: 'item_type' },
@@ -2388,11 +2392,38 @@ export async function loadSportsTaxonomyOptions({ category = 'Sports Cards', sub
   return loadTaxonomyLevels({ categoryId: await categoryIdForName(category), subcategoryId, franchiseId, subsetId })
 }
 
+// LEGO Properties (Star Wars, Harry Potter…) belong to a Subcategory, not a
+// Franchise; every other category's Property sits under its Franchise.
+export function isLegoCategory(name = '') {
+  return /lego|building block/i.test(String(name || ''))
+}
+export function propertyParentKey(categoryName = '') {
+  return isLegoCategory(categoryName) ? 'subcategory_id' : 'franchise_id'
+}
+// The levels a change clears (their choices depend on it). A LEGO Property
+// doesn't depend on the Franchise or Subfranchise.
+export function taxonomyChildren(key, categoryName = '', children = CATALOGUE_EDIT_CHILDREN) {
+  const list = children[key] || []
+  return isLegoCategory(categoryName) && key !== 'category_id' && key !== 'subcategory_id' ? list.filter((child) => child !== 'property_id') : list
+}
+
+let legoCategoryIdsPromise = null
+async function legoCategoryIds() {
+  if (!legoCategoryIdsPromise) {
+    legoCategoryIdsPromise = supabase.from('categories').select('category_id, name')
+      .then(({ data }) => new Set((data || []).filter((row) => isLegoCategory(row.name)).map((row) => row.category_id)))
+      .catch(() => { legoCategoryIdsPromise = null; return new Set() })
+  }
+  return legoCategoryIdsPromise
+}
+
 // Subcategory -> Franchise -> Subfranchise -> Property, Item Type and
 // Publisher, each scoped by the level above (shared by scan review and the
-// catalogue editor).
+// catalogue editor). LEGO Properties are scoped by the Subcategory.
 async function loadTaxonomyLevels({ categoryId = '', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
+  const lego = categoryId ? (await legoCategoryIds()).has(categoryId) : false
   const propertyQuery = () => {
+    if (lego) return supabase.from('properties').select('property_id, name').eq('subcategory_id', subcategoryId).order('name').then(({ data }) => optionRows(data, 'property_id'))
     let query = supabase.from('properties').select('property_id, name').eq('franchise_id', franchiseId).order('name')
     // A chosen subfranchise narrows the list, but properties not tied to any
     // subfranchise stay available (many releases have none set), otherwise
@@ -2404,7 +2435,7 @@ async function loadTaxonomyLevels({ categoryId = '', subcategoryId = '', franchi
     categoryId ? supabase.from('subcategories').select('subcategory_id, name').eq('category_id', categoryId).order('name').then(({ data }) => optionRows(data, 'subcategory_id')) : [],
     subcategoryId ? franchiseOptions(subcategoryId) : [],
     franchiseId ? supabase.from('subsets').select('subset_id, name').eq('franchise_id', franchiseId).order('name').then(({ data }) => optionRows(data, 'subset_id')) : [],
-    franchiseId ? propertyQuery() : [],
+    (lego ? subcategoryId : franchiseId) ? propertyQuery() : [],
     subcategoryId ? supabase.from('item_types').select('item_type_id, name').eq('subcategory_id', subcategoryId).order('name').then(({ data }) => optionRows(data, 'item_type_id')) : [],
     supabase.from('publishers').select('publisher_id, name').order('name').then(({ data }) => optionRows(data, 'publisher_id')),
   ])
@@ -2473,6 +2504,15 @@ export async function createTaxonomyOption(level, name, { category = 'Sports Car
     const { data, error } = await supabase.from('subsets').insert({ name: clean, franchise_id: franchiseId }).select('subset_id, name').single()
     if (error) throw error
     return { id: data.subset_id, name: data.name }
+  }
+  if (level === 'property' && isLegoCategory(category)) {
+    // LEGO: under the Subcategory, reusing one with the same name there.
+    if (!subcategoryId) throw new Error('Select a Subcategory first.')
+    const { data: existing } = await supabase.from('properties').select('property_id, name').eq('subcategory_id', subcategoryId).ilike('name', clean).limit(1).maybeSingle()
+    if (existing) return { id: existing.property_id, name: existing.name }
+    const { data, error } = await supabase.from('properties').insert({ name: clean, subcategory_id: subcategoryId }).select('property_id, name').single()
+    if (error) throw error
+    return { id: data.property_id, name: data.name }
   }
   if (level === 'property') {
     if (!franchiseId) throw new Error('Select a Franchise first.')
@@ -3119,12 +3159,26 @@ export function checklistItemNumber(item = {}) {
   return item.card_number || item.minifig_code || item.lego_set_number || item.catalog_code || ''
 }
 
-const CHECKLIST_NOISE =/^(\*\s*)?(\+\s*(collection|wishlist)\b|(un)?graded\b|price\b|\$)/i
+// LEGO set numbers a minifig comes in, each with an optional quantity:
+// "7306", "7306-1 7326", "7306 x2; 7327". Empty unless the whole text is set numbers.
+const SET_REFS_TEXT = /^\s*\d{3,7}(-\d+)?(\s*[x×*]\s*\d+)?(\s*[\s,/;&]\s*\d{3,7}(-\d+)?(\s*[x×*]\s*\d+)?)*\s*$/i
+export function parseSetRefs(text) {
+  if (!SET_REFS_TEXT.test(String(text || ''))) return []
+  const refs = new Map()
+  for (const match of String(text).matchAll(/(\d{3,7})(?:-\d+)?(?:\s*[x×*]\s*(\d+))?/gi)) {
+    refs.set(match[1], Math.max(refs.get(match[1]) || 0, Number(match[2]) || 1))
+  }
+  return [...refs].map(([number, quantity]) => ({ number, quantity }))
+}
+
+const CHECKLIST_NOISE = /^(\*\s*)?(\+\s*(collection|wishlist)\b|(un)?graded\b|price\b|\$)/i
 // The number, then a space, ".", ")", ":" or "," before the name
 // ("1 Bulbasaur", "pha009, Mummy", "sw0001a,Battle Droid").
 const CHECKLIST_LEADING_NUMBER = /^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)(?:[.):,]\s*|\s+)(.+)$/
 
-export function parseChecklist(text, { teams = true, brackets = 'collection' } = {}) {
+// sets: LEGO minifig lists, where a line may end with the sets the minifig
+// comes in ("pha009, Mummy Warrior, 7306"; a tab column works too).
+export function parseChecklist(text, { teams = true, brackets = 'collection', sets: setsMode = false } = {}) {
   const rows = []
   const seen = new Set()
   for (const rawLine of String(text || '').split(/\r?\n/)) {
@@ -3142,18 +3196,23 @@ export function parseChecklist(text, { teams = true, brackets = 'collection' } =
       if (trailing) line = `${trailing[2]} ${trailing[1]}`
     }
     let collection = ''
+    let sets = []
     let parts
     if (line.includes('\t')) {
       parts = line.split('\t').map((part) => part.trim()).filter(Boolean)
       const collectionColumn = teams ? 3 : 2
-      if (parts[collectionColumn]) collection = parts[collectionColumn]
+      if (setsMode && parseSetRefs(parts[collectionColumn]).length) sets = parseSetRefs(parts[collectionColumn])
+      else if (parts[collectionColumn]) collection = parts[collectionColumn]
       parts = parts.slice(0, collectionColumn)
     } else {
       const match = line.match(CHECKLIST_LEADING_NUMBER)
       if (!match) { rows.push({ raw: rawLine.trim(), error: 'No card number' }); continue }
+      let rest = match[2].trim()
+      const setsTail = setsMode ? rest.match(/^(.*\S)\s*,\s*([^,]+)$/) : null
+      if (setsTail && parseSetRefs(setsTail[2]).length) { sets = parseSetRefs(setsTail[2]); rest = setsTail[1] }
       parts = teams
-        ? [match[1], ...match[2].split(/\s+[-–—|]\s+|\s*,\s+(?=[^,]+$)/).map((part) => part.trim()).filter(Boolean)]
-        : [match[1], match[2].trim()]
+        ? [match[1], ...rest.split(/\s+[-–—|]\s+|\s*,\s+(?=[^,]+$)/).map((part) => part.trim()).filter(Boolean)]
+        : [match[1], rest]
     }
     let parallel = ''
     if (variant) {
@@ -3176,7 +3235,7 @@ export function parseChecklist(text, { teams = true, brackets = 'collection' } =
     const key = checklistRowKey({ number, collection, parallel, name })
     if (seen.has(key)) { rows.push({ raw: rawLine.trim(), error: `Card ${number} is listed twice` }); continue }
     seen.add(key)
-    rows.push({ raw: rawLine.trim(), number, name, team, collection, parallel, serial, rookie: flags.rookie, shortPrint: flags.shortPrint })
+    rows.push({ raw: rawLine.trim(), number, name, team, collection, parallel, serial, rookie: flags.rookie, shortPrint: flags.shortPrint, sets })
   }
   return rows
 }
@@ -3206,14 +3265,16 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
 }
 
 // Creates a placeholder item for each checklist row that the set doesn't have
-// yet. Returns { created: [ids], skipped: number }.
-export async function createChecklistPlaceholders({ category, ids, itemTypeName = '', releaseYear = '', season = '', rows = [], existing = [] }) {
+// yet, then links rows that name LEGO sets (row.sets, plus inSets for every
+// row) to those sets. Returns { created: [ids], skipped, linked, missingSets }.
+export async function createChecklistPlaceholders({ category, ids, itemTypeName = '', releaseYear = '', season = '', series = '', rows = [], existing = [], inSets = [] }) {
   const categoryId = await categoryIdForName(category)
   if (!categoryId || !ids?.subcategory_id) throw new Error('Choose the set (at least the category and subcategory) first.')
   const numberColumn = checklistNumberColumn(category, itemTypeName)
+  const itemKey = (item) => checklistItemKey({ number: checklistItemNumber(item), collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel })
   // Already in the catalogue: same number in the same collection.
-  const have = new Set(existing.map((item) => checklistItemKey({ number: checklistItemNumber(item), collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel })))
-  const todo = rows.filter((row) => !row.error && !have.has(checklistItemKey(row)))
+  const itemIdByKey = new Map(existing.map((item) => [itemKey(item), item.item_id]))
+  const todo = rows.filter((row) => !row.error && !itemIdByKey.has(checklistItemKey(row)))
   const created = []
   for (let index = 0; index < todo.length; index += 100) {
     const payload = todo.slice(index, index + 100).map((row) => {
@@ -3235,26 +3296,71 @@ export async function createChecklistPlaceholders({ category, ids, itemTypeName 
         name: row.name,
         subject: row.name,
         [numberColumn]: row.number,
+        ...(isLegoCategory(category) && String(series || '').trim() ? { series: String(series).trim() } : {}),
         season: seasonKey(season) || null,
         release_year: releaseYear ? Number(releaseYear) : seasonStartYear(season),
         completion_eligible: true,
         dynamic_fields: dynamic,
       }
     })
-    const { data, error } = await supabase.from('items').insert(payload).select('item_id')
+    const { data, error } = await supabase.from('items').insert(payload).select(`item_id, ${numberColumn}, dynamic_fields`)
     if (error) {
       backupCatalogueChange({ action: 'create', ok: false, error: error.message, payload: { checklist: payload } })
       throw error
     }
     const newIds = (data || []).map((row) => row.item_id)
     created.push(...newIds)
+    ;(data || []).forEach((item) => itemIdByKey.set(itemKey(item), item.item_id))
     if (ids.property_id && newIds.length) {
       const { error: linkError } = await supabase.from('item_properties').insert(newIds.map((itemId) => ({ item_id: itemId, property_id: ids.property_id })))
       if (linkError) throw new Error(`Placeholders created, but linking them to the set failed: ${linkError.message}`)
     }
     backupCatalogueChange({ action: 'create', itemIds: newIds })
   }
-  return { created, skipped: rows.length - todo.length }
+  const links = []
+  rows.filter((row) => !row.error).forEach((row) => {
+    const itemId = itemIdByKey.get(checklistItemKey(row))
+    if (itemId) [...inSets, ...(row.sets || [])].forEach((ref) => links.push({ itemId, setNumber: ref.number, quantity: ref.quantity }))
+  })
+  const linkResult = links.length ? await linkItemsToLegoSets(links, { minifigs: numberColumn === 'minifig_code' }) : { linked: 0, missingSets: [] }
+  return { created, skipped: rows.length - todo.length, ...linkResult }
+}
+
+// Links items to the LEGO sets that include them, as the website does: a
+// catalog_item_relationships "includes" row (set -> item), mirrored into the
+// legacy set_minifigs table for minifigs (LEGO completion still reads it).
+// links: [{ itemId, setNumber ("7306" or "7306-1"), quantity }].
+export async function linkItemsToLegoSets(links = [], { minifigs = true } = {}) {
+  const base = (number) => String(number || '').trim().toLowerCase().replace(/-\d+$/, '')
+  const numbers = [...new Set(links.map((link) => base(link.setNumber)).filter(Boolean))]
+  const setIdByNumber = new Map()
+  for (let i = 0; i < numbers.length; i += 100) {
+    const chunk = numbers.slice(i, i + 100)
+    const { data, error } = await supabase.from('items').select('item_id, lego_set_number').in('lego_set_number', [...chunk, ...chunk.map((number) => `${number}-1`)])
+    if (error) throw error
+    ;(data || []).forEach((row) => { if (!setIdByNumber.has(base(row.lego_set_number))) setIdByNumber.set(base(row.lego_set_number), row.item_id) })
+  }
+  const pairs = new Map()
+  const missing = new Set()
+  links.forEach((link) => {
+    const setId = setIdByNumber.get(base(link.setNumber))
+    if (!setId) { missing.add(base(link.setNumber)); return }
+    if (setId === link.itemId) return
+    const key = `${setId}|${link.itemId}`
+    pairs.set(key, { parent_item_id: setId, child_item_id: link.itemId, relationship_type: 'includes', quantity: Math.max(pairs.get(key)?.quantity || 0, Number(link.quantity) || 1) })
+  })
+  const rows = [...pairs.values()]
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200)
+    const { error } = await supabase.from('catalog_item_relationships').upsert(chunk, { onConflict: 'parent_item_id,child_item_id,relationship_type' })
+    if (error) throw new Error(`Could not link to the sets: ${error.message}`)
+    if (minifigs) {
+      const { error: legacyError } = await supabase.from('set_minifigs').upsert(chunk.map((row) => ({ set_item_id: row.parent_item_id, minifig_item_id: row.child_item_id, quantity: row.quantity })), { onConflict: 'set_item_id,minifig_item_id' })
+      if (legacyError) throw new Error(`Linked, but the LEGO completion copy failed: ${legacyError.message}`)
+    }
+  }
+  if (rows.length) backupCatalogueChange({ action: 'update', itemIds: rows.map((row) => row.child_item_id), payload: { set_links: rows } })
+  return { linked: rows.length, missingSets: [...missing] }
 }
 
 // A scan approved against a placeholder: fill the placeholder's empty fields

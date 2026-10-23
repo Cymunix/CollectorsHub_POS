@@ -146,7 +146,7 @@ export function LocationsModule({ orgId, stores }) {
     <div>
       <div style={m.head}>
         <div><h1 style={m.h1}>Locations</h1><p style={m.desc}>Every physical operating location across the organisation. Official addresses are head-office controlled.</p></div>
-        <button type="button" style={m.primary} onClick={() => setCreating(true)}>+ Create Location</button>
+        <span style={m.desc}>Contact NORDVIK to approve additional locations.</span>
       </div>
       <EnterpriseScopeControls orgId={orgId} stores={stores} scope={scope} onScopeChange={setScope} />
       <div style={m.filters}><input style={m.search} placeholder="Search locations…" value={search} onChange={e => setSearch(e.target.value)} /></div>

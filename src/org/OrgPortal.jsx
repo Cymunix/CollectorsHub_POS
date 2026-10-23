@@ -157,7 +157,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
           {['all', 'setup', 'active', 'temporarily_closed', 'suspended', 'archived'].map(s => <option key={s} value={s} style={optDark}>{s === 'all' ? 'All statuses' : s.replace(/_/g, ' ')}</option>)}
         </select>
         {attentionFilter && <button type="button" style={ent.clearFilter} onClick={() => setAttentionFilter(null)}>Clear attention filter ✕</button>}
-        <button type="button" onClick={() => setWizardOpen(true)} style={{ ...ent.primary, marginLeft: 'auto' }}>+ Create Store</button>
+        <button type="button" disabled={!session.demo} title={session.demo ? '' : 'Contact NORDVIK to approve a new store'} onClick={() => setWizardOpen(true)} style={{ ...ent.primary, marginLeft: 'auto' }}>+ Create Store</button>
       </div>
 
       {loading ? <div style={ent.empty}>Loading…</div>
@@ -222,8 +222,8 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
               {!s.demo && <button type="button" style={ent.menuItem} onClick={() => { setMenu(null); setPawnStore(s) }}>Pawn settings</button>}
               {!s.demo && <button type="button" style={ent.menuItem} onClick={() => { setMenu(null); setReportStore(s) }}>Report access</button>}
               <div style={{ borderTop: `1px solid ${BORDER}`, margin: '4px 0' }} />
-              <button type="button" disabled={busy === s.storeId} style={{ ...ent.menuItem, color: '#b91c1c' }}
-                onClick={() => { if (window.confirm(`${s.demo ? 'Remove' : 'Detach'} “${s.storeName}” from this organisation?`)) { setMenu(null); detach(s.storeId) } }}>
+              <button type="button" style={{ ...ent.menuItem, color: '#b91c1c' }}
+                disabled={!session.demo} title="Store ownership changes require NORDVIK approval" onClick={() => { if (window.confirm(`${s.demo ? 'Remove' : 'Detach'} “${s.storeName}” from this organisation?`)) { setMenu(null); detach(s.storeId) } }}>
                 {s.demo ? 'Remove' : 'Detach from Organisation'}
               </button>
             </div>
@@ -241,7 +241,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
         {error && <div style={{ color: '#b91c1c', fontSize: '0.85rem', marginBottom: 12 }}>{error}</div>}
 
         {stores.length === 0 && !loading && activeModule === 'overview' ? (
-          <SetupState demo={session.demo} onCreate={() => setWizardOpen(true)} />
+          <SetupState demo={session.demo} onCreate={() => { if (session.demo) setWizardOpen(true) }} />
         ) : activeModule === 'overview' ? (
           <>
             <div style={ent.pageHead}>
@@ -295,7 +295,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
               <div style={ent.panel}>
                 <div style={ent.panelTitle}>Quick Actions</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button type="button" style={ent.primary} onClick={() => setWizardOpen(true)}>+ Create Store</button>
+                  <button type="button" style={ent.primary} disabled={!session.demo} title={session.demo ? '' : 'Contact NORDVIK to approve a new store'} onClick={() => setWizardOpen(true)}>+ Create Store</button>
                   <button type="button" style={ent.ghost} onClick={() => setActiveModule('staff')}>Manage Staff</button>
                   <button type="button" style={ent.ghost} onClick={() => setActiveModule('orders')}>View Orders</button>
                   <button type="button" style={ent.ghost} onClick={() => setActiveModule('reports')}>View Reports</button>
@@ -320,7 +320,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
           </>
         ) : activeModule === 'stores' ? (
           <><h1 style={ent.h1}>Stores</h1>{storesTable}
-            {unattached.length > 0 && (
+            {session.demo && unattached.length > 0 && (
               <div style={{ marginTop: 24 }}>
                 <h2 style={ent.h2}>Attach an existing store</h2>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -372,7 +372,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
       {featuresStore && <StoreFeaturesModal orgId={session.orgId} store={featuresStore} onClose={() => setFeaturesStore(null)} />}
       {reportStore && <ReportAccess store={reportStore} onClose={() => setReportStore(null)} />}
       {pawnStore && <div className="org-pawn-overlay" role="dialog" aria-modal="true"><PawnSettings storeId={pawnStore.storeId} backLabel="Back to stores" onBack={() => setPawnStore(null)} /></div>}
-      {wizardOpen && <CreateStoreWizard demo={session.demo} onClose={() => setWizardOpen(false)} onCreate={onWizardCreate} />}
+      {session.demo && wizardOpen && <CreateStoreWizard demo={session.demo} onClose={() => setWizardOpen(false)} onCreate={onWizardCreate} />}
     </div>
   )
 }
@@ -422,8 +422,8 @@ function SetupState({ demo, onCreate }) {
     <div style={{ ...ent.panel, textAlign: 'center', padding: 36 }}>
       <div style={{ fontSize: '2rem', marginBottom: 8 }}>🏗️</div>
       <h1 style={{ ...ent.h1, marginBottom: 6 }}>Set up your retail network</h1>
-      <p style={{ color: SUB, maxWidth: 460, margin: '0 auto 16px' }}>Create your first store to begin managing locations, inventory and staff.{demo ? ' (Demo — non-persisting.)' : ''}</p>
-      <button type="button" style={ent.primary} onClick={onCreate}>+ Create Store</button>
+      <p style={{ color: SUB, maxWidth: 460, margin: '0 auto 16px' }}>{demo ? 'Create your first demo store. (Demo — non-persisting.)' : 'Contact NORDVIK to create and approve your stores and locations. Staff and authorised settings become available after activation.'}</p>
+      <button type="button" disabled={!demo} style={ent.primary} onClick={onCreate}>{demo ? "+ Create Store" : "NORDVIK approval required"}</button>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginTop: 20, fontSize: '0.78rem', color: FAINT }}>
         {['1. Create Store', '2. Primary Location', '3. Add Staff', '4. Policies', '5. Staff sign in at the store'].map(s => <span key={s} style={{ background: FIELD, border: `1px solid ${BORDER}`, borderRadius: 20, padding: '5px 12px' }}>{s}</span>)}
       </div>

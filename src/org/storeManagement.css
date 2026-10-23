@@ -1,0 +1,26 @@
+.store-management { color: #172235; max-width: 1250px; padding: 24px; }
+.store-management p { color: #5b6677; line-height: 1.5; }
+.sm-heading, .sm-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.sm-heading { justify-content: space-between; }
+.sm-panel { background: white; border: 1px solid #dce3eb; border-radius: 12px; padding: 22px; margin: 20px 0; }
+.sm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.store-management label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; margin-bottom: 10px; }
+.store-management input, .store-management select { border: 1px solid #aab7c7; padding: 9px; border-radius: 6px; color: #172235; background: white; min-width: 0; }
+.store-management button { border: 1px solid #aab7c7; border-radius: 6px; padding: 9px 14px; background: #f4f6fa; color: #172235; cursor: pointer; }
+.store-management button:disabled { opacity: .5; cursor: default; }
+.store-management fieldset { margin: 16px 0; padding: 16px; border: 1px solid #dce3eb; border-radius: 8px; }
+.store-management legend { font-weight: 650; padding: 0 6px; }
+.store-management .sm-check { flex-direction: row; align-items: center; }
+.sm-table { overflow-x: auto; }
+.sm-table table { width: 100%; border-collapse: collapse; background: white; }
+.sm-table th, .sm-table td { text-align: left; padding: 12px; border-bottom: 1px solid #dce3eb; }
+.store-management .sm-error { color: #a51d32; background: #fff0f1; padding: 12px; border-radius: 6px; }
+.store-management pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.sm-audit { max-height: 520px; overflow-y: auto; }
+.store-management details { margin: 10px 0; }
+.store-management summary { cursor: pointer; overflow-wrap: anywhere; }
+.sm-application { border-top: 1px solid #dce3eb; padding: 14px 0; }
+.sm-application-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.sm-application-details dt { font-size: 12px; color: #5b6677; }
+.sm-application-details dd { margin: 4px 0 8px; overflow-wrap: anywhere; }
+.sm-test-badge { display: inline-block; margin-left: 8px; padding: 3px 7px; border-radius: 5px; background: #e9e3ff; color: #59328a; font-size: 12px; font-weight: 600; white-space: nowrap; }

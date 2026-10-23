@@ -54,8 +54,12 @@ function itemLabel(item = {}) {
 const isFinished = (card) => card.status === 'added' || card.status === 'skipped'
 
 export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue = () => {}, onStockChanged = () => {}, destination = null }) {
-  const toCollection = Boolean(destination)
-  const statusText = (status) => (toCollection && status === 'ready' ? 'Ready to save' : toCollection && status === 'added' ? (destination.addedLabel || 'Saved') : toCollection && status === 'adding' ? 'Saving…' : STATUS_TEXT[status])
+  // A destination saves cards somewhere other than stock. destination.stock
+  // keeps the store-stock fields (Ungraded/Graded, slab cert, price) - the
+  // onboarding queue; otherwise it's a collector's collection.
+  const toDestination = Boolean(destination)
+  const toCollection = toDestination && !destination.stock
+  const statusText = (status) => (toDestination && status === 'ready' ? 'Ready to save' : toDestination && status === 'added' ? (destination.addedLabel || 'Saved') : toDestination && status === 'adding' ? 'Saving…' : STATUS_TEXT[status])
   // Coming back to the screen starts clean: finished cards from last time are
   // cleared; cards still waiting (identifying, ready, need a look) are kept.
   const [startQueue] = useState(() => savedQueue.filter((card) => !isFinished(card)))
@@ -248,7 +252,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     }
     const previous = card.status
     patch(card.id, { status: 'adding', error: '' })
-    if (toCollection) {
+    if (toDestination) {
       try {
         await destination.add({ ...card, item: forReview ? null : card.item })
         patch(card.id, { status: 'added', addedAt: new Date().toISOString(), savedForReview: forReview })
@@ -274,8 +278,8 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     const ready = cardsRef.current.filter((card) => card.status === 'ready')
     let added = 0
     for (const card of ready) if (await addToStock(card)) added += 1
-    setMessage(`${toCollection ? 'Saved' : 'Added'} ${added} card${added === 1 ? '' : 's'} ${toCollection ? (destination.toLabel || 'to the collection draft') : 'to stock'}${added < ready.length ? `; ${ready.length - added} need a look` : ''}.`)
-    if (added) (toCollection ? destination.onChanged?.() : onStockChanged())
+    setMessage(`${toDestination ? 'Saved' : 'Added'} ${added} card${added === 1 ? '' : 's'} ${toDestination ? (destination.toLabel || 'to the collection draft') : 'to stock'}${added < ready.length ? `; ${ready.length - added} need a look` : ''}.`)
+    if (added) (toDestination ? destination.onChanged?.() : onStockChanged())
   }
 
   function applyDefaultsToWaiting(changes) {
@@ -288,14 +292,14 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   useEffect(() => {
     if (!cards.length || !cards.every(isFinished)) return
     const added = cards.filter((card) => card.status === 'added').length
-    setMessage(`Batch finished: ${added} card${added === 1 ? '' : 's'} ${toCollection ? 'saved' : 'added to stock'}.`)
+    setMessage(`Batch finished: ${added} card${added === 1 ? '' : 's'} ${toDestination ? 'saved' : 'added to stock'}.`)
     save(() => [])
   }, [cards])
 
   const counts = cards.reduce((acc, card) => ({ ...acc, [card.status]: (acc[card.status] || 0) + 1 }), {})
   const visible = cards.filter((card) => card.status !== 'added' && card.status !== 'skipped')
   // Stock being taken in that members are looking for (store stock only, not a collector's job).
-  const wishlistDemand = useWishlistDemand(toCollection ? '' : session?.storeId, visible.map((card) => card.item?.item_id))
+  const wishlistDemand = useWishlistDemand(toDestination ? '' : session?.storeId, visible.map((card) => card.item?.item_id))
   const done = cards.filter((card) => card.status === 'added')
   const feederName = scanner.feederName || ''
   const flatbedReady = Boolean(scanner.scannerName) && ['ready', 'scanning', 'processing'].includes(scanner.state)
@@ -305,9 +309,9 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     <section className="store-scan">
       <div className="store-scan-head">
         <div>
-          <p className="store-scan-kicker">{toCollection ? destination.kicker : `Store Inventory · ${session?.storeName || 'Store'}`}</p>
-          <h2>{toCollection ? destination.title : 'Scan Cards into Store Inventory'}</h2>
-          <small>{toCollection ? destination.description : "Cards are identified by the local AI and matched to the catalogue. Matched cards go into this store's stock; cards the catalogue doesn't have are never created here."}</small>
+          <p className="store-scan-kicker">{toDestination ? destination.kicker : `Store Inventory · ${session?.storeName || 'Store'}`}</p>
+          <h2>{toDestination ? destination.title : 'Scan Cards into Store Inventory'}</h2>
+          <small>{toDestination ? destination.description : "Cards are identified by the local AI and matched to the catalogue. Matched cards go into this store's stock; cards the catalogue doesn't have are never created here."}</small>
         </div>
         <span className={`store-scan-ai ${aiState}`}>{aiState === 'ready' ? 'AI ready' : aiState === 'checking' ? 'Checking AI…' : 'AI unavailable'}</span>
       </div>
@@ -321,6 +325,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
         </label>
         {toCollection ? destination.controls || null : (
           <>
+            {destination?.controls || null}
             <label>Sell price (each)
               <input inputMode="decimal" value={defaults.sellPrice} onChange={(event) => applyDefaultsToWaiting({ sellPrice: event.target.value })} placeholder="e.g. 0.50" />
             </label>
@@ -352,10 +357,10 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
           {counts.queued || counts.analysing ? <span className="identifying"><b>{(counts.queued || 0) + (counts.analysing || 0)}</b> identifying</span> : null}
           <span className="ready"><b>{counts.ready || 0}</b> ready</span>
           <span className={(counts.choose || 0) + (counts.unmatched || 0) + (counts.failed || 0) ? 'look' : ''}><b>{(counts.choose || 0) + (counts.unmatched || 0) + (counts.failed || 0)}</b> need a look</span>
-          <span className="done"><b>{done.length}</b> {toCollection ? 'saved' : 'added'}</span>
+          <span className="done"><b>{done.length}</b> {toDestination ? 'saved' : 'added'}</span>
         </span>
-        {counts.ready ? <button type="button" className="primary" onClick={addAllReady}>{toCollection ? `Save ${counts.ready} ready` : `Add ${counts.ready} ready to stock`}</button> : null}
-        {toCollection ? destination.actions || null : null}
+        {counts.ready ? <button type="button" className="primary" onClick={addAllReady}>{toDestination ? `Save ${counts.ready} ready` : `Add ${counts.ready} ready to stock`}</button> : null}
+        {toDestination ? destination.actions || null : null}
       </div>
       {message ? <p className="store-scan-message">{message}</p> : null}
       {error ? <p className="store-scan-error">{error}</p> : null}
@@ -416,8 +421,8 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
               </div>
             ) : null}
             <div className="store-scan-card-actions">
-              {card.status === 'ready' ? <button type="button" className="primary" onClick={async () => { if (await addToStock(card)) (toCollection ? destination.onChanged?.() : onStockChanged()) }}>{toCollection ? 'Save' : 'Add'}</button> : null}
-              {toCollection && ['choose', 'unmatched', 'failed'].includes(card.status) ? <button type="button" onClick={async () => { if (await addToStock(card, { forReview: true })) destination.onChanged?.() }} title="Save it on the job for someone to identify later">Save for review</button> : null}
+              {card.status === 'ready' ? <button type="button" className="primary" onClick={async () => { if (await addToStock(card)) (toDestination ? destination.onChanged?.() : onStockChanged()) }}>{toDestination ? 'Save' : 'Add'}</button> : null}
+              {toDestination && ['choose', 'unmatched', 'failed'].includes(card.status) ? <button type="button" onClick={async () => { if (await addToStock(card, { forReview: true })) destination.onChanged?.() }} title="Save it on the job for someone to identify later">Save for review</button> : null}
               {card.status === 'failed' ? <button type="button" onClick={() => { patch(card.id, { status: 'queued', error: '' }); analyseQueued() }}>Retry</button> : null}
               {!['adding', 'analysing'].includes(card.status) ? <button type="button" onClick={() => patch(card.id, { status: 'skipped' })}>Skip</button> : null}
             </div>
@@ -427,8 +432,8 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
 
       {done.length ? (
         <details className="store-scan-done">
-          <summary>{done.length} {toCollection ? 'saved' : 'added to stock'} this session</summary>
-          <ul>{done.slice(0, 200).map((card) => <li key={card.id}>{card.savedForReview ? `${card.result ? cardTitle(card.result) : 'Unidentified card'} · saved for review` : `${itemLabel(card.item)} · ${card.condition === GRADED ? [card.gradingCompany, card.grade].filter(Boolean).join(' ') || GRADED : card.condition} · ×${card.quantity}`}{toCollection ? '' : `${card.sellPrice ? ` · $${card.sellPrice}` : ''}${card.addedAsNew ? '' : ' (quantity added to existing stock)'}`}</li>)}</ul>
+          <summary>{done.length} {toDestination ? 'saved' : 'added to stock'} this session</summary>
+          <ul>{done.slice(0, 200).map((card) => <li key={card.id}>{card.savedForReview ? `${card.result ? cardTitle(card.result) : 'Unidentified card'} · saved for review` : `${itemLabel(card.item)} · ${card.condition === GRADED ? [card.gradingCompany, card.grade].filter(Boolean).join(' ') || GRADED : card.condition} · ×${card.quantity}`}{toCollection ? '' : `${card.sellPrice ? ` · $${card.sellPrice}` : ''}${toDestination || card.addedAsNew ? '' : ' (quantity added to existing stock)'}`}</li>)}</ul>
           <button type="button" onClick={() => save((list) => list.filter((card) => !['added', 'skipped'].includes(card.status)))}>Clear finished</button>
         </details>
       ) : null}

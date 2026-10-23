@@ -48,7 +48,10 @@ const canManageEmployees = (employee: any) => {
 // active employee of the store who can manage employees.
 async function canManageStoreStaff(admin: any, store: any, callerId: string) {
   const { data: callerProfile } = await admin.from('profiles').select('subscription_tier').eq('id', callerId).maybeSingle()
-  if (callerProfile?.subscription_tier === 'platform_admin' || store.owner_user_id === callerId) return true
+  if (callerProfile?.subscription_tier === 'platform_admin') return true
+  const { data: active, error: activeError } = await admin.rpc('nordvik_store_is_active', { p_store_id: store.id })
+  if (activeError || active !== true) return false
+  if (store.owner_user_id === callerId) return true
   if (store.organization_id) {
     const { data: org } = await admin.from('organizations').select('owner_user_id').eq('id', store.organization_id).maybeSingle()
     if (org?.owner_user_id === callerId) return true

@@ -17,6 +17,7 @@ import {
   CircleDollarSign,
   CreditCard,
   Eye,
+  ClipboardCheck,
   EyeOff,
   Gift,
   HandCoins,
@@ -50,6 +51,8 @@ import {
 import './styles.css'
 import AdminWorkspace from './AdminWorkspace'
 import ScanCentre from './scan/ScanCentre'
+import OnboardingStore from './onboarding/OnboardingStore'
+import { loadProjects as loadOnboardingProjects } from './lib/onboarding'
 import CustomersView from './customers/CustomersView'
 import CollectorListings from './CollectorListings'
 import { loadListingUnreadCount } from './lib/collectorListings'
@@ -554,6 +557,16 @@ function App() {
     loadStoreFeatures(authSession?.storeId).then((flags) => { if (!cancelled) setStoreFeatures(flags) })
     return () => { cancelled = true }
   }, [authSession?.storeId])
+  // Retailer onboarding: shown while NORDVIK has an onboarding project open for this store.
+  const [onboardingProjects, setOnboardingProjects] = useState([])
+  useEffect(() => {
+    let cancelled = false
+    if (!authSession?.storeId) { setOnboardingProjects([]); return undefined }
+    loadOnboardingProjects(authSession.storeId)
+      .then((rows) => { if (!cancelled) setOnboardingProjects(rows.filter((row) => !['completed', 'cancelled'].includes(row.status))) })
+      .catch(() => { if (!cancelled) setOnboardingProjects([]) })
+    return () => { cancelled = true }
+  }, [authSession?.storeId])
   // The AI's suggested condition on scanned cards is still being tested: test stores only.
   const aiCondition = Boolean(storeFeatures.test_store)
   const scanSession = useMemo(() => (authSession ? { ...authSession, aiCondition } : authSession), [authSession, aiCondition])
@@ -1035,6 +1048,7 @@ function App() {
           <NavButton icon={LayoutDashboard} label="Register" active={activeView === 'register'} onClick={() => requestNavigate('register')} />
           <NavButton icon={Boxes} label="Inventory" active={activeView === 'inventory'} onClick={() => requestNavigate('inventory')} badge={favoriteAlerts.length || null} badgeTitle={`${favoriteAlerts.length} favourite${favoriteAlerts.length === 1 ? '' : 's'} low or out of stock`} />
           {authSession?.storeId ? <NavButton icon={ScanLine} label="Scan Centre" active={activeView === 'scan'} onClick={() => requestNavigate('scan')} /> : null}
+          {authSession?.storeId && onboardingProjects.length ? <NavButton icon={ClipboardCheck} label="Onboarding" active={activeView === 'onboarding'} onClick={() => requestNavigate('onboarding')} /> : null}
           {authSession?.storeId ? <NavButton icon={Users} label="Customers" active={activeView === 'customers'} onClick={() => requestNavigate('customers')} /> : null}
           {authSession?.storeId ? <NavButton icon={Tag} label="Collector Listings" active={activeView === 'listings'} onClick={() => requestNavigate('listings')} badge={listingUnread || null} badgeTitle={`${listingUnread} new repl${listingUnread === 1 ? 'y' : 'ies'} from sellers`} /> : null}
           <NavButton icon={ReceiptText} label="Transactions" active={activeView === 'transactions'} onClick={() => requestNavigate('transactions')} />
@@ -1166,6 +1180,7 @@ function App() {
             onStockChanged={handleSyncNow}
             collectorQueues={store.collectorScanQueues || {}}
             collectorScanning={Boolean(storeFeatures.collector_scanning)}
+            onboardingProjects={onboardingProjects}
             onSaveCollectorQueue={(key, queue) => {
               // Each collector job (and container) keeps its own scan queue; empty ones are dropped.
               const next = { ...(storeRef.current.collectorScanQueues || {}) }
@@ -1175,6 +1190,8 @@ function App() {
             }}
           />
         ) : null}
+
+        {activeView === 'onboarding' && authSession?.storeId ? <OnboardingStore session={authSession} /> : null}
 
         {activeView === 'dashboard' ? <PlaceholderView icon={Home} title="Dashboard" copy="Store operating overview, register status, daily sales, and urgent tasks will live here." /> : null}
         {activeView === 'catalog' ? <PlaceholderView icon={PackageSearch} title="Catalog" copy="Catalogue search, product records, category data, and item references will live here." /> : null}

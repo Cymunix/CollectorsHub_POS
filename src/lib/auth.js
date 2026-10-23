@@ -98,6 +98,12 @@ export async function signInStaff({ code, username, password }) {
 
   if (loginError) throw loginError
 
+  const { data: storeActive, error: statusError } = await supabase.rpc('nordvik_store_is_active', { p_store_id: verified.store_id })
+  if (statusError || storeActive !== true) {
+    await supabase.auth.signOut()
+    throw new Error(statusError ? 'Retailer activation could not be verified. Contact NORDVIK.' : 'This retailer account is not active. Contact NORDVIK.')
+  }
+
   await supabase.rpc('log_store_employee_action', {
     p_store_id: verified.store_id,
     p_employee_id: verified.employee_id,
