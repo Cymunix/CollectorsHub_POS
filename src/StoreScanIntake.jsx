@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ScanLine, Search, X } from 'lucide-react'
-import { analyseRecognizedCard } from './lib/adminData'
+import { analyseRecognizedCard, catalogueFrontPhotoUrl } from './lib/adminData'
 import { searchDesktopTradeCatalogue } from './lib/registerBackend'
 import { sendWishlistAlerts, useWishlistDemand, wantedLabel, wantedTitle } from './lib/wishlistDemand'
 import { addScannedCardToStock, COLLECTION_CONDITIONS } from './lib/storeScan'
-import { CARD_CONDITIONS, GRADED, UNGRADED } from './lib/cardCondition'
+import { CARD_CONDITIONS, DEFAULT_RAW_CONDITION, GRADED, canonicalRawCondition } from './lib/cardCondition'
 import ConditionHint from './ConditionHint'
 import SlabCertFields from './SlabCertFields'
-import { readScannerPref, writeScannerPref } from './AdminWorkspace'
+import { needsSideCheck, needsUprightCheck, readScannerPref, writeScannerPref } from './AdminWorkspace'
 
 // Store scan intake (store staff): scan cards on the FastFoto or flatbed, the
 // local AI identifies them, each is matched to the catalogue, and matched
@@ -47,11 +47,34 @@ function cardTitle(result = {}) {
 }
 
 function itemLabel(item = {}) {
-  return [item.name || item.subject, item.card_number ? `#${item.card_number}` : '', item.release_year].filter(Boolean).join(' · ')
+  const variant = [item.dynamic_fields?.collection, item.dynamic_fields?.parallel, item.dynamic_fields?.finish].map((value) => String(value || '').trim()).filter(Boolean).join(' ')
+  return [item.name || item.subject, item.card_number ? `#${item.card_number}` : '', item.release_year, variant].filter(Boolean).join(' · ')
+}
+
+// Matching order: 1. the card's name, 2. its card number, 3. the image. Printings
+// that pass both (another collection, parallel or finish of the same card) are told
+// apart by comparing the scan's front with each one's catalogue photo.
+async function pickVariantByPhoto(frontImage, candidates) {
+  const compare = api().compareScanWithPhoto
+  if (typeof compare !== 'function' || !frontImage) return null
+  const printings = candidates
+    .filter((candidate) => candidate.reasons?.includes('Same player/subject') && candidate.reasons?.includes('Same card number'))
+    .slice(0, 8)
+  if (printings.length < 2) return null
+  const similar = []
+  for (const candidate of printings) {
+    const photoUrl = candidate.item.imageUrl || await catalogueFrontPhotoUrl(candidate.item.item_id).catch(() => '')
+    if (!photoUrl) continue
+    const check = await compare(frontImage, photoUrl).catch(() => null)
+    if (check?.ok && check.similar) similar.push({ candidate, overall: check.overall })
+  }
+  similar.sort((a, b) => a.overall - b.overall)
+  return similar[0]?.candidate || null
 }
 
 // Cards that are done with (added to stock or skipped).
 const isFinished = (card) => card.status === 'added' || card.status === 'skipped'
+const canRecheck = (card) => Boolean(card.frontImage) && ['ready', 'choose', 'unmatched', 'failed'].includes(card.status)
 
 export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue = () => {}, onStockChanged = () => {}, destination = null }) {
   // A destination saves cards somewhere other than stock. destination.stock
@@ -136,7 +159,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       category: categoryRef.current,
       // Store stock: Ungraded unless staff mark it Graded. Collection: set by
       // the AI once the card is identified (test stores); staff can change it.
-      condition: toCollection ? '' : UNGRADED,
+      condition: toCollection ? '' : DEFAULT_RAW_CONDITION,
       quantity: 1,
       sellPrice: defaultsRef.current.sellPrice,
       buyPrice: defaultsRef.current.buyPrice,
@@ -158,6 +181,8 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
           jobId: card.id,
           front: card.frontImage || null,
           back: card.backImage || null,
+          checkSides: card.recheckOrientation ? Boolean(card.backImage) : needsSideCheck(card),
+          checkUpright: card.recheckOrientation ? { front: Boolean(card.frontImage), back: Boolean(card.backImage) } : needsUprightCheck(card),
           // Quick identify: name, number, set and year to find the card in
           // the catalogue (stores never create catalogue items).
           mode: 'identify',
@@ -173,14 +198,19 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
         try {
           const { scanAnalysis } = await analyseRecognizedCard(response.result, card.category)
           const best = scanAnalysis.matchStatus === 'exact' ? scanAnalysis.bestMatch : null
-          const candidates = (scanAnalysis.candidates || []).slice(0, 8).map((candidate) => ({ item: candidate.item, score: candidate.score, differences: candidate.differences }))
+          const photoPick = await pickVariantByPhoto(fixed.frontImage || card.frontImage, scanAnalysis.candidates || [])
+          const ranked = photoPick ? [photoPick, ...(scanAnalysis.candidates || []).filter((candidate) => candidate !== photoPick)] : scanAnalysis.candidates || []
+          const candidates = ranked.slice(0, 8).map((candidate) => ({ item: candidate.item, score: candidate.score, differences: candidate.differences, photoMatch: candidate === photoPick }))
+          const preselected = photoPick?.item || best?.item || (scanAnalysis.matchStatus === 'likely' ? scanAnalysis.bestMatch?.item : null)
           patch(card.id, {
             ...fixed,
+            recheckOrientation: false,
             result: response.result,
             candidates,
-            // A likely match is preselected but still needs a staff check.
-            item: best?.item ? pickItem(best.item) : scanAnalysis.matchStatus === 'likely' && scanAnalysis.bestMatch?.item ? pickItem(scanAnalysis.bestMatch.item) : null,
-            status: best ? 'ready' : candidates.length ? 'choose' : 'unmatched',
+            // A likely or photo-picked match is preselected but still needs a staff check
+            // (a photo pick that agrees with the exact match is ready).
+            item: preselected ? pickItem(preselected) : null,
+            status: best && (!photoPick || photoPick.item.item_id === best.item.item_id) ? 'ready' : candidates.length ? 'choose' : 'unmatched',
           })
           // The AI's suggested condition (test stores only, while it's being
           // tested) for a collector's collection, unless staff already chose
@@ -202,7 +232,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
 
   // Only what stock needs from a catalogue item (kept small in the saved queue).
   function pickItem(item) {
-    return { item_id: item.item_id, name: item.name, subject: item.subject, card_number: item.card_number, release_year: item.release_year, imageUrl: item.imageUrl || '' }
+    return { item_id: item.item_id, name: item.name, subject: item.subject, card_number: item.card_number, release_year: item.release_year, dynamic_fields: item.dynamic_fields || null, imageUrl: item.imageUrl || '' }
   }
 
   async function scanStack() {
@@ -274,6 +304,21 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     }
   }
 
+  function recheckCards(cardId = null) {
+    if (aiState !== 'ready') return
+    let count = 0
+    save((list) => list.map((card) => {
+      if (!canRecheck(card) || (cardId && card.id !== cardId)) return card
+      count += 1
+      return { ...card, status: 'queued', result: null, item: null, candidates: [], error: '', recheckOrientation: true }
+    }))
+    if (!count) return
+    setSearching(null)
+    setError('')
+    setMessage(`Queued ${count} card${count === 1 ? '' : 's'} for another AI look, including orientation checks.`)
+    analyseQueued()
+  }
+
   async function addAllReady() {
     const ready = cardsRef.current.filter((card) => card.status === 'ready')
     let added = 0
@@ -304,6 +349,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   const feederName = scanner.feederName || ''
   const flatbedReady = Boolean(scanner.scannerName) && ['ready', 'scanning', 'processing'].includes(scanner.state)
   const busy = Boolean(feed?.running)
+  const recheckCount = cards.filter(canRecheck).length
 
   return (
     <section className="store-scan">
@@ -360,6 +406,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
           <span className="done"><b>{done.length}</b> {toDestination ? 'saved' : 'added'}</span>
         </span>
         {counts.ready ? <button type="button" className="primary" onClick={addAllReady}>{toDestination ? `Save ${counts.ready} ready` : `Add ${counts.ready} ready to stock`}</button> : null}
+        {recheckCount ? <button type="button" onClick={() => recheckCards()} disabled={aiState !== 'ready'} title="Check orientation and identify all unsaved cards again using their existing scans">Recheck {recheckCount} with AI</button> : null}
         {toDestination ? destination.actions || null : null}
       </div>
       {message ? <p className="store-scan-message">{message}</p> : null}
@@ -385,7 +432,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
               {card.status === 'choose' ? (
                 <select value="" onChange={(event) => { const chosen = card.candidates.find((candidate) => candidate.item.item_id === event.target.value); if (chosen) patch(card.id, { item: pickItem(chosen.item), status: 'ready' }) }}>
                   <option value="">Choose the matching item…</option>
-                  {card.candidates.map((candidate) => <option key={candidate.item.item_id} value={candidate.item.item_id}>{itemLabel(candidate.item)} ({candidate.score}%)</option>)}
+                  {card.candidates.map((candidate) => <option key={candidate.item.item_id} value={candidate.item.item_id}>{itemLabel(candidate.item)} ({candidate.score}%{candidate.photoMatch ? ', photo match' : ''})</option>)}
                 </select>
               ) : null}
               {['choose', 'unmatched', 'ready'].includes(card.status) ? (
@@ -406,7 +453,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
                   </span>
                 ) : (
                   <span className="store-scan-condition">
-                    <select value={card.condition === GRADED ? GRADED : UNGRADED} onChange={(event) => patch(card.id, { condition: event.target.value, error: '' })} title="Ungraded, or a graded slab">
+                    <select value={card.condition === GRADED ? GRADED : canonicalRawCondition(card.condition) || DEFAULT_RAW_CONDITION} onChange={(event) => patch(card.id, { condition: event.target.value, error: '' })} title="Condition, or a graded slab">
                       {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
                     </select>
                   </span>
@@ -423,7 +470,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             <div className="store-scan-card-actions">
               {card.status === 'ready' ? <button type="button" className="primary" onClick={async () => { if (await addToStock(card)) (toDestination ? destination.onChanged?.() : onStockChanged()) }}>{toDestination ? 'Save' : 'Add'}</button> : null}
               {toDestination && ['choose', 'unmatched', 'failed'].includes(card.status) ? <button type="button" onClick={async () => { if (await addToStock(card, { forReview: true })) destination.onChanged?.() }} title="Save it on the job for someone to identify later">Save for review</button> : null}
-              {card.status === 'failed' ? <button type="button" onClick={() => { patch(card.id, { status: 'queued', error: '' }); analyseQueued() }}>Retry</button> : null}
+              {canRecheck(card) ? <button type="button" onClick={() => recheckCards(card.id)} disabled={aiState !== 'ready'} title="Check orientation and identify this card again using its existing scans">Recheck with AI</button> : null}
               {!['adding', 'analysing'].includes(card.status) ? <button type="button" onClick={() => patch(card.id, { status: 'skipped' })}>Skip</button> : null}
             </div>
           </div>
@@ -449,6 +496,34 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   )
 }
 
+function CatalogueSearchResult({ item, onPick }) {
+  const [imageFailed, setImageFailed] = useState(false)
+  const fields = item.dynamic_fields || {}
+  const collection = fields.collection || ''
+  const setName = item.setName || fields.set_name || ''
+  const details = [...new Set([
+    fields.parallel,
+    fields.finish,
+  ].filter(Boolean))].join(' · ')
+
+  return (
+    <button type="button" className="store-scan-search-result" onClick={() => onPick(item)}>
+      <span className="store-scan-search-photo">
+        {item.imageUrl && !imageFailed
+          ? <img src={item.imageUrl} alt={item.name || item.subject || 'Catalogue item'} loading="lazy" onError={() => setImageFailed(true)} />
+          : <span>No image</span>}
+      </span>
+      <span className="store-scan-search-info">
+        <strong>{item.name || item.subject}</strong>
+        <small>{[item.card_number ? `#${item.card_number}` : '', item.release_year].filter(Boolean).join(' · ')}</small>
+        <span className="store-scan-search-collection">Set: {setName || 'Not specified'}</span>
+        <span className="store-scan-search-collection">Collection: {collection || 'Not specified'}</span>
+        {details ? <small>{details}</small> : null}
+      </span>
+    </button>
+  )
+}
+
 // Manual catalogue search for a card the AI couldn't match.
 export function CatalogueSearchDialog({ initialQuery, onClose, onPick }) {
   const [query, setQuery] = useState(initialQuery)
@@ -460,13 +535,15 @@ export function CatalogueSearchDialog({ initialQuery, onClose, onPick }) {
     try {
       // The register search returns register candidates (catalogItemId, number, releaseYear);
       // callers here work with catalogue rows (item_id, card_number, release_year).
-      const found = await searchDesktopTradeCatalogue(query)
+      const found = await searchDesktopTradeCatalogue(query, { allMatches: true })
       setResults(found.map((row) => ({
         ...row,
         item_id: row.item_id || row.catalogItemId || row.catalogueItemId,
         subject: row.subject || row.name,
         card_number: row.card_number || row.number || '',
         release_year: row.release_year || row.releaseYear || '',
+        dynamic_fields: row.dynamic_fields || row.dynamicFields || {},
+        imageUrl: row.imageUrl || row.image || '',
       })).filter((row) => row.item_id))
     } catch { setResults([]) } finally { setBusy(false) }
   }
@@ -486,10 +563,7 @@ export function CatalogueSearchDialog({ initialQuery, onClose, onPick }) {
         <div className="store-scan-search-results">
           {results && !results.length ? <p>No catalogue items found. Cards the catalogue doesn't have can't be added here; skip it for now.</p> : null}
           {(results || []).map((item) => (
-            <button type="button" key={item.item_id} onClick={() => onPick(item)}>
-              <strong>{item.name || item.subject}</strong>
-              <small>{[item.card_number ? `#${item.card_number}` : '', item.release_year].filter(Boolean).join(' · ')}</small>
-            </button>
+            <CatalogueSearchResult key={`${item.item_id}:${item.imageUrl}`} item={item} onPick={onPick} />
           ))}
         </div>
       </section>

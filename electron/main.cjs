@@ -646,8 +646,19 @@ function getStoreBackupFile() {
   return path.join(getDataDir(), 'store.backup.json')
 }
 
+// Scans saved by dev builds (1 Oct - 23 Oct 2026) stored file:// links, which the
+// page can't load; they're read back as the app's own scan-images links.
+const FILE_SCAN_URL = /"file:\/\/\/[^"]*\/([^"/?#]+\.(?:png|jpe?g|webp))"/gi
+function fixScanUrls(text) {
+  return text.replace(FILE_SCAN_URL, (_match, name) => {
+    let fileName = name
+    try { fileName = decodeURIComponent(name) } catch {}
+    return JSON.stringify(getScanImageUrl(fileName))
+  })
+}
+
 async function readStoreFile(file) {
-  return JSON.parse(await readFile(file, 'utf8'))
+  return JSON.parse(fixScanUrls(await readFile(file, 'utf8')))
 }
 
 // Saves are written to a temporary file and then swapped in, one at a time, so the store file
@@ -871,8 +882,10 @@ async function scanThumbnail(filePath, width) {
   return thumbPath
 }
 
-function getScanImageUrl(fileName, filePath) {
-  if (isDev) return pathToFileURL(filePath).toString()
+// Scans are always served through the app's own scheme. In dev the page comes
+// from http://localhost, which Chromium won't let load file:// images (they
+// showed as broken), so dev uses the same scan-images route as the release.
+function getScanImageUrl(fileName) {
   return `collectorshub-pos://scan-images/${encodeURIComponent(fileName)}`
 }
 
@@ -1927,6 +1940,15 @@ let modelInstall = null
 
 ipcMain.handle('ai:status', async () => cardRecognition.getStatus())
 
+// A customer-facing condition note from a purchase inspection (text only).
+ipcMain.handle('ai:write-description', async (_event, facts = {}) => {
+  try {
+    return { ok: true, text: await cardRecognition.writeListingDescription(facts) }
+  } catch (error) {
+    return { ok: false, code: error.code || 'FAILED', message: error.message || 'The local AI could not write a description.' }
+  }
+})
+
 ipcMain.handle('ai:install-model', async (event) => {
   if (modelInstall) return modelInstall.promise
   const controller = new AbortController()
@@ -1946,8 +1968,7 @@ ipcMain.handle('ai:cancel-install', () => {
 // Returns { ok, result, model, durationMs } or { ok: false, code, message } so
 // one failed card never throws across the batch loop in the renderer.
 // mode 'identify' (store intake, the Register): a quick reading of what finds
-// the card in the catalogue, without the side/orientation checks a catalogue
-// item's photos need.
+// the card in the catalogue, after any requested side/orientation checks.
 ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSides = false, checkUpright = null, category = '', mode = 'full' } = {}) => {
   const controller = new AbortController()
   if (jobId) recognitionJobs.set(jobId, controller)
@@ -1964,16 +1985,14 @@ ipcMain.handle('ai:recognize-card', async (_event, { jobId, front, back, checkSi
     // weak, the AI checks it first, so the card is identified (and later
     // saved) the right way round and the right way up.
     let orientation = null
-    if (mode === 'identify') {
-      const output = await cardRecognition.identifyCard({ frontPath, backPath, category }, controller.signal)
-      return { ok: true, ...output, sidesSwapped: false, orientation: null, provider: cardRecognition.id, providerLabel: cardRecognition.label }
-    }
     if (checkSides || checkUpright?.front || checkUpright?.back) {
       orientation = await checkCardImages({ front, back, checkSides, checkUpright: checkUpright || {}, trading: /trading/i.test(String(category)) }, controller.signal)
       frontPath = orientation.images.front ? resolveScanImagePath(orientation.images.front) : ''
       backPath = orientation.images.back ? resolveScanImagePath(orientation.images.back) : ''
     }
-    const output = await cardRecognition.recognizeCard({ frontPath, backPath, category }, controller.signal)
+    const output = mode === 'identify'
+      ? await cardRecognition.identifyCard({ frontPath, backPath, category }, controller.signal)
+      : await cardRecognition.recognizeCard({ frontPath, backPath, category }, controller.signal)
     return {
       ok: true,
       ...output,
@@ -2017,7 +2036,9 @@ ipcMain.handle('scanner:analyze-card', async (_event, image, options = {}) => {
 })
 
 app.whenReady().then(async () => {
-  if (!isDev) {
+  // Scan images in dev and release; the app's own files only in release (dev
+  // loads the page from the Vite server).
+  {
     protocol.handle('collectorshub-pos', (request) => {
       const url = new URL(request.url)
       if (url.hostname === 'scan-images') {
@@ -2034,6 +2055,7 @@ app.whenReady().then(async () => {
         return net.fetch(pathToFileURL(filePath).toString())
       }
 
+      if (isDev) return new Response('Not found', { status: 404 })
       const filePath = resolveDistPath(request.url)
       return net.fetch(pathToFileURL(filePath).toString())
     })

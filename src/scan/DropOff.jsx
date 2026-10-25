@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { AlertTriangle, ArrowLeft, Camera, CheckCircle2, ImagePlus, Package, Plus, Printer, Search, Trash2, X } from 'lucide-react'
-import { CUSTODY_STATUS, JOB_STATUS, addContainer, cancelJob, createJob, finaliseImport, intakePhotoUrls, listJobs, recordReceipt, recordReturn, setJobStatus, uploadIntakePhotos } from '../lib/collectionScanning'
+import { CUSTODY_STATUS, JOB_STATUS, addContainer, cancelJob, closeJob, createJob, finaliseImport, intakePhotoUrls, listJobs, recordReceipt, recordReturn, setJobStatus, uploadIntakePhotos } from '../lib/collectionScanning'
 import { CameraCapture } from '../identity/IdentityWizard'
 import { AuthBadge, AuthorisationPanel, CollectorCard, CollectorPicker, ImportDialog, JobScanner, ProgressStrip, ReviewItems, clearImportKey, importKey, useJob } from './collectorParts'
 import { printContainerLabels, printIntakeReceipt } from './print'
@@ -21,12 +21,15 @@ export default function DropOff({ session, queues, onSaveQueue }) {
   return <Dashboard session={session} onNew={() => setView({ name: 'new' })} onOpen={(jobId, tab, modal) => setView({ name: 'job', jobId, tab, modal })} />
 }
 
+const heldByStore = (job) => ['in_store', 'partially_returned'].includes(job.custody_status)
+
 // The main action for a job, by status (Resume Scanning first while it's being processed).
 function primaryAction(row) {
   if (row.status === 'pending_authorisation') return { label: 'View Intake', tab: 'overview' }
   if (row.status === 'needs_review') return { label: 'Review Items', tab: 'review' }
   if (row.status === 'ready_to_finalise') return { label: 'Finalise Import', tab: 'overview', modal: 'import' }
-  if (row.status === 'ready_for_collection') return { label: 'Record Return', tab: 'overview', modal: 'return' }
+  // Record Return only while the store holds the cards; one never handed over is closed instead.
+  if (row.status === 'ready_for_collection') return heldByStore(row) ? { label: 'Record Return', tab: 'overview', modal: 'return' } : { label: 'Close Job', tab: 'overview', modal: 'close' }
   if (['received', 'scanning', 'paused', 'awaiting_intake'].includes(row.status) && row.authorisation_status === 'approved') return { label: 'Resume Scanning', tab: 'scanning' }
   return { label: 'View Intake', tab: 'overview' }
 }
@@ -298,12 +301,14 @@ function JobWorkspace({ session, jobId, initialTab = 'overview', initialModal = 
             {canScan ? <button type="button" className="gold-button" onClick={() => setTab('scanning')}>Resume Scanning</button> : null}
             {job.custody_status === 'not_received' && !closed ? <button type="button" className="gold-button" onClick={() => setModal('receive')}>Confirm handover</button> : null}
             {counts.ready && !closed && approved ? <button type="button" onClick={() => { setError(''); setModal('import') }}>Finalise Import</button> : null}
-            {['in_store', 'partially_returned'].includes(job.custody_status) ? <button type="button" onClick={() => setModal('return')}>Record Return</button> : null}
+            {heldByStore(job) ? <button type="button" onClick={() => setModal('return')}>Record Return</button> : null}
+            {job.status === 'ready_for_collection' && !heldByStore(job) ? <button type="button" className="gold-button" onClick={() => setModal('close')}>Close Job</button> : null}
             <button type="button" onClick={() => printIntakeReceipt(data)}><Printer size={15} /> Print Receipt</button>
             <button type="button" onClick={() => printContainerLabels(data)} disabled={!containers.length}><Printer size={15} /> Labels</button>
             {['scanning', 'received'].includes(job.status) ? <button type="button" onClick={() => act(() => setJobStatus(job.id, 'paused'))}>Pause</button> : null}
             {['scanning', 'paused', 'needs_review', 'received'].includes(job.status) ? <button type="button" onClick={() => act(() => setJobStatus(job.id, 'ready_to_finalise'))}>Scanning finished</button> : null}
-            {!closed && !['in_store', 'partially_returned'].includes(job.custody_status) ? <button type="button" onClick={() => setModal('cancel')}>Cancel job</button> : null}
+            {/* Not once imported (Ready for collection): the cards are already in the collection, so Close Job instead. */}
+            {!closed && !heldByStore(job) && job.status !== 'ready_for_collection' ? <button type="button" onClick={() => setModal('cancel')}>Cancel job</button> : null}
           </div>
           <div className="cs-overview-grid">
             <dl className="cs-facts">
@@ -345,7 +350,14 @@ function JobWorkspace({ session, jobId, initialTab = 'overview', initialModal = 
 
       {modal === 'import' ? <ImportDialog jobId={job.id} collectorName={collector.name} busy={busy} error={error} onCancel={() => setModal('')} onConfirm={async (leaveOut) => { const ok = await act(async () => { await finaliseImport(job.id, importKey(job.id), leaveOut); clearImportKey(job.id) }); if (ok) setModal('') }} /> : null}
       {modal === 'receive' ? <ConfirmName title="Confirm handover" text={`Check the ${containers.length} container${containers.length === 1 ? '' : 's'} against the list. The collector types their name to acknowledge; your name, this store and the time are recorded.`} label="Collector's name" action="Confirm handover" onCancel={() => setModal('')} onConfirm={(name) => act(async () => { await recordReceipt(job.id, name); setModal('') })} /> : null}
-      {modal === 'return' ? <ReturnDialog containers={containers.filter((container) => !container.returned_at)} onCancel={() => setModal('')} onConfirm={(ids, name, notes) => act(async () => { await recordReturn(job.id, ids, name, notes); setModal('') })} /> : null}
+      {modal === 'close' && job.status === 'ready_for_collection' && !heldByStore(job) ? (
+        <div className="register-modal" role="dialog" aria-modal="true"><section>
+          <h2>Close this job</h2>
+          <p>The cards are in {collector.name}'s collection. No handover to the store was recorded ({CUSTODY_STATUS[job.custody_status]}), so there is nothing to return. Closing marks the job Completed; its records stay.</p>
+          <div className="modal-actions"><button type="button" onClick={() => setModal('')}>Back</button><button type="button" className="gold-button" disabled={busy} onClick={() => act(async () => { await closeJob(job.id); setModal('') })}>{busy ? 'Closing…' : 'Close Job'}</button></div>
+        </section></div>
+      ) : null}
+      {modal === 'return' && heldByStore(job) ? <ReturnDialog containers={containers.filter((container) => !container.returned_at)} onCancel={() => setModal('')} onConfirm={(ids, name, notes) => act(async () => { await recordReturn(job.id, ids, name, notes); setModal('') })} /> : null}
       {modal === 'cancel' ? <ConfirmName title="Cancel this job" text="Records stay; nothing more can be scanned or added." label="Reason" action="Cancel job" onCancel={() => setModal('')} onConfirm={(reason) => act(async () => { await cancelJob(job.id, reason); setModal('') })} /> : null}
       {modal === 'container' ? <AddContainerDialog onCancel={() => setModal('')} onConfirm={(values) => act(async () => { await addContainer(job.id, values); setModal('') })} /> : null}
     </div>

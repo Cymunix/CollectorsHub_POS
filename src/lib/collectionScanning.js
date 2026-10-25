@@ -62,6 +62,8 @@ export const setJobStatus = (jobId, status) => call('cs_set_status', { p_job_id:
 export const finaliseImport = (jobId, idempotencyKey, excludeUnresolved = false) => call('cs_finalise_import', { p_job_id: jobId, p_idempotency_key: idempotencyKey, p_exclude_unresolved: excludeUnresolved })
 export const recordReturn = (jobId, containerIds, recipientName, discrepancies = '') => call('cs_record_return', { p_job_id: jobId, p_container_ids: containerIds, p_recipient_name: recipientName, p_discrepancies: discrepancies })
 export const cancelJob = (jobId, reason) => call('cs_cancel_job', { p_job_id: jobId, p_reason: reason })
+// Ready for collection, but the store never held the collection (no handover recorded): close it.
+export const closeJob = (jobId) => call('cs_close_job', { p_job_id: jobId })
 
 // A scanned card (from the shared scanner screen) saved as a draft entry.
 // The card's own id is the idempotency key, so a retry never adds it twice.

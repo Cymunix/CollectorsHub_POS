@@ -591,6 +591,20 @@ BEGIN
   END IF;
 END $$;
 
+-- A drop-off scanned and imported without "Confirm handover" (the store never
+-- recorded holding the collection) has nothing to return: staff close it.
+CREATE OR REPLACE FUNCTION public.cs_close_job(p_job_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE j public.collection_intake_jobs;
+BEGIN
+  j := public.cs_staff_job(p_job_id);
+  IF j.status <> 'ready_for_collection' THEN RAISE EXCEPTION 'Only a job that is ready for collection can be closed.'; END IF;
+  IF j.custody_status IN ('in_store', 'partially_returned') THEN RAISE EXCEPTION 'The store still holds this collection: record the return instead.'; END IF;
+  UPDATE public.collection_intake_jobs SET status = 'completed', completed_at = now() WHERE id = j.id;
+  UPDATE public.collection_scan_authorisations SET status = 'completed' WHERE job_id = j.id AND status = 'approved';
+  PERFORM public.cs_log(j.id, 'employee', 'job_closed', jsonb_build_object('custody', j.custody_status), public.myhr_employee_id(j.store_id));
+END $$;
+
 CREATE OR REPLACE FUNCTION public.cs_cancel_job(p_job_id uuid, p_reason text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE j public.collection_intake_jobs;
@@ -695,6 +709,8 @@ GRANT EXECUTE ON FUNCTION public.cs_set_status(uuid, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cs_finalise_import(uuid, text, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cs_record_return(uuid, uuid[], text, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cs_cancel_job(uuid, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.cs_close_job(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.cs_close_job(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cs_my_scanning() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cs_decide_authorisation(uuid, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cs_revoke_authorisation(uuid) TO authenticated;

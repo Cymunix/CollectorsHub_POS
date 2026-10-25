@@ -99,6 +99,7 @@ contextBridge.exposeInMainWorld('nordvikDesktop', {
     return () => ipcRenderer.removeListener('ai:install-progress', listener)
   },
   recognizeCard: (request) => ipcRenderer.invoke('ai:recognize-card', request),
+  writeListingDescription: (facts) => ipcRenderer.invoke('ai:write-description', facts),
   warmUpAi: () => ipcRenderer.invoke('ai:warm-up'),
   checkCardOrientation: (request) => ipcRenderer.invoke('ai:check-orientation', request),
   cancelCardRecognition: (jobId) => ipcRenderer.invoke('ai:cancel-recognition', jobId),

@@ -6,6 +6,7 @@ import {
   ArrowRight,
   ArrowDownToLine,
   BarChart3,
+  LineChart,
   ClipboardList,
   PartyPopper,
   Plug,
@@ -49,8 +50,13 @@ import {
   IdCard,
 } from 'lucide-react'
 import './styles.css'
-import AdminWorkspace from './AdminWorkspace'
+import AdminWorkspace, { needsSideCheck, needsUprightCheck } from './AdminWorkspace'
 import ScanCentre from './scan/ScanCentre'
+import MarketIntelligencePanel from './register/MarketIntelligencePanel'
+import PurchasePricing from './settings/PurchasePricing'
+import PurchaseInspectionNote from './register/PurchaseInspectionNote'
+import { loadListingNotes, loadPurchasePolicy, setActivePurchasePolicy, suggestedOffer } from './lib/marketIntelligence'
+import { LEGO_CONDITIONS } from './lib/marketMath'
 import OnboardingStore from './onboarding/OnboardingStore'
 import { loadProjects as loadOnboardingProjects } from './lib/onboarding'
 import CustomersView from './customers/CustomersView'
@@ -67,7 +73,8 @@ import { deviceLanguage, setLanguage } from './i18n/runtime'
 setLanguage(deviceLanguage())
 import ConditionHint from './ConditionHint'
 import SlabCertFields from './SlabCertFields'
-import { CARD_CONDITIONS, GRADED, UNGRADED, isCardCategory, isRawCardCondition, ungradedStat } from './lib/cardCondition'
+import { CARD_CONDITIONS, DEFAULT_RAW_CONDITION, GRADED, UNGRADED, canonicalRawCondition, isCardCategory, isRawCardCondition, ungradedStat } from './lib/cardCondition'
+import { legoGroupFromCondition } from './lib/marketMath'
 import MyHRView from './MyHR'
 import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
@@ -623,6 +630,7 @@ function App() {
       registerName: store.register?.name || 'Main Register',
       createdAt: new Date().toISOString(),
       transient: isTransientStore,
+      inspectionsError: backendResult?.inspections_error || '',
     }
 
     const [nextInventory, customers, nextSync] = isTransientStore
@@ -1252,6 +1260,7 @@ function App() {
           />
         ) : null}
         {activeView === 'settings' ? <PersonalSettings session={authSession} dataPath={dataPath} onLogout={handleLogout} updateCheck={<UpdateCheck />} /> : null}
+        {activeView === 'settings' && authSession?.storeId && ['owner', 'manager'].includes(String(authSession.role || '').toLowerCase()) ? <section className="cu-page ps-page"><PurchasePricing session={authSession} /></section> : null}
         {activeView.startsWith('org-') && isOrgSession ? (
           <OrgPortal session={authSession} activeModule={activeView.slice(4)} onModule={(module) => setActiveView(`org-${module}`)} />
         ) : null}
@@ -1518,6 +1527,14 @@ function RegisterView({
   const [saleScannerStats, setSaleScannerStats] = useState({ scanned: 0, added: 0, unavailable: 0, pending: 0 })
   const [lines, setLines] = useState([])
   const [selectedLineId, setSelectedLineId] = useState('')
+  // Market Intelligence: the trade line being researched (the drawer is open while set).
+  const [researchLineId, setResearchLineId] = useState('')
+  const [purchasePolicy, setPurchasePolicy] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    loadPurchasePolicy(authSession?.storeId).then((policy) => { if (!cancelled) { setPurchasePolicy(policy); setActivePurchasePolicy(policy) } })
+    return () => { cancelled = true }
+  }, [authSession?.storeId])
   const [customerQuery, setCustomerQuery] = useState('')
   const [customer, setCustomer] = useState(null)
   const [profileMatches, setProfileMatches] = useState([])
@@ -2079,7 +2096,7 @@ function RegisterView({
     // one row, counted by quantity.
     const stackWith = (session.items || []).find((existing) => stacksWith(existing, {
       catalogItemId: seed.catalogItemId || candidate?.catalogItemId || '',
-      condition: seed.graded ? GRADED : UNGRADED,
+      condition: seed.graded ? GRADED : canonicalRawCondition(seed.condition) || DEFAULT_RAW_CONDITION,
       graded: !!seed.graded,
     }))
     if (stackWith) {
@@ -2112,7 +2129,7 @@ function RegisterView({
       name,
       sku,
       category: seed.category || candidate?.category || '',
-      condition: seed.graded ? GRADED : UNGRADED,
+      condition: seed.graded ? GRADED : canonicalRawCondition(seed.condition) || DEFAULT_RAW_CONDITION,
       quantity: 1,
       graded: !!seed.graded,
       gradingCompany: seed.gradingCompany || '',
@@ -2159,7 +2176,7 @@ function RegisterView({
     setScanStatus('Scanning')
     const events = []
     const offCard = api.onFeedCard?.((card) => {
-      const event = { ...normaliseScanEvent(card.frontImage, workflow), sourceDevice: card.frontImage?.scannerName || status.feederName, backImage: card.backImage ? { path: card.backImage.path || '', url: card.backImage.url || '' } : null }
+      const event = { ...normaliseScanEvent(card.frontImage, workflow), sourceDevice: card.frontImage?.scannerName || status.feederName, backImage: card.backImage || null, feed: card.feed || null }
       events.push(event)
       onEvent?.(event)
     })
@@ -2228,14 +2245,22 @@ function RegisterView({
   async function recognizeScanEvent(event, fallbackCategory = 'Sports Cards') {
     const imagePath = event?.image?.path || ''
     if (!imagePath) throw new Error('No scan image was saved for recognition.')
+    const card = { frontImage: event.image, backImage: event.backImage, feed: event.feed, category: fallbackCategory }
     const response = await desktopApi().recognizeCard({
       jobId: createId('register_ai_job'),
-      front: { path: imagePath },
-      back: event?.backImage?.path ? { path: event.backImage.path } : null,
+      front: event.image,
+      back: event?.backImage?.path ? event.backImage : null,
+      checkSides: needsSideCheck(card),
+      checkUpright: needsUprightCheck(card),
+      category: fallbackCategory,
       // Quick identify: only what finds the card in the catalogue.
       mode: 'identify',
     })
     if (!response?.ok) throw new Error(response?.message || 'Local AI could not identify this card.')
+    if (response.orientation?.images) {
+      event.image = response.orientation.images.front
+      event.backImage = response.orientation.images.back
+    }
     const analysis = await analyseRecognizedCard(response.result, response.result?.category || fallbackCategory)
     return {
       ...analysis,
@@ -2413,7 +2438,7 @@ function RegisterView({
         category: item.category || '',
         image: item.scanImageUrl || '',
         // Scanned cards: Ungraded or Graded (the slab's company, grade and cert go with it).
-        condition: item.graded ? GRADED : UNGRADED,
+        condition: item.graded ? GRADED : canonicalRawCondition(item.condition) || DEFAULT_RAW_CONDITION,
         quantity: Number(item.quantity || 1),
         unitPrice: 0,
         marketValue: Number(item.marketValue || 0),
@@ -2532,8 +2557,9 @@ function RegisterView({
     const name = sourceItem?.name || sourceItem?.title || query.trim()
     if (!name) return
     const category = sourceItem?.category || ''
-    const condition = isCardCategory(category) && (!sourceItem?.condition || isRawCardCondition(sourceItem.condition))
-      ? UNGRADED
+    // Cards: the condition on the scale (staff assess it); Near Mint to start.
+    const condition = isCardCategory(category) && !/^graded$/i.test(sourceItem?.condition || '')
+      ? canonicalRawCondition(sourceItem?.condition) || DEFAULT_RAW_CONDITION
       : sourceItem?.condition || conditionOptions('buy', category)[0] || 'Near Mint'
     const priced = marketValueForLineCondition(sourceItem, condition)
     const marketValue = Number(priced.value ?? sourceItem?.marketValue ?? sourceItem?.price ?? sourceItem?.inStorePrice ?? 0)
@@ -2559,7 +2585,7 @@ function RegisterView({
         conditionMarketValues: sourceItem?.conditionMarketValues || sourceItem?.marketStats?.byCondition || null,
         marketValueSource: priced.source || sourceItem?.marketValueSource || '',
         salesUsed: Number(priced.count || sourceItem?.salesUsed || sourceItem?.marketStats?.sales_count || 0),
-        storeOffer: suggestedStoreCreditOffer(marketValue),
+        storeOffer: suggestedStoreCreditOffer(marketValue, { category, condition }),
         discount: 0,
       },
     ])
@@ -2838,6 +2864,8 @@ function RegisterView({
           scanSessionId: line.scanSessionId || '',
           marketValue: Number(line.marketValue || 0),
           storeOffer: Number(line.storeOffer || 0),
+          // Market Intelligence research and inspection, saved with the bought item.
+          research: line.direction === 'incoming' ? line.research || null : null,
           total: line.direction === 'incoming'
             ? Number(line.storeOffer || 0) * Number(line.quantity || 1)
             : Number(line.unitPrice || 0) * Number(line.quantity || 1) - discountAmount(line),
@@ -2863,6 +2891,7 @@ function RegisterView({
       })
 
       setTransactionSaveState('synced')
+      if (transaction.inspectionsError) setNotice(`Sale completed, but the item inspections weren't saved: ${transaction.inspectionsError}`)
       setCompletedTransaction({
         ...transaction,
         customer: effectiveCustomer,
@@ -3285,6 +3314,7 @@ function RegisterView({
                               <span>
                                 <strong>{line.name}</strong>
                                 <small>{[line.sku ? `SKU ${line.sku}` : '', incoming ? 'Customer item' : line.category].filter(Boolean).join(' | ')}</small>
+                                {incoming && line.research?.pricing_group ? <small className="mi-inspected">{Object.values(line.research.minifigs || {}).some((figure) => figure.missing) ? 'Inspected: minifigures missing' : 'Researched'}</small> : null}
                                 {incoming && wishlistDemand[line.catalogItemId] ? <small className="wanted-badge" title={wantedTitle(wishlistDemand[line.catalogItemId])}>♥ {wantedLabel(wishlistDemand[line.catalogItemId])}</small> : null}
                                 {incoming && !line.inventoryId ? (
                                   line.graded
@@ -3312,7 +3342,7 @@ function RegisterView({
                                   patch.marketValue = priced.value
                                   patch.marketValueSource = priced.source
                                   patch.salesUsed = priced.count
-                                  patch.storeOffer = suggestedStoreCreditOffer(priced.value)
+                                  patch.storeOffer = suggestedStoreCreditOffer(priced.value, { ...line, condition })
                                 }
                                 updateLine(line.localId, patch)
                               }}
@@ -3323,7 +3353,7 @@ function RegisterView({
                           </td>
                           <td>
                             {incoming ? (
-                              <span className="readonly-money-value">{money.format(Number(line.marketValue || 0))}</span>
+                              <button type="button" className="readonly-money-value mi-market-link" title="Open Market Intelligence" onClick={(event) => { event.stopPropagation(); setResearchLineId(line.localId) }}>{money.format(Number(line.marketValue || 0))}</button>
                             ) : (
                               <MoneyInput
                                 value={line.unitPrice}
@@ -3347,6 +3377,11 @@ function RegisterView({
                           <td><strong>{money.format(lineTotal)}</strong></td>
                           <td>
                             <span className="line-actions">
+                              {incoming ? (
+                                <button className="icon-action mi-research-button" type="button" onClick={(event) => { event.stopPropagation(); setResearchLineId(line.localId) }} aria-label="Market Intelligence" title="Market Intelligence">
+                                  <LineChart size={16} />
+                                </button>
+                              ) : null}
                               <button className="icon-action delete" type="button" onClick={() => removeLine(line.localId)} aria-label="Remove item">
                                 <Trash2 size={16} />
                               </button>
@@ -3628,6 +3663,18 @@ function RegisterView({
           </section>
         ) : null}
       </div>
+
+      {researchLineId && lines.some((line) => line.localId === researchLineId && line.direction === 'incoming') ? (
+        <MarketIntelligencePanel
+          session={authSession}
+          policy={purchasePolicy}
+          lines={lines.filter((line) => line.direction === 'incoming')}
+          activeId={researchLineId}
+          onSelect={setResearchLineId}
+          onUpdateLine={updateLine}
+          onClose={() => setResearchLineId('')}
+        />
+      ) : null}
 
       {isCreateCustomerOpen ? (
         <CreateCustomerModal
@@ -4091,7 +4138,7 @@ function ScannedItemRow({ item, storeId, onRemove, onUpdate }) {
       </div>
       <label>
         <span className="condition-label">Condition <ConditionHint suggestion={item.conditionSuggestion} /></span>
-        <select value={item.graded ? GRADED : UNGRADED} onChange={(event) => onUpdate({ condition: event.target.value, graded: event.target.value === GRADED })}>
+        <select value={item.graded ? GRADED : canonicalRawCondition(item.condition) || DEFAULT_RAW_CONDITION} onChange={(event) => onUpdate({ condition: event.target.value, graded: event.target.value === GRADED })}>
           {CARD_CONDITIONS.map((option) => <option key={option}>{option}</option>)}
         </select>
       </label>
@@ -4612,15 +4659,24 @@ function suggestedCashOffer(marketValue) {
   return Math.round(Number(marketValue || 0) * 0.65 * 100) / 100
 }
 
-function suggestedStoreCreditOffer(marketValue) {
-  return Math.round(Number(marketValue || 0) * 0.75 * 100) / 100
+// LEGO: the sales recorded under another wording of the same pricing group
+// ("Pre-Owned 100%" for Used Complete), the one with the most sales.
+function legoGroupStat(values, condition) {
+  const group = legoGroupFromCondition(condition)
+  if (!group) return null
+  return Object.entries(values || {}).filter(([key]) => legoGroupFromCondition(key) === group).map(([, stat]) => stat).sort((a, b) => Number(b?.count || 0) - Number(a?.count || 0))[0] || null
+}
+
+function suggestedStoreCreditOffer(marketValue, line = {}) {
+  return suggestedOffer(marketValue, line)
 }
 
 function marketValueForLineCondition(item, condition) {
   const normalized = normalizeRegisterCondition(condition)
   const values = item?.conditionMarketValues || item?.marketStats?.byCondition || {}
   // Ungraded cards: every raw-card sale (Near Mint, Lightly Played…) together.
-  const stat = normalized === UNGRADED ? ungradedStat(values) : values[normalized] || Object.entries(values).find(([key]) => normalizeRegisterCondition(key) === normalized)?.[1]
+  const rawCard = normalized === UNGRADED || (isCardCategory(item?.category) && isRawCardCondition(normalized))
+  const stat = rawCard ? ungradedStat(values) : values[normalized] || Object.entries(values).find(([key]) => normalizeRegisterCondition(key) === normalized)?.[1] || legoGroupStat(values, condition)
   if (!stat) return { value: null, source: '', count: 0 }
   const value = Number(stat.average30Day ?? stat.average ?? stat.marketValue ?? stat.value)
   if (!Number.isFinite(value)) return { value: null, source: '', count: Number(stat.count || 0) }
@@ -4758,7 +4814,7 @@ function conditionOptions(mode, category) {
   const categoryText = String(category || '').toLowerCase()
   if (categoryText.includes('service')) return ['N/A']
   if (mode === 'buy' && (categoryText.includes('lego') || categoryText.includes('building'))) {
-    return ['New/Sealed', 'Pre-Owned 100%', 'Pre-Owned - Missing Parts', 'Damaged']
+    return LEGO_CONDITIONS
   }
   if (!isCollectibleCategory(category)) {
     return ['New', 'Open Box', 'Used - Like New', 'Used - Good', 'Used - Fair', 'Damaged', 'N/A']
@@ -5067,9 +5123,13 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
   async function approveListing(item = selected) {
     if (!item) return
     try {
+      // The public listing description (condition and contents) goes into the eBay listing.
+      const listingNotes = await loadListingNotes(item.inventoryId || item.id)
+      const title = item.name || item.title || item.sku || 'Item'
       const result = await desktopApi().listEbayItem({
         ...item,
         onlinePrice: Number(item.onlinePrice || item.inStorePrice || 0),
+        ...(listingNotes ? { description: `${title}\n\n${listingNotes}` } : {}),
       })
       updateInventoryItem(item.id, {
         listedForSale: true,
@@ -5411,6 +5471,7 @@ function InventoryView({ storeId = '', inventory, isSyncing, onNavigate, onSellI
                   <InventoryField label="Trade-In" value={selected.isTradeIn ? 'Yes' : 'No'} />
                   <InventoryField label="Last Synced" value={selected.syncedAt ? new Date(selected.syncedAt).toLocaleString() : ''} />
                 </div>
+                <PurchaseInspectionNote inventoryId={selected.inventoryId || selected.id} />
                 <details className="inventory-more-details">
                   <summary>More details</summary>
                   <div className="inventory-field-list compact">

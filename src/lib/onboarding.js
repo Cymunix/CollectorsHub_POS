@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient'
-import { GRADED, UNGRADED, isCardCategory, isRawCardCondition } from './cardCondition'
+import { DEFAULT_RAW_CONDITION, GRADED, canonicalRawCondition, isCardCategory } from './cardCondition'
 
 // Retailer inventory onboarding (supabase/retailer_onboarding.sql). Staged
 // items move Captured -> Awaiting Verification -> Awaiting Pricing -> Awaiting
@@ -212,7 +212,7 @@ export function rowsToItems(headers, rows, mapping, { defaultCategory = '' } = {
     const gradingCompany = get('grading_company')
     const grade = get('grade')
     // Cards are Ungraded or Graded; the original condition stays in the source row.
-    if (isCardCategory(category)) condition = gradingCompany || grade || /^graded$/i.test(condition) ? GRADED : !condition || isRawCardCondition(condition) ? UNGRADED : condition
+    if (isCardCategory(category)) condition = gradingCompany || grade || /^graded$/i.test(condition) ? GRADED : canonicalRawCondition(condition) || (condition && !/^ungraded$/i.test(condition) ? condition : DEFAULT_RAW_CONDITION)
     items.push({
       source_ref: `Row ${index + 2}`,
       source_row: original,

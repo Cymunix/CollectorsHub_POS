@@ -3704,6 +3704,10 @@ button:disabled {
   min-height: 36px;
 }
 
+.scan-review-finder-controls .scan-review-finder-name {
+  width: 200px;
+}
+
 .scan-review-finder-results {
   display: grid;
   gap: 6px;
@@ -8106,9 +8110,16 @@ button:disabled {
   overflow: auto;
 }
 
+/* The dialog is narrower than an admin table's usual minimum width. */
+.checklist-preview .admin-table {
+  min-width: 0;
+}
+
 .checklist-status.new { color: #166534; font-weight: 800; }
 .checklist-status.placeholder { color: #8a5d00; }
 .checklist-status.scanned { color: #526176; }
+.checklist-status.problem { color: #b3372e; font-weight: 700; }
+.checklist-status small { color: #5d6b82; font-weight: 500; }
 
 
 /* Top bar quick scan */
@@ -8185,7 +8196,11 @@ button:disabled {
 .store-scan-search-form { display: flex; gap: 8px; }
 .store-scan-search-form input { flex: 1; }
 .store-scan-search-results { display: grid; gap: 6px; }
-.store-scan-search-results button { display: grid; justify-items: start; text-align: left; }
+.store-scan-search-results .store-scan-search-result { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 12px; padding: 10px 12px; text-align: left; width: 100%; }
+.store-scan-search-photo { display: flex; align-items: center; justify-content: center; width: 64px; height: 88px; overflow: hidden; border-radius: 6px; background: #f1f5f9; color: #64748b; font-size: 11px; text-align: center; }
+.store-scan-search-photo img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.store-scan-search-info { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.store-scan-search-collection { font-size: 13px; font-weight: 600; }
 @media (max-width: 900px) { .store-scan-card { grid-template-columns: 64px minmax(0, 1fr); } }
 
 /* Checklist import: adding a new taxonomy level inline */
@@ -14877,3 +14892,182 @@ small.cs-warn { display: block; font-size: 12px; }
 
 /* Store scan intake: a graded slab's grading company, grade and cert, under its card. */
 .store-scan-slab { grid-column: 2 / -1; grid-row: 2; }
+
+/* Admin Scan Intake: "Photograph a set" picker. */
+.set-target-panel {
+  background: #f6f8fb;
+  border: 1px solid #e3e8ef;
+  border-radius: 10px;
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+}
+
+.set-target-panel.active {
+  background: #f0f6ff;
+  border-color: #c9dbf5;
+}
+
+.set-target-panel > .admin-check {
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.set-target-panel > .admin-check small {
+  color: #5d6b82;
+}
+
+.set-target-fields {
+  display: grid;
+  gap: 8px 12px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  margin-top: 10px;
+}
+
+.set-target-fields label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 4px;
+}
+
+.set-target-fields select,
+.set-target-fields input {
+  min-width: 0;
+}
+
+.set-target-progress {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 6px 12px;
+  margin-top: 10px;
+}
+
+.set-target-progress small {
+  color: #5d6b82;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Pending Review: "Photograph a set" grid. */
+.set-photo-group {
+  border: 1px solid #e3e8ef;
+  border-radius: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+}
+
+.set-photo-head {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.set-photo-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.set-photo-head small {
+  color: #5d6b82;
+}
+
+.set-photo-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.set-photo-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+
+.set-photo-tile {
+  background: #fff;
+  border: 1px solid #e3e8ef;
+  border-left-width: 4px;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  font: inherit;
+  gap: 4px;
+  padding: 8px;
+  text-align: left;
+}
+
+.set-photo-tile:hover {
+  border-color: #b8c7dc;
+}
+
+.set-photo-tile.ready { border-left-color: #2e9e5b; }
+.set-photo-tile.check { border-left-color: #d6a632; }
+.set-photo-tile.problem { border-left-color: #d0453b; }
+.set-photo-tile.done { border-left-color: #9aa8bb; opacity: 0.75; }
+
+.set-photo-images {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.set-photo-images img,
+.set-photo-noimage {
+  aspect-ratio: 5 / 7;
+  background: #f1f4f8;
+  border-radius: 4px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.set-photo-noimage {
+  align-items: center;
+  color: #8a97ab;
+  display: flex;
+  font-size: 11px;
+  justify-content: center;
+  text-align: center;
+}
+
+.set-photo-name {
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-photo-tile small {
+  color: #5d6b82;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-photo-status {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.set-photo-status.ready { color: #2e7d4f; }
+.set-photo-status.check { color: #9a6d08; }
+.set-photo-status.problem { color: #b3372e; }
+.set-photo-status.done { color: #6b7a90; }
+
+.set-photo-tile small.set-photo-warning {
+  color: #9a6d08;
+}

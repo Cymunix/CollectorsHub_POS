@@ -132,6 +132,9 @@ This is a collection/subset within the release, such as: Season Ticket, Rookie T
 Collection is NOT the card parallel.
 
 SUBJECT / SUBJECTS
+Trading card GAME cards (Pokémon, Magic, Star Wars and similar): the subject is the card's NAME as printed in its
+title line, NOT the character or object in the artwork; see TRADING CARD GAMES below. The rest of this section is
+for sports cards.
 subjects: EVERY player/person featured on the card, as a list. Dual, triple and quad cards
 (two or more players pictured or named, e.g. rookie combos, "Dual" inserts) have several; list each
 one separately, in the order printed (left to right, then top to bottom). Read the names from both sides.
@@ -154,7 +157,10 @@ The release/set year. For a season that spans two years (2013-14), the first yea
 
 SEASON
 Sports cards: the season as printed or as the set names it: "2013-14" for hockey and basketball seasons that span
-two years, "2024" for football and baseball. Trading card games: null.
+two years, or the product's printed edition year for football and baseball. Trading card games: null.
+Use the year beside the product name (e.g. "2025 PANINI DONRUSS FOOTBALL" means season "2025").
+Never use years in player statistics, college totals, draft history or biography as the set's season.
+If no product edition or season is visible, return null.
 
 BARCODES
 Only a UPC/EAN barcode number printed under a barcode (8 to 14 digits). Most single cards have none: return null.
@@ -206,7 +212,9 @@ Star Wars and similar) are NOT sports cards. For them the fields above mean:
 - property: the specific release / set, e.g. Stellar Crown, Surging Sparks.
 - item_type: Card.
 - collection: only a named collector line printed on the card; otherwise null (never "Base").
-- subject / subjects: what the card depicts (the card name, e.g. Feraligatr). One entry.
+- subject / subjects: the card's NAME exactly as printed in its title (the name line at the top), e.g. Feraligatr,
+  "Luke's X-wing", "Lightning Bolt". One entry. Read it from the text; never name the character or object shown
+  in the artwork instead ("Darth Vader's TIE Advanced" is not "Darth Vader"), and keep every printed word of it.
 - id_number: the card's own collector number as printed, without the set size (213/191 -> 213). A number printed
   as 33/120 is the collector number 33, never serial numbering.
 - publisher_manufacturer: e.g. The Pokémon Company, Wizards of the Coast, Konami, Bandai.
@@ -358,7 +366,7 @@ function normaliseResult(raw) {
   const players = []
   for (const name of [...(result.subjects || []), result.subject]) {
     for (const part of String(name || '').split('/')) {
-      const clean = part.trim()
+      const clean = tradingCardGame ? part.trim() : part.replace(/\s*[•·|]\s*(?:QB|RB|FB|WR|TE|OT|OG|OL|C|DE|DT|DL|LB|CB|DB|S|EDGE|K|P|LS)\s*$/i, '').trim()
       if (clean && !players.some((existing) => existing.toLowerCase() === clean.toLowerCase())) players.push(clean)
     }
   }
@@ -533,7 +541,7 @@ class OllamaCardRecognitionProvider {
             role: 'user',
             // The category the card was scanned under (the person scanning knows it).
             content: 'These two images are ONE card. Image 1 is the FRONT of the card. Image 2 is the BACK of the same card. Identify the card.'
-              + (/trading/i.test(category) ? ' It is a trading card GAME card (category: Trading Cards), not a sports card: follow the TRADING CARD GAMES rules.'
+              + (/trading/i.test(category) ? ' It is a trading card GAME card (category: Trading Cards), not a sports card: follow the TRADING CARD GAMES rules. The subject is the card name printed in its title line, not the character shown in the artwork.'
                 : /sports/i.test(category) ? ' It is a sports card (category: Sports Cards).' : ''),
             images: [front, back],
           },
@@ -592,10 +600,17 @@ Read only what identifies the card. Use only what is printed on the card; never 
 - subfranchise: the product line (e.g. Panini Contenders, Upper Deck) or the trading card game's era / set series.
 - property: the specific set without its year, e.g. "Panini Contenders Football", or a game's expansion name.
 - collection: a named insert or parallel line printed on the card (e.g. Rookie Ticket, Cracked Ice Ticket); null for a base card.
-- subject: the player(s) or the card's name. Several players: join them with "/". subjects: each one.
+- subject: sports cards: the player(s); several players: join them with "/". subjects: each one.
+  Exclude position labels: "JT TUIMOLOAU • DE" has subject "JT Tuimoloau", not "JT Tuimoloau • DE".
+  Trading card games: the card's NAME exactly as printed in its title line, never the character or object
+  shown in the artwork ("Darth Vader's TIE Advanced", not "Darth Vader"). The name is the main identifier;
+  the artwork only tells printings of the same card apart.
 - id_number: the card's own number as printed, without the set size: "64" for #64, "33" for 33/120, "EC-20" for EC-20.
 - release_year: the set's year (copyright line or set name); for a two-year season, the first year.
-- season: sports cards only: "2013-14" for hockey/basketball seasons, "2024" for football/baseball.
+- season: sports cards only: the PRODUCT'S edition/season, not the player's statistics year.
+  Use the printed product line: "2025 PANINI DONRUSS FOOTBALL" means season "2025", even if
+  a statistics table says YEAR 2024. Never use college stats, career totals, draft or biography years.
+  Hockey/basketball can span two years (e.g. "2013-14"). null if the product's season is not visible.
 - team: the team on a sports card.
 - parallel, variation: only if clearly printed or obvious (e.g. a foil colour named on the card).
 - serial_numbering: hand/stamped numbering such as 14/99 (NOT the card number of a trading card game).
@@ -634,7 +649,7 @@ OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCa
         {
           role: 'user',
           content: (images.length === 2 ? 'Image 1 is the FRONT of the card, image 2 the BACK. Identify the card.' : 'This is the FRONT of the card. Identify the card.')
-            + (/trading/i.test(category) ? ' It is a trading card GAME card (category: Trading Cards), not a sports card.'
+            + (/trading/i.test(category) ? ' It is a trading card GAME card (category: Trading Cards), not a sports card. The subject is the card name printed in its title line, not the character shown in the artwork.'
               : /sports/i.test(category) ? ' It is a sports card (category: Sports Cards).' : ''),
           images,
         },
@@ -656,6 +671,41 @@ OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCa
   result.suggested_condition = CARD_CONDITIONS.includes(parsed.suggested_condition) ? parsed.suggested_condition : null
   result.condition_notes = Array.isArray(parsed.condition_notes) ? parsed.condition_notes.map((note) => String(note).trim()).filter(Boolean).slice(0, 4) : []
   return { result, model: this.model, durationMs: Date.now() - started, mode: 'identify' }
+}
+
+// A short, factual customer-facing description of an item's condition and
+// contents from a purchase inspection (text only; no images). The model is
+// told to use only the facts given; staff review and edit it before it's saved.
+const DESCRIPTION_PROMPT = `You write the condition note for a store listing of a used collectible.
+Rules:
+- Use ONLY the facts in the JSON. Never add damage, features, history, rarity, value or anything else.
+- Never mention prices, values, buying, the store, or inspections.
+- Only describe the facts given; anything not given is not mentioned at all.
+- If minifigures are missing, name each missing one (and how many). If all are present, say so.
+- Plain, friendly, honest English. 1 to 3 short sentences. No headings, lists, emojis or exclamation marks.
+- Output only the description text.`
+
+OllamaCardRecognitionProvider.prototype.writeListingDescription = async function writeListingDescription(facts = {}) {
+  const response = await ollamaFetch('/api/chat', {
+    method: 'POST',
+    timeoutMs: 90000,
+    body: {
+      model: this.model,
+      stream: false,
+      keep_alive: '10m',
+      // Same context size as the scans so the model isn't reloaded.
+      options: { num_ctx: 16384, temperature: 0.2 },
+      messages: [
+        { role: 'system', content: DESCRIPTION_PROMPT },
+        { role: 'user', content: `Item facts (JSON):\n${JSON.stringify(facts, null, 2)}\n\nWrite the condition note.` },
+      ],
+    },
+  })
+  if (!response.ok) throw classifyOllamaError(response.status, await response.text().catch(() => ''))
+  const data = await response.json().catch(() => null)
+  const text = String(data?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+  if (!text) throw new CardRecognitionError('EMPTY_RESULT', 'The local AI returned no description.')
+  return text.slice(0, 1200)
 }
 
 module.exports = { OllamaCardRecognitionProvider, CardRecognitionError, QWEN_MODEL, normaliseResult }

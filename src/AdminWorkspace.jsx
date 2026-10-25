@@ -52,11 +52,20 @@ import {
   parseChecklist,
   checklistItemKey,
   checklistItemNumber,
+  parseChecklistTable,
+  groupChecklistRows,
+  checklistGroupLabel,
+  resolveChecklistGroup,
   parseSetRefs,
   isLegoCategory,
+  categoryHasSeries,
   propertyParentKey,
   taxonomyChildren,
   loadSetItems,
+  loadItemTypeNames,
+  loadTargetSetItems,
+  matchScanInTargetSet,
+  targetSetKey,
   createChecklistPlaceholders,
   isChecklistPlaceholder,
   alreadyInCatalogueMatch,
@@ -94,6 +103,7 @@ import {
   scannedFieldValue,
   searchScanCandidates,
   findItemsByCardNumber,
+  loadScanFinderCollections,
   updateCatalogueItemFromReview,
   updateCatalogueItemRecord,
   updateExplorerRecord,
@@ -245,6 +255,94 @@ function parseJsonEditor(value) {
   }
 }
 
+// ---- Photograph a set: matching within the set chosen at Scan Intake ----------
+
+// The number expected for this scan: one on from the previous scan of the same set
+// (one back when the stack is running in descending order).
+function expectedSetNumber(draft, drafts = []) {
+  const key = targetSetKey(draft.target)
+  const numberOf = (other) => checklistItemNumber(other.scanAnalysis?.bestMatch?.item || {}) || other.scanAnalysis?.setCheck?.number || ''
+  const earlier = drafts
+    .filter((other) => other.id !== draft.id && other.target && targetSetKey(other.target) === key
+      && String(other.createdAt || '') < String(draft.createdAt || '') && numberOf(other))
+    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+  if (!earlier.length) return ''
+  const last = numberOf(earlier[0])
+  const before = earlier[1] ? numberOf(earlier[1]) : ''
+  const descending = before && Number(String(before).match(/\d+/)?.[0]) - Number(String(last).match(/\d+/)?.[0]) === 1
+  return stepCardNumber(last, descending ? -1 : 1)
+}
+
+function stepCardNumber(value, step) {
+  const match = String(value || '').trim().match(/^(.*?)(\d+)(\D*)$/)
+  return match && Number(match[2]) + step > 0 ? `${match[1]}${Number(match[2]) + step}${match[3]}` : ''
+}
+
+// Printings that share a card number: the one whose photo looks like the scan; else,
+// when exactly one printing has no photo yet and the scan looks like none of the
+// others, that one.
+async function pickPrintingByPhoto(scanAnalysis, frontImage) {
+  const compare = adminDesktopApi().compareScanWithPhoto
+  if (typeof compare !== 'function' || !frontImage) return
+  const similar = []
+  const withoutPhoto = []
+  for (const candidate of scanAnalysis.candidates) {
+    const url = candidate.item.imageUrl || await catalogueFrontPhotoUrl(candidate.item.item_id).catch(() => '')
+    if (!url) { withoutPhoto.push(candidate); continue }
+    const check = await compare(frontImage, url).catch(() => null)
+    if (check?.ok && check.similar) similar.push({ candidate, overall: check.overall })
+  }
+  similar.sort((left, right) => left.overall - right.overall)
+  const pick = similar[0]?.candidate || (withoutPhoto.length === 1 ? withoutPhoto[0] : null)
+  if (!pick) return
+  pick.reasons = [...pick.reasons, similar.length ? 'Photo matches this printing' : 'The only printing without a photo yet']
+  scanAnalysis.bestMatch = pick
+  scanAnalysis.candidates = [pick, ...scanAnalysis.candidates.filter((candidate) => candidate !== pick)]
+  scanAnalysis.matchStatus = 'exact'
+  scanAnalysis.route = 'existing_match'
+  scanAnalysis.status = 'Exact catalogue match'
+  scanAnalysis.setCheck = { ...scanAnalysis.setCheck, variantBy: similar.length ? 'photo' : 'elimination' }
+}
+
+// Matches a scan's AI reading: within its set when it was scanned in "Photograph a
+// set" mode, otherwise against the whole catalogue.
+async function analyseScanReading(draft, result, { drafts = [], frontImage = null } = {}) {
+  const target = draft.target
+  if (!target?.categoryId) return analyseRecognizedCard(result, draft.category)
+  const items = await loadTargetSetItems(target)
+  const scanAnalysis = matchScanInTargetSet({
+    result,
+    target,
+    items,
+    ocrText: [draft.feed?.ocrText?.front, draft.feed?.ocrText?.back].filter(Boolean).join('\n'),
+    expectedNumber: expectedSetNumber(draft, drafts),
+  })
+  if (scanAnalysis.matchStatus === 'multiple') await pickPrintingByPhoto(scanAnalysis, frontImage || draft.frontImage)
+  return {
+    scanAnalysis,
+    taxonomy: {
+      category: target.category,
+      categoryId: target.categoryId,
+      ids: { subcategory_id: target.subcategoryId || '', franchise_id: target.franchiseId || '', subset_id: target.subsetId || '', property_id: target.propertyId || '', item_type_id: target.itemTypeId || '' },
+      names: target.names || {},
+      unresolved: {},
+    },
+  }
+}
+
+// Item Type names by id, so catalogue matches say "Card" or "Sticker" (items that
+// share a name and number) before images are linked.
+function useItemTypeNames() {
+  const [names, setNames] = useState(() => new Map())
+  useEffect(() => {
+    let alive = true
+    loadItemTypeNames().then((map) => { if (alive) setNames(map) })
+    return () => { alive = false }
+  }, [])
+  return names
+}
+const itemTypeLabel = (names, item) => (item?.item_type_id ? names.get(item.item_type_id) || '' : '')
+
 function adminDesktopApi() {
   const fallback = {
     async loadStore() {
@@ -315,6 +413,8 @@ function createLocalId(prefix) {
 
 export default function AdminWorkspace({ session, syncStatus, onLogout }) {
   const [activeView, setActiveView] = useState('overview')
+  // Item to open in Market Data (from Pricing / Sales Data's "Add sales data").
+  const [marketItemId, setMarketItemId] = useState('')
   const [scanDrafts, setScanDrafts] = useState([])
   // Draft writes happen after slow OCR/Supabase calls, so they must apply to the
   // latest list (not a render-time snapshot) and persist one at a time.
@@ -755,7 +855,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         )))
       }
       try {
-        const { taxonomy, scanAnalysis } = await analyseRecognizedCard(response.result, draft.category)
+        const { taxonomy, scanAnalysis } = await analyseScanReading(draft, response.result, { drafts: scanDraftsRef.current, frontImage: response.orientation?.images?.front || null })
         await patchRecognition(draft.id, {
           status: 'done',
           result: response.result,
@@ -808,6 +908,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         backImage: card.backImage,
         metadata: {},
         feed: card.feed,
+        ...(options.target ? { target: options.target } : {}),
       })
       setFeedState((current) => (current ? { ...current, queued: (current.queued || 0) + 1 } : current))
       if (options.autoAnalyse && aiStatusRef.current.state === 'ready') analyseSoon(id)
@@ -852,6 +953,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
       mode: readScannerPref('mode', 'Create Catalogue Items'),
       autoAnalyse: readScannerPref('feedAutoAnalyse', true),
       loadFaceDown: readScannerPref('feedFaceDown', true),
+      target: activeSetTarget(readScannerPref('photoTarget', null)),
     })
   }
 
@@ -891,7 +993,7 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
 
         <nav className="admin-nav" aria-label="Admin">
           {adminNav.map(({ key, label, icon: Icon }) => (
-            <button className={activeView === key ? 'admin-nav-button active' : 'admin-nav-button'} type="button" key={key} onClick={() => setActiveView(key)}>
+            <button className={activeView === key ? 'admin-nav-button active' : 'admin-nav-button'} type="button" key={key} onClick={() => { setMarketItemId(''); setActiveView(key) }}>
               <Icon size={17} />
               <span>{label}</span>
               {key === 'review' && reviewReadyCount ? <em className="admin-nav-badge" title="Cards ready to review">{reviewReadyCount}</em> : null}
@@ -975,8 +1077,16 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
         {activeView === 'explorer' ? <DataExplorer /> : null}
         {activeView === 'taxonomy' ? <TaxonomyAdmin /> : null}
         {activeView === 'media' ? <AdminSectionBrowser title="Images & Media" kicker="Catalogue media administration" loader={loadImagesMediaData} /> : null}
-        {activeView === 'pricing' ? <AdminSectionBrowser title="Pricing / Sales Data" kicker="Valuation and sales inputs" loader={loadPricingData} /> : null}
-        {activeView === 'market' ? <MarketDataAdmin storeContext={storeContext} /> : null}
+        {activeView === 'pricing' ? (
+          <AdminSectionBrowser
+            title="Pricing / Sales Data"
+            kicker="Valuation and sales inputs"
+            loader={loadPricingData}
+            serverSearch
+            rowAction={{ label: 'Add sales data', show: (row) => Boolean(row.itemId), run: (row) => { setMarketItemId(row.itemId); setActiveView('market') } }}
+          />
+        ) : null}
+        {activeView === 'market' ? <MarketDataAdmin key={marketItemId} initialItemId={marketItemId} storeContext={storeContext} /> : null}
         {activeView === 'stores' ? <StoreManagement /> : null}
         {activeView === 'onboarding' ? <OnboardingAdmin session={session} /> : null}
         {activeView === 'users' ? <AdminSectionBrowser title="Users" kicker="Profiles and memberships" loader={loadUsersData} /> : null}
@@ -1043,11 +1153,11 @@ function AdminOverview({ onNavigate }) {
   )
 }
 
-function MarketDataAdmin({ storeContext = {} }) {
+function MarketDataAdmin({ storeContext = {}, initialItemId = '' }) {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [data, setData] = useState(null)
-  const [selectedId, setSelectedId] = useState('')
+  const [selectedId, setSelectedId] = useState(initialItemId)
   const [selectedRecord, setSelectedRecord] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -1653,7 +1763,7 @@ export function BulkEditDialog({ itemIds, filterSummary, onClose, onDone }) {
                   {CATALOGUE_EDIT_GROUPS.map((group) => (
                     <tbody key={group.id}>
                       <tr className="scan-review-group"><th colSpan={2}>{group.label}</th></tr>
-                      {group.fields.filter((field) => !field.lego || isLegoCategory(categoryName)).map((field) => (
+                      {group.fields.filter((field) => !field.seriesOnly || categoryHasSeries(categoryName)).map((field) => (
                         <tr key={field.key} className={field.key in edits ? 'edited' : ''}>
                           <th scope="row">{field.label}</th>
                           <td>
@@ -2062,7 +2172,7 @@ function CatalogueItemEditor({ record, onSaved, onCancel }) {
         {CATALOGUE_EDIT_GROUPS.map((group) => (
           <tbody key={group.id}>
             <tr className="scan-review-group"><th colSpan={2}>{group.label}</th></tr>
-            {group.fields.filter((field) => !field.lego || isLegoCategory(categoryName)).map((field) => (
+            {group.fields.filter((field) => !field.seriesOnly || categoryHasSeries(categoryName)).map((field) => (
               <tr key={field.key} className={changedKeys.includes(field.key) ? 'edited' : ''}>
                 <th scope="row">{field.label}</th>
                 <td>{renderInput(field)}</td>
@@ -3287,9 +3397,241 @@ function DataExplorer() {
   )
 }
 
+// "Photograph a set": the set a stack comes from, so each scan is matched among that
+// set's items (number first) to give them their photos. value is saved with the
+// scanner preferences; onChange(next) receives { enabled, ...target } (see
+// matchScanInTargetSet for the target fields).
+function SetTargetPicker({ category, value, onChange, disabled = false }) {
+  const [categories, setCategories] = useState([])
+  const [options, setOptions] = useState({})
+  const [progress, setProgress] = useState(null)
+  const target = value || {}
+  const categoryName = catalogueCategoryName(category)
+  const categoryRow = categories.find((row) => row.name === categoryName)
+  const sports = categoryName === 'Sports Cards'
+  const cards = /cards/i.test(categoryName)
+  const ready = Boolean(target.enabled && categoryRow && target.subcategoryId && (target.subsetId || target.propertyId || target.franchiseId))
+
+  useEffect(() => { loadAdminCategories().then(setCategories).catch(() => setCategories([])) }, [])
+  // A target chosen under another category doesn't carry over.
+  useEffect(() => {
+    if (categoryRow && target.categoryId && target.categoryId !== categoryRow.category_id) onChange({ enabled: target.enabled })
+  }, [categoryRow?.category_id])
+
+  useEffect(() => {
+    if (!target.enabled || !categoryRow) return undefined
+    let cancelled = false
+    loadCatalogueTaxonomyOptions({ categoryId: categoryRow.category_id, subcategoryId: target.subcategoryId || '', franchiseId: target.franchiseId || '', subsetId: target.subsetId || '' })
+      .then((next) => { if (!cancelled) setOptions(next) })
+      .catch(() => { if (!cancelled) setOptions({}) })
+    return () => { cancelled = true }
+  }, [target.enabled, categoryRow?.category_id, target.subcategoryId, target.franchiseId, target.subsetId])
+
+  // How much of the set has photos, and the numbers still missing one.
+  const refreshProgress = (refresh = false) => {
+    if (!ready) { setProgress(null); return () => {} }
+    let cancelled = false
+    setProgress((current) => ({ ...(current || {}), loading: true }))
+    loadTargetSetItems(target, { refresh })
+      .then((items) => {
+        if (cancelled) return
+        const missing = items.filter((item) => !item.image_path)
+        setProgress({ total: items.length, photographed: items.length - missing.length, missing: missing.map((item) => checklistItemNumber(item) || item.name).filter(Boolean) })
+      })
+      .catch((loadError) => { if (!cancelled) setProgress({ error: loadError.message || 'Could not load the set.' }) })
+    return () => { cancelled = true }
+  }
+  useEffect(() => refreshProgress(), [ready, targetSetKey(target)])
+
+  // The Collections in the chosen set (blank is Base), for the Collection dropdown.
+  const [collections, setCollections] = useState([])
+  const wholeSet = { ...target, collection: '' }
+  useEffect(() => {
+    if (!ready) { setCollections([]); return undefined }
+    let cancelled = false
+    loadTargetSetItems(wholeSet)
+      .then((items) => {
+        if (cancelled) return
+        const counts = new Map()
+        for (const item of items) {
+          const raw = String(item.dynamic_fields?.collection || '').trim()
+          const name = !raw || raw.toLowerCase() === 'base' ? 'Base' : raw
+          counts.set(name, (counts.get(name) || 0) + 1)
+        }
+        setCollections([...counts.entries()].map(([name, count]) => ({ name, count }))
+          .sort((left, right) => (left.name !== 'Base') - (right.name !== 'Base') || left.name.localeCompare(right.name)))
+      })
+      .catch(() => { if (!cancelled) setCollections([]) })
+    return () => { cancelled = true }
+  }, [ready, targetSetKey(wholeSet)])
+
+  const names = (key, id) => (options[key] || []).find((option) => option.id === id)?.name || ''
+  function update(changes) {
+    const next = { ...target, ...changes }
+    // A level changed: the levels under it no longer apply.
+    for (const [key, children] of Object.entries({ subcategoryId: ['franchiseId', 'subsetId', 'propertyId', 'itemTypeId'], franchiseId: ['subsetId', 'propertyId'], subsetId: ['propertyId'] })) {
+      if (key in changes && changes[key] !== target[key]) children.forEach((child) => { if (!(child in changes)) next[child] = '' })
+    }
+    next.category = categoryName
+    next.categoryId = categoryRow?.category_id || ''
+    next.names = {
+      subcategory: names('subcategory', next.subcategoryId), franchise: names('franchise', next.franchiseId),
+      subset: names('subset', next.subsetId), property: names('property', next.propertyId), item_type: names('item_type', next.itemTypeId),
+    }
+    next.label = [next.names.subcategory, next.names.franchise, next.names.subset, next.names.property, next.series, sports ? next.season : next.releaseYear]
+      .filter(Boolean).join(' › ') + (next.collection ? ` · ${next.collection}` : '')
+    onChange(next)
+  }
+  const select = (key, optionKey, label, needs = true) => (
+    <label>{label}
+      <select value={target[key] || ''} onChange={(event) => update({ [key]: event.target.value })} disabled={disabled || !needs}>
+        <option value="">{needs ? 'Any' : '—'}</option>
+        {(options[optionKey] || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+      </select>
+    </label>
+  )
+
+  return (
+    <div className={`set-target-panel${target.enabled ? ' active' : ''}`}>
+      <label className="admin-check">
+        <input type="checkbox" checked={Boolean(target.enabled)} onChange={(event) => update({ enabled: event.target.checked })} disabled={disabled} />
+        <strong>Photograph a set</strong>
+        <small>Match each card among one set's items, card number first, to give them their photos.</small>
+      </label>
+      {target.enabled ? (
+        categoryRow ? (
+          <>
+            <div className="set-target-fields">
+              {select('subcategoryId', 'subcategory', 'Subcategory')}
+              {select('franchiseId', 'franchise', 'Franchise', Boolean(target.subcategoryId))}
+              {select('subsetId', 'subset', 'Subfranchise', Boolean(target.franchiseId))}
+              {select('propertyId', 'property', 'Property', Boolean(target.subcategoryId))}
+              {cards ? <label>Series<input value={target.series || ''} onChange={(event) => update({ series: event.target.value })} placeholder="Optional" disabled={disabled} /></label> : null}
+              {sports
+                ? <label>Season<input value={target.season || ''} onChange={(event) => update({ season: event.target.value })} placeholder="2023-24 or 2024" disabled={disabled} /></label>
+                : <label>Year<input type="number" value={target.releaseYear || ''} onChange={(event) => update({ releaseYear: event.target.value })} placeholder="Optional" disabled={disabled} /></label>}
+              <label>Collection
+                <select value={target.collection || ''} onChange={(event) => update({ collection: event.target.value })} disabled={disabled || !ready}>
+                  <option value="">{ready ? 'All collections' : '—'}</option>
+                  {/* A saved choice no longer in the set stays visible until changed. */}
+                  {target.collection && !collections.some((option) => option.name === target.collection) ? <option value={target.collection}>{target.collection}</option> : null}
+                  {collections.map((option) => <option key={option.name} value={option.name}>{option.name} ({option.count})</option>)}
+                </select>
+              </label>
+              {select('itemTypeId', 'item_type', 'Item Type', Boolean(target.subcategoryId))}
+            </div>
+            {!ready ? <p className="scan-mode-note">Choose at least the Subcategory and the Subfranchise or Property.</p> : null}
+            {ready && progress ? (
+              <div className="set-target-progress">
+                {progress.error ? <span className="admin-error">{progress.error}</span>
+                  : progress.loading && progress.total == null ? <span>Loading the set…</span>
+                  : (
+                    <>
+                      <span><strong>{progress.photographed} of {progress.total}</strong> have photos{progress.total && !progress.missing.length ? ' · the set is done' : ''}</span>
+                      {progress.missing.length ? <small title={progress.missing.join(', ')}>Still needed: {progress.missing.slice(0, 40).map((number) => `#${number}`).join(', ')}{progress.missing.length > 40 ? ` and ${progress.missing.length - 40} more` : ''}</small> : null}
+                      <button type="button" className="link" onClick={() => refreshProgress(true)} disabled={progress.loading}>Refresh</button>
+                    </>
+                  )}
+              </div>
+            ) : null}
+          </>
+        ) : <p className="scan-mode-note">{categories.length ? `"${category}" isn't a catalogue category, so it can't be photographed as a set.` : 'Loading categories…'}</p>
+      ) : null}
+    </div>
+  )
+}
+
+// Pending Review, "Photograph a set" tab: one set's scans as a grid (scan beside the
+// item it matched), its photo progress, and one action for every confident card.
+function SetPhotoGroup({ group, confidenceOf, itemTypeNames, alreadyPhotographed, busy, onOpen, onAttach }) {
+  const [progress, setProgress] = useState(null)
+  const [showDone, setShowDone] = useState(false)
+  // Reloaded when a bulk action finishes, so the counts include photos just attached.
+  useEffect(() => {
+    if (busy) return undefined
+    let cancelled = false
+    loadTargetSetItems(group.target, { refresh: true })
+      .then((items) => {
+        if (cancelled) return
+        const missing = items.filter((item) => !item.image_path)
+        setProgress({ total: items.length, photographed: items.length - missing.length, missing: missing.map((item) => checklistItemNumber(item) || item.name).filter(Boolean) })
+      })
+      .catch(() => { if (!cancelled) setProgress(null) })
+    return () => { cancelled = true }
+  }, [busy, group.key])
+
+  const tiles = showDone ? group.drafts : group.open
+  const statusOf = (draft) => {
+    if (COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)) return ['done', draft.imagesAttached ? 'Photos attached' : 'Linked']
+    if (alreadyPhotographed.has(draft.id)) return ['done', 'Already has this photo']
+    if (group.ready.includes(draft)) return ['ready', 'Ready']
+    if (draft.scanAnalysis?.matchStatus === 'none') return ['problem', 'Not in this set']
+    if (draft.scanAnalysis?.matchStatus === 'multiple') return ['check', 'Pick the printing']
+    return ['check', 'Check']
+  }
+
+  return (
+    <section className="set-photo-group">
+      <div className="set-photo-head">
+        <div>
+          <strong>{group.target.label || 'Chosen set'}</strong>
+          {progress ? (
+            <small>
+              {progress.photographed} of {progress.total} have photos
+              {progress.missing.length ? ` · still needed: ${progress.missing.slice(0, 25).map((number) => `#${number}`).join(', ')}${progress.missing.length > 25 ? ` and ${progress.missing.length - 25} more` : ''}` : ' · the set is done'}
+            </small>
+          ) : <small>Loading the set…</small>}
+        </div>
+        <div className="set-photo-actions">
+          <label className="admin-check"><input type="checkbox" checked={showDone} onChange={(event) => setShowDone(event.target.checked)} /> Show finished</label>
+          <button className="admin-gold-button" type="button" onClick={() => onAttach(group.ready)} disabled={busy || !group.ready.length}>
+            Attach photos to {group.ready.length} ready card{group.ready.length === 1 ? '' : 's'}
+          </button>
+        </div>
+      </div>
+      <div className="set-photo-grid">
+        {tiles.map((draft) => {
+          const match = draft.scanAnalysis?.bestMatch?.item
+          const check = draft.scanAnalysis?.setCheck || {}
+          const [tone, label] = statusOf(draft)
+          const confidence = confidenceOf(draft)
+          const warnings = (confidence?.reasons || []).filter((reason) => !reason.good && reason.delta < 0).map((reason) => reason.text)
+          return (
+            <button type="button" key={draft.id} className={`set-photo-tile ${tone}`} onClick={() => onOpen(draft)} title={warnings.join('\n') || 'Open to review'}>
+              <span className="set-photo-images">
+                {draft.frontImage?.url ? <img src={thumbUrl(draft.frontImage.url)} alt="Scan" loading="lazy" decoding="async" /> : <span className="set-photo-noimage">Scan</span>}
+                {match?.imageUrl ? <img src={thumbUrl(match.imageUrl)} alt="Catalogue photo" loading="lazy" decoding="async" /> : <span className="set-photo-noimage">{match ? 'No photo yet' : '?'}</span>}
+              </span>
+              <span className="set-photo-name">
+                {match ? `#${checklistItemNumber(match)} ${match.name || match.subject || ''}` : check.readNumber ? `Read #${check.readNumber}` : 'No number read'}
+              </span>
+              <small>{[match ? itemTypeLabel(itemTypeNames, match) : '', match?.dynamic_fields?.collection, match?.dynamic_fields?.parallel].filter(Boolean).join(' · ') || (draft.recognition?.result?.subject || '')}</small>
+              <span className={`set-photo-status ${tone}`}>{label}{confidence ? ` · ${confidence.score}%` : ''}</span>
+              {warnings.length && tone !== 'done' ? <small className="set-photo-warning">{warnings[0]}</small> : null}
+            </button>
+          )
+        })}
+        {!tiles.length ? <p className="scan-mode-note">Every scan of this set is finished. Tick "Show finished" to see them.</p> : null}
+      </div>
+    </section>
+  )
+}
+
+// The chosen set as stored on each scan (only when the picker is on and complete).
+function activeSetTarget(value) {
+  const target = value || {}
+  if (!target.enabled || !target.categoryId || !target.subcategoryId || !(target.subsetId || target.propertyId || target.franchiseId)) return null
+  const { enabled: _enabled, ...rest } = target
+  return rest
+}
+
 function ScanIntake({ onCreateDraft, ai }) {
   const [category, setCategory] = useState(() => readScannerPref('category', 'Trading Cards'))
   const [mode, setMode] = useState(() => readScannerPref('mode', 'Create Catalogue Items'))
+  // "Photograph a set": the set this stack comes from (see SetTargetPicker).
+  const [setTarget, setSetTarget] = useState(() => readScannerPref('photoTarget', null))
+  useEffect(() => { writeScannerPref('photoTarget', setTarget) }, [setTarget])
+  const target = activeSetTarget(setTarget)
   useEffect(() => { writeScannerPref('category', category) }, [category])
   useEffect(() => { writeScannerPref('mode', mode) }, [mode])
   const [frontImage, setFrontImage] = useState(null)
@@ -3318,7 +3660,7 @@ function ScanIntake({ onCreateDraft, ai }) {
     if (busy || feeding) return
     setScannerError('')
     setScannerMessage('')
-    await ai.feeder.start({ category, mode, autoAnalyse: feedAutoAnalyse, loadFaceDown: feedFaceDown })
+    await ai.feeder.start({ category, mode, autoAnalyse: feedAutoAnalyse, loadFaceDown: feedFaceDown, target })
   }
 
   const feedResult = feed && !feed.running ? feed.result : null
@@ -3429,6 +3771,7 @@ function ScanIntake({ onCreateDraft, ai }) {
         frontImage,
         backImage,
         metadata,
+        ...(target ? { target } : {}),
       })
     } catch (error) {
       setScannerMessage('')
@@ -3453,6 +3796,7 @@ function ScanIntake({ onCreateDraft, ai }) {
       frontImage,
       backImage,
       metadata,
+      ...(target ? { target } : {}),
     })
     setFrontImage(null)
     setBackImage(null)
@@ -3484,6 +3828,7 @@ function ScanIntake({ onCreateDraft, ai }) {
           <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Trading Cards</option><option>Sports Cards</option><option>Coins</option><option>LEGO / Building Blocks</option><option>Comics</option><option>Video Games</option></select></label>
           <label>Intake Mode<select value={mode} onChange={(event) => setMode(event.target.value)}><option>Create Catalogue Items</option><option>Match Existing Catalogue</option><option>Image Capture Only</option></select></label>
         </div>
+        <SetTargetPicker category={category} value={setTarget} onChange={setSetTarget} disabled={Boolean(busy) || feeding} />
         {typeof adminDesktopApi().feedStack === 'function' ? (
           <div className={`feeder-panel${scannerStatus.feederName ? '' : ' missing'}`}>
             <div className="feeder-panel-head">
@@ -4045,6 +4390,7 @@ function draftIdentityKey(draft) {
 const COMPLETED_SCAN_REVIEW_STATUSES = new Set(['Catalogue Item Created', 'Matched and Updated', 'Matched'])
 
 export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDraft, onDeleteDrafts, onCreateMore, onRetryAi, aiBusy = false, queuedCount = 0 }) {
+  const itemTypeNames = useItemTypeNames()
   // Cards still waiting for (or being retried by) local AI live in the Scan
   // Intake queue; every analysed card comes here for review.
   const rows = (drafts || []).filter((draft) => (
@@ -4119,7 +4465,7 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
     const sibling = catalogedSiblingOf(draft)
     if (sibling) return siblingMatch(sibling)
     if (!draft.recognition?.result) return null
-    const { taxonomy, scanAnalysis } = await analyseRecognizedCard(draft.recognition.result, draft.category)
+    const { taxonomy, scanAnalysis } = await analyseScanReading(draft, draft.recognition.result, { drafts })
     if (scanAnalysis.matchStatus !== draft.scanAnalysis?.matchStatus || scanAnalysis.bestMatch?.item?.item_id !== draft.scanAnalysis?.bestMatch?.item?.item_id) {
       await onUpdateDraft(draft.id, { scanAnalysis, status: scanAnalysis.status, recognition: { ...draft.recognition, taxonomy } })
     }
@@ -4263,7 +4609,7 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
       while (targets.length) {
         const draft = targets.shift()
         try {
-          const { taxonomy, scanAnalysis } = await analyseRecognizedCard(draft.recognition.result, draft.category)
+          const { taxonomy, scanAnalysis } = await analyseScanReading(draft, draft.recognition.result, { drafts })
           if (scanAnalysis.matchStatus === 'exact') found += 1
           await onUpdateDraft(draft.id, { scanAnalysis, status: scanAnalysis.status, recognition: { ...draft.recognition, taxonomy } })
         } catch {}
@@ -4313,7 +4659,7 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
   // A scan with no AI result has no confidence; skip it rather than break the whole queue.
   confidenceById.forEach((entry) => { if (entry?.tier in tierCounts) tierCounts[entry.tier] += 1 })
 
-  const sortedRows = (reviewView === 'catalogued' ? cataloguedRows : rows.filter((draft) => !cataloguedIds.has(draft.id)))
+  const sortedRows = (reviewView === 'set' ? [] : reviewView === 'catalogued' ? cataloguedRows : rows.filter((draft) => !cataloguedIds.has(draft.id)))
     .filter((draft) => (tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter) && matchesSearch(draft))
     .sort((a, b) => {
       if (sortBy === 'newest') return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
@@ -4366,8 +4712,31 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
   }
 
   const highRows = aiRows.filter((draft) => confidenceOf(draft)?.tier === 'high')
-  const highLinks = highRows.filter((draft) => confidenceOf(draft)?.readiness === 'link')
+  // Linking replaces the item's photos, so a match whose item already has one waits
+  // for the photo check (same picture: "Already in catalogue"; different: held back).
+  const photoChecked = (draft) => {
+    const item = draft.scanAnalysis?.bestMatch?.item
+    return !item?.image_path || draft.catalogueCheck?.itemId === item.item_id
+  }
+  const highLinks = highRows.filter((draft) => confidenceOf(draft)?.readiness === 'link' && photoChecked(draft))
   const highAdds = highRows.filter((draft) => confidenceOf(draft)?.readiness === 'add')
+
+  // "Photograph a set" scans, by the set chosen at Scan Intake (newest set first).
+  const setPhotoGroups = (() => {
+    const byKey = new Map()
+    for (const draft of rows) {
+      if (draft.scanAnalysis?.source !== 'target-set' || !draft.target) continue
+      const key = targetSetKey(draft.target)
+      if (!byKey.has(key)) byKey.set(key, { key, target: draft.target, drafts: [] })
+      byKey.get(key).drafts.push(draft)
+    }
+    return [...byKey.values()].map((group) => {
+      const open = group.drafts.filter((draft) => !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status))
+      const ready = open.filter((draft) => !cataloguedIds.has(draft.id) && confidenceOf(draft)?.tier === 'high' && confidenceOf(draft)?.readiness === 'link' && photoChecked(draft))
+      return { ...group, open, ready, latest: group.drafts.reduce((latest, draft) => (String(draft.createdAt || '') > latest ? String(draft.createdAt) : latest), '') }
+    }).sort((left, right) => right.latest.localeCompare(left.latest))
+  })()
+  const setPhotoCount = setPhotoGroups.reduce((sum, group) => sum + group.open.length, 0)
 
   // Cards whose set isn't in the catalogue yet, grouped by the set the AI
   // read (wording variants such as "Panini - Donruss" and "Panini Donruss"
@@ -4616,11 +4985,26 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
         </div>
       ) : null}
       {!rows.length ? <EmptyAdminState text="No scanned drafts yet. Import front/back scanner images from Scan Intake to create review drafts." /> : null}
-      {cataloguedRows.length || reviewView === 'catalogued' ? (
+      {cataloguedRows.length || setPhotoGroups.length || reviewView !== 'review' ? (
         <div className="review-view-tabs" role="tablist" aria-label="Review lists">
           <button type="button" role="tab" aria-selected={reviewView === 'review'} className={reviewView === 'review' ? 'active' : ''} onClick={() => setReviewView('review')}>To review ({rows.length - cataloguedRows.length})</button>
           <button type="button" role="tab" aria-selected={reviewView === 'catalogued'} className={reviewView === 'catalogued' ? 'active' : ''} onClick={() => setReviewView('catalogued')}>Already in catalogue ({cataloguedRows.length})</button>
+          {setPhotoGroups.length || reviewView === 'set' ? <button type="button" role="tab" aria-selected={reviewView === 'set'} className={reviewView === 'set' ? 'active' : ''} onClick={() => setReviewView('set')}>Photograph a set ({setPhotoCount})</button> : null}
         </div>
+      ) : null}
+      {reviewView === 'set' ? (
+        setPhotoGroups.length ? setPhotoGroups.map((group) => (
+          <SetPhotoGroup
+            key={group.key}
+            group={group}
+            confidenceOf={confidenceOf}
+            itemTypeNames={itemTypeNames}
+            alreadyPhotographed={cataloguedIds}
+            busy={bulkRunning}
+            onOpen={(draft) => setReviewDraftId(draft.id)}
+            onAttach={(drafts) => linkHighConfidence(drafts)}
+          />
+        )) : <EmptyAdminState text={'No scans from "Photograph a set" yet. Turn it on in Scan Intake, choose the set, and scan its cards.'} />
       ) : null}
       {reviewView === 'catalogued' ? (
         <div className="review-catalogued-bar">
@@ -4722,7 +5106,7 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
                     <strong>{bestMatch ? 'Catalogue match found' : 'No catalogue match found'}</strong>
                     {bestMatch ? (
                       <>
-                        <span>{bestMatch.item?.name || bestMatch.item?.subject || bestMatch.item?.item_id} · {bestMatch.score}% match</span>
+                        <span>{[bestMatch.item?.name || bestMatch.item?.subject || bestMatch.item?.item_id, bestMatch.item?.card_number ? `#${bestMatch.item.card_number}` : '', itemTypeLabel(itemTypeNames, bestMatch.item)].filter(Boolean).join(' · ')} · {bestMatch.score}% match</span>
                         {bestMatch.reasons?.length ? <small>{bestMatch.reasons.join(' · ')}</small> : null}
                         {candidateCount > 1 ? <small>{candidateCount - 1} other possible {candidateCount === 2 ? 'match' : 'matches'}</small> : null}
                       </>
@@ -5012,6 +5396,14 @@ const CONFIDENCE_READINESS_TEXT = {
   check: 'Compare with a similar item',
 }
 
+// What each spreadsheet column fills in (checklist import).
+const CHECKLIST_COLUMN_LABELS = {
+  number: 'number', name: 'name', team: 'team', collection: 'Collection', parallel: 'parallel', serial: 'print run',
+  rookie: 'rookie', shortPrint: 'short print', sets: 'in sets', subcategory: 'Subcategory', franchise: 'Franchise / Theme',
+  subset: 'Subfranchise / Subtheme', property: 'Property', series: 'Series', year: 'Year', season: 'Season',
+  item_type: 'Item Type', publisher: 'Publisher',
+}
+
 // Set checklist import: choose a set, paste its checklist, preview against
 // what the catalogue already has, and create placeholders for the rest.
 function ChecklistImportDialog({ onClose }) {
@@ -5039,9 +5431,122 @@ function ChecklistImportDialog({ onClose }) {
   const [inSetText, setInSetText] = useState('')
   const [seriesText, setSeriesText] = useState('')
   const inSets = lego ? parseSetRefs(inSetText) : []
-  const rows = useMemo(() => parseChecklist(text, { teams: !trading, sets: lego }).map((row) => (row.error || row.collection ? row : { ...row, collection: collection.trim() })), [text, trading, lego, collection])
-  const good = rows.filter((row) => !row.error)
-  const bad = rows.filter((row) => row.error)
+  // A spreadsheet with a header row can name each line's set (Theme, Subtheme, Year…),
+  // so one paste covers many sets; plain lines all go to the set chosen above.
+  const table = useMemo(() => parseChecklistTable(text), [text])
+  const rows = useMemo(() => (table ? table.rows : parseChecklist(text, { teams: !trading, sets: lego }))
+    .map((row) => (row.error || row.collection ? row : { ...row, collection: collection.trim() })), [text, table, trading, lego, collection])
+  const good = useMemo(() => rows.filter((row) => !row.error), [rows])
+  const bad = useMemo(() => rows.filter((row) => row.error), [rows])
+
+  // Spreadsheet mode: the sets the rows belong to (blank cells use the choices above).
+  const optionName = (key, id) => (options[key] || []).find((option) => option.id === id)?.name || ''
+  const tableGroups = useMemo(() => (table ? groupChecklistRows(good, {
+    ids: { subcategory: chosen.subcategory_id, franchise: chosen.franchise_id, subset: chosen.subset_id, property: chosen.property_id, item_type: chosen.item_type_id, publisher: chosen.publisher_id },
+    names: { subcategory: optionName('subcategory', chosen.subcategory_id), franchise: optionName('franchise', chosen.franchise_id), subset: optionName('subset', chosen.subset_id), property: optionName('property', chosen.property_id), item_type: optionName('item_type', chosen.item_type_id), publisher: optionName('publisher', chosen.publisher_id) },
+    year: trading ? releaseYear : '',
+    season: trading ? '' : season,
+    series: categoryHasSeries(category) ? seriesText : '',
+  }) : []), [table, good, chosen, options, releaseYear, season, seriesText, trading, category])
+  // Per set, after "Check": { [key]: { ids, missing, existing, error } }.
+  const [groupChecks, setGroupChecks] = useState(null)
+  useEffect(() => { setGroupChecks(null) }, [tableGroups])
+  // Enough of a set to find its cards: LEGO a Theme or Property; cards a product
+  // line or set under the Franchise; sports a season too; and an Item Type.
+  const groupProblem = (spec) => {
+    if (!spec.subcategory) return 'Needs a Subcategory'
+    if (lego ? !(spec.property || spec.franchise) : !(spec.franchise && (spec.subset || spec.property))) return lego ? 'Needs a Theme or Property' : 'Needs a Franchise and a Subfranchise or Property'
+    if (!trading && !seasonKey(spec.season)) return 'Needs a Season'
+    if (!spec.item_type) return 'Needs an Item Type'
+    return ''
+  }
+  const groupIdsFor = (ids) => ({ subcategory_id: ids.subcategory || '', franchise_id: ids.franchise || '', subset_id: ids.subset || '', property_id: ids.property || '', item_type_id: ids.item_type || '', publisher_id: ids.publisher || '' })
+
+  async function checkGroups() {
+    if (!categoryRow) return
+    setBusy('check')
+    setError('')
+    setResult(null)
+    const cache = new Map()
+    const checks = {}
+    try {
+      for (const [index, group] of tableGroups.entries()) {
+        setBusy(`check:${index + 1}/${tableGroups.length}`)
+        const problem = groupProblem(group.spec)
+        if (problem) { checks[group.key] = { error: problem }; continue }
+        const { ids, missing } = await resolveChecklistGroup({ category, categoryId: categoryRow.category_id, spec: group.spec, cache })
+        // A set level that doesn't exist yet: none of its cards can be in the catalogue.
+        const existingItems = missing.some((entry) => ['subcategory', 'franchise', 'subset', 'property', 'item_type'].includes(entry.level)) ? [] : await loadSetItems({
+          categoryId: categoryRow.category_id, subcategoryId: ids.subcategory, franchiseId: ids.franchise, subsetId: ids.subset, propertyId: ids.property,
+          itemTypeId: ids.item_type, releaseYear: trading ? group.spec.year : '', season: trading ? '' : group.spec.season,
+        })
+        checks[group.key] = { ids, missing, existing: existingItems }
+      }
+      setGroupChecks(checks)
+    } catch (checkError) {
+      setError(checkError.message || 'Could not check the sets.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function createGroups() {
+    if (!categoryRow || !groupChecks) return
+    setBusy('create')
+    setError('')
+    const cache = new Map()
+    const totals = { created: [], skipped: 0, linked: 0, missingSets: [], sets: 0, problems: [] }
+    try {
+      const ready = tableGroups.filter((group) => groupChecks[group.key] && !groupChecks[group.key].error)
+      for (const [index, group] of ready.entries()) {
+        setBusy(`create:${index + 1}/${ready.length}`)
+        try {
+          const { ids } = await resolveChecklistGroup({ category, categoryId: categoryRow.category_id, spec: group.spec, create: true, cache })
+          const outcome = await createChecklistPlaceholders({
+            category, ids: groupIdsFor(ids), itemTypeName: group.spec.item_type?.name || '',
+            releaseYear: trading ? group.spec.year : '', season: trading ? '' : group.spec.season,
+            series: categoryHasSeries(category) ? group.spec.series : '',
+            rows: group.rows, existing: groupChecks[group.key].existing || [], inSets,
+          })
+          totals.created.push(...outcome.created)
+          totals.skipped += outcome.skipped || 0
+          totals.linked += outcome.linked || 0
+          totals.missingSets.push(...(outcome.missingSets || []))
+          totals.sets += 1
+        } catch (groupError) {
+          totals.problems.push(`${checklistGroupLabel(group.spec)}: ${groupError.message || 'failed'}`)
+        }
+      }
+      totals.missingSets = [...new Set(totals.missingSets)]
+      setResult(totals)
+      await checkGroups()
+    } catch (createError) {
+      setError(createError.message || 'Could not create the placeholders.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const groupCounts = (group) => {
+    const check = groupChecks?.[group.key]
+    if (!check || check.error) return null
+    const byKey = new Map((check.existing || []).map((item) => [checklistItemKey({ number: checklistItemNumber(item), collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel }), item]))
+    const counts = { new: 0, placeholder: 0, scanned: 0 }
+    group.rows.forEach((row) => {
+      const item = byKey.get(checklistItemKey(row))
+      counts[!item ? 'new' : isChecklistPlaceholder(item) ? 'placeholder' : 'scanned'] += 1
+    })
+    return counts
+  }
+  const tableTotals = tableGroups.reduce((sum, group) => {
+    const counts = groupCounts(group)
+    const check = groupChecks?.[group.key]
+    if (counts) sum.new += counts.new
+    if (check?.missing?.length) sum.taxonomy += check.missing.length
+    if (check?.error) sum.blocked += 1
+    if (lego && check && !check.error) sum.links += group.rows.filter((row) => row.sets?.length || inSets.length).length
+    return sum
+  }, { new: 0, taxonomy: 0, blocked: 0, links: 0 })
 
   useEffect(() => {
     loadAdminCategories().then((list) => setCategories(list)).catch(() => setCategories([]))
@@ -5088,7 +5593,7 @@ function ChecklistImportDialog({ onClose }) {
     setBusy('check')
     setError('')
     try {
-      setExisting(await loadSetItems({ categoryId: categoryRow.category_id, subcategoryId: chosen.subcategory_id, franchiseId: chosen.franchise_id, subsetId: chosen.subset_id, propertyId: chosen.property_id, releaseYear: trading ? releaseYear : '', season: trading ? '' : season }))
+      setExisting(await loadSetItems({ categoryId: categoryRow.category_id, subcategoryId: chosen.subcategory_id, franchiseId: chosen.franchise_id, subsetId: chosen.subset_id, propertyId: chosen.property_id, itemTypeId: chosen.item_type_id, releaseYear: trading ? releaseYear : '', season: trading ? '' : season }))
     } catch (checkError) {
       setError(checkError.message || 'Could not load the set.')
     } finally {
@@ -5101,7 +5606,7 @@ function ChecklistImportDialog({ onClose }) {
     setError('')
     try {
       const itemTypeName = (options.item_type || []).find((option) => option.id === chosen.item_type_id)?.name || ''
-      const outcome = await createChecklistPlaceholders({ category, ids: chosen, itemTypeName, releaseYear: trading ? releaseYear : '', season: trading ? '' : season, series: lego ? seriesText : '', rows: good, existing: existing || [], inSets })
+      const outcome = await createChecklistPlaceholders({ category, ids: chosen, itemTypeName, releaseYear: trading ? releaseYear : '', season: trading ? '' : season, series: categoryHasSeries(category) ? seriesText : '', rows: good, existing: existing || [], inSets })
       setResult(outcome)
       await checkSet()
     } catch (createError) {
@@ -5198,9 +5703,9 @@ function ChecklistImportDialog({ onClose }) {
           </label>
           {select('item_type_id', 'Item type', options.item_type, !chosen.subcategory_id)}
           {select('publisher_id', 'Publisher', options.publisher, false)}
-          {lego ? (
+          {categoryHasSeries(category) ? (
             <label>Series (optional)
-              <input value={seriesText} onChange={(event) => setSeriesText(event.target.value)} placeholder="e.g. Agents 1.0" disabled={Boolean(busy)} />
+              <input value={seriesText} onChange={(event) => setSeriesText(event.target.value)} placeholder={lego ? 'e.g. Agents 1.0' : 'e.g. Series 1'} disabled={Boolean(busy)} />
             </label>
           ) : null}
           {lego ? (
@@ -5210,17 +5715,63 @@ function ChecklistImportDialog({ onClose }) {
             </label>
           ) : null}
         </div>
-        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection or parallel in [brackets] overrides the Collection box and /99 sets the print run, so one card can be listed once per parallel. Lists copied from a price guide ("Aaron Jones [Cracked Ice Ticket] #64 /25") work too{lego ? '. LEGO: end a line with the sets it comes in to link it to them ("pha009, Mummy Warrior, 7306 7326", "x2" for two in a set)' : ''})
+        <label className="checklist-paste">Checklist (one card per line: number, name{trading ? '' : ', team'}; RC marks a rookie; a collection or parallel in [brackets] overrides the Collection box and /99 sets the print run, so one card can be listed once per parallel. Lists copied from a price guide ("Aaron Jones [Cracked Ice Ticket] #64 /25") work too{lego ? '. LEGO: end a line with the sets it comes in to link it to them ("pha009, Mummy Warrior, 7306 7326", "x2" for two in a set)' : ''}. Many sets at once: paste a spreadsheet whose first row names the columns, e.g. Number, Name, {lego ? 'Theme, Subtheme, Year, Item Type, In Set' : trading ? 'Franchise, Subfranchise, Property, Series, Year, Collection' : 'Team, Franchise, Subfranchise, Property, Season, Collection'}; each row goes to the set its columns name)
           <textarea rows={8} value={text} onChange={(event) => { setText(event.target.value); setResult(null) }} placeholder={!cards ? '75192 Millennium Falcon\npha009, Mummy Warrior\nsw0001a, Battle Droid' : trading ? '1 Bulbasaur\n2 Ivysaur\nBLLR-EN033 Sadion, the Timelord' : '1 Josh Allen - Buffalo Bills\n2 Patrick Mahomes II - Kansas City Chiefs\n3 Jayden Daniels - Washington Commanders RC'} disabled={Boolean(busy)} />
         </label>
+        {table ? (
+          <p className="scan-mode-note">
+            Spreadsheet with columns: {table.columns.map((column) => `${column.header} (${CHECKLIST_COLUMN_LABELS[column.field] || column.field})`).join(', ')}
+            {table.unknown.length ? `. Not used: ${table.unknown.join(', ')}` : ''}. Blank cells use the choices above.
+          </p>
+        ) : null}
         <div className="checklist-summary">
-          <span>{good.length} card{good.length === 1 ? '' : 's'} read{bad.length ? ` · ${bad.length} line${bad.length === 1 ? '' : 's'} skipped` : ''}</span>
-          <button type="button" onClick={checkSet} disabled={!setChosenEnough || !good.length || Boolean(busy)}>{busy === 'check' ? 'Checking…' : 'Check against the catalogue'}</button>
-          {existing ? <span><strong>{scannedInSet}</strong> scanned in this set · {counts.placeholder} placeholder{counts.placeholder === 1 ? '' : 's'} · <strong>{counts.new}</strong> to create</span> : null}
+          <span>{good.length} card{good.length === 1 ? '' : 's'} read{table ? ` in ${tableGroups.length} set${tableGroups.length === 1 ? '' : 's'}` : ''}{bad.length ? ` · ${bad.length} line${bad.length === 1 ? '' : 's'} skipped` : ''}</span>
+          {table ? (
+            <>
+              <button type="button" onClick={checkGroups} disabled={!categoryRow || !good.length || Boolean(busy)}>{String(busy).startsWith('check') ? `Checking ${busy.split(':')[1] || ''}…` : 'Check every set against the catalogue'}</button>
+              {groupChecks ? <span><strong>{tableTotals.new}</strong> to create{tableTotals.taxonomy ? ` · ${tableTotals.taxonomy} new set level${tableTotals.taxonomy === 1 ? '' : 's'} to add` : ''}{tableTotals.blocked ? ` · ${tableTotals.blocked} set${tableTotals.blocked === 1 ? '' : 's'} can't be imported` : ''}</span> : null}
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={checkSet} disabled={!setChosenEnough || !good.length || Boolean(busy)}>{busy === 'check' ? 'Checking…' : 'Check against the catalogue'}</button>
+              {existing ? <span><strong>{scannedInSet}</strong> scanned in this set · {counts.placeholder} placeholder{counts.placeholder === 1 ? '' : 's'} · <strong>{counts.new}</strong> to create</span> : null}
+            </>
+          )}
         </div>
-        {existing && missingNumbers.length ? <p className="scan-mode-note">Not scanned yet: {missingNumbers.slice(0, 60).join(', ')}{missingNumbers.length > 60 ? ` and ${missingNumbers.length - 60} more` : ''}</p> : null}
+        {!table && existing && missingNumbers.length ? <p className="scan-mode-note">Not scanned yet: {missingNumbers.slice(0, 60).join(', ')}{missingNumbers.length > 60 ? ` and ${missingNumbers.length - 60} more` : ''}</p> : null}
         {bad.length ? <p className="scan-mode-note">Skipped: {bad.slice(0, 5).map((row) => `"${row.raw}" (${row.error})`).join('; ')}</p> : null}
-        {good.length ? (
+        {table && tableGroups.length ? (
+          <div className="checklist-preview">
+            <table className="admin-table">
+              <thead><tr><th>Set</th><th>Cards</th>{lego ? <th>Linked to sets</th> : null}<th>Catalogue</th></tr></thead>
+              <tbody>
+                {tableGroups.map((group) => {
+                  const check = groupChecks?.[group.key]
+                  const counts = groupCounts(group)
+                  const problem = check?.error || (!groupChecks ? groupProblem(group.spec) : '')
+                  return (
+                    <tr key={group.key}>
+                      <td>
+                        {checklistGroupLabel(group.spec) || 'The set chosen above'}
+                        {group.spec.item_type?.name ? <small> · {group.spec.item_type.name}</small> : null}
+                        {group.duplicates.length ? <small className="admin-error"> · {group.duplicates.length} repeated line{group.duplicates.length === 1 ? '' : 's'} left out</small> : null}
+                      </td>
+                      <td>{group.rows.length}</td>
+                      {lego ? <td>{group.rows.filter((row) => row.sets?.length || inSets.length).length || '—'}</td> : null}
+                      <td className={`checklist-status ${problem ? 'problem' : counts?.new ? 'new' : counts ? 'scanned' : ''}`}>
+                        {problem || (counts
+                          ? [`${counts.new} to create`, counts.placeholder ? `${counts.placeholder} placeholder${counts.placeholder === 1 ? '' : 's'}` : '', counts.scanned ? `${counts.scanned} scanned` : ''].filter(Boolean).join(' · ')
+                          : 'Check to see')}
+                        {check?.missing?.length ? <small> · will add {check.missing.map((entry) => `${CHECKLIST_COLUMN_LABELS[entry.level] || entry.level} "${entry.name}"`).join(', ')}</small> : null}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {!table && good.length ? (
           <div className="checklist-preview">
             <table className="admin-table">
               <thead><tr><th>#</th><th>{!cards ? 'Name' : trading ? 'Card' : 'Player'}</th>{trading ? null : <th>Team</th>}{showCollection ? <th>Collection</th> : null}{showSerial ? <th>Numbered</th> : null}{showSets ? <th>In sets</th> : null}<th>Flags</th>{existing ? <th>Catalogue</th> : null}</tr></thead>
@@ -5241,12 +5792,23 @@ function ChecklistImportDialog({ onClose }) {
             </table>
           </div>
         ) : null}
-        {result ? <p className="admin-success">Created {result.created.length} placeholder{result.created.length === 1 ? '' : 's'}{result.skipped ? ` (${result.skipped} already in the catalogue)` : ''}.{result.linked ? ` Linked ${result.linked} to their set${result.linked === 1 ? '' : 's'}.` : ''}</p> : null}
+        {result ? <p className="admin-success">Created {result.created.length} placeholder{result.created.length === 1 ? '' : 's'}{result.sets != null ? ` across ${result.sets} set${result.sets === 1 ? '' : 's'}` : ''}{result.skipped ? ` (${result.skipped} already in the catalogue)` : ''}.{result.linked ? ` Linked ${result.linked} to their set${result.linked === 1 ? '' : 's'}.` : ''}</p> : null}
+        {result?.problems?.length ? <p className="admin-error">Not imported: {result.problems.slice(0, 5).join('; ')}{result.problems.length > 5 ? ` and ${result.problems.length - 5} more` : ''}</p> : null}
         {result?.missingSets?.length ? <p className="scan-mode-note">Not linked: set{result.missingSets.length === 1 ? '' : 's'} {result.missingSets.slice(0, 20).join(', ')}{result.missingSets.length > 20 ? ` and ${result.missingSets.length - 20} more` : ''} {result.missingSets.length === 1 ? 'is' : 'are'} not in the catalogue yet. Add {result.missingSets.length === 1 ? 'it' : 'them'}, then run this again to link.</p> : null}
         {error ? <p className="admin-error">{error}</p> : null}
         <div className="modal-actions">
           <button type="button" onClick={onClose} disabled={Boolean(busy)}>Close</button>
-          <button className="update-prompt-primary" type="button" onClick={create} disabled={!existing || !(counts.new || linkCount) || Boolean(busy) || !chosen.item_type_id}>{busy === 'create' ? 'Saving…' : [counts.new || !linkCount ? `Create ${counts.new} placeholder${counts.new === 1 ? '' : 's'}` : '', linkCount ? `${counts.new ? 'link' : 'Link'} ${linkCount} to sets` : ''].filter(Boolean).join(' and ')}</button>
+          {table ? (
+            <button className="update-prompt-primary" type="button" onClick={createGroups} disabled={!groupChecks || !(tableTotals.new || tableTotals.links) || Boolean(busy)}>
+              {String(busy).startsWith('create') ? `Saving set ${busy.split(':')[1] || ''}…` : [
+                `Create ${tableTotals.new} placeholder${tableTotals.new === 1 ? '' : 's'}`,
+                tableTotals.taxonomy ? `add ${tableTotals.taxonomy} set level${tableTotals.taxonomy === 1 ? '' : 's'}` : '',
+                tableTotals.links ? `link ${tableTotals.links} to sets` : '',
+              ].filter(Boolean).join(', ')}
+            </button>
+          ) : (
+            <button className="update-prompt-primary" type="button" onClick={create} disabled={!existing || !(counts.new || linkCount) || Boolean(busy) || !chosen.item_type_id}>{busy === 'create' ? 'Saving…' : [counts.new || !linkCount ? `Create ${counts.new} placeholder${counts.new === 1 ? '' : 's'}` : '', linkCount ? `${counts.new ? 'link' : 'Link'} ${linkCount} to sets` : ''].filter(Boolean).join(' and ')}</button>
+          )}
         </div>
       </section>
     </div>
@@ -5642,6 +6204,7 @@ async function loadScanImageBlobs(draft) {
 }
 
 function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
+  const itemTypeNames = useItemTypeNames()
   const saved = draft.review || null
   // Items found by the approval-time duplicate check join the match picker.
   const [extraCandidates, setExtraCandidates] = useState(saved?.extraCandidates || [])
@@ -5690,9 +6253,10 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
   const extrasReady = !matchItem || matchExtras.itemId === matchItem.item_id
   const reviewItem = matchItem ? { ...matchItem, _property_id: extrasReady ? matchExtras.propertyId : '' } : null
   const hasScanImages = Boolean(draft.frontImage?.path || draft.backImage?.path)
-  // "Find by card number": pick a franchise (and optionally subfranchise), type a number, and
-  // choose the right catalogue item from what comes back.
-  const [finder, setFinder] = useState({ open: false, franchiseId: '', subsetId: '', number: '' })
+  // Find catalogue items by number, name and collection within a franchise/subfranchise.
+  const [finder, setFinder] = useState({ open: false, franchiseId: '', subsetId: '', number: '', name: '', collection: '' })
+  const [finderCollections, setFinderCollections] = useState([])
+  const [finderCollectionsBusy, setFinderCollectionsBusy] = useState(false)
   const [finderOptions, setFinderOptions] = useState({ franchises: [], subsets: [], franchisesFor: null })
   const [finderResults, setFinderResults] = useState(null)
   const [finderBusy, setFinderBusy] = useState(false)
@@ -5847,7 +6411,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
         setFinder((current) => {
           if (current.franchiseId && franchises.some((franchise) => franchise.id === current.franchiseId)) return current
           const fromReview = franchises.find((franchise) => franchise.id === values.franchise_id)
-          return { ...current, franchiseId: fromReview ? fromReview.id : '', subsetId: '' }
+          return { ...current, franchiseId: fromReview ? fromReview.id : '', subsetId: '', collection: '' }
         })
       })
       .catch(() => { if (!cancelled) setFinderOptions((current) => ({ ...current, franchises: [], franchisesFor: categoryScope.categoryId })) })
@@ -5869,13 +6433,31 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
     setFinder((current) => ({ ...current, open: !current.open, number: current.number || String(values.card_number || draft.scanAnalysis?.proposed?.card_number || '').trim() }))
   }
 
+  useEffect(() => {
+    if (!finder.open || !scopeReady || !categoryScope.categoryId) return undefined
+    let cancelled = false
+    setFinderCollections([])
+    setFinderCollectionsBusy(true)
+    const timer = setTimeout(() => {
+      loadScanFinderCollections({ categoryId: categoryScope.categoryId, franchiseId: finder.franchiseId, subsetId: finder.subsetId, cardNumber: finder.number, name: finder.name })
+        .then((collections) => {
+          if (cancelled) return
+          setFinderCollections(collections)
+          setFinder((current) => current.collection && !collections.includes(current.collection) ? { ...current, collection: '' } : current)
+        })
+        .catch((err) => { if (!cancelled) setError(err.message || 'Could not load collections.') })
+        .finally(() => { if (!cancelled) setFinderCollectionsBusy(false) })
+    }, 250)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [finder.open, scopeReady, categoryScope.categoryId, finder.franchiseId, finder.subsetId, finder.number, finder.name])
+
   async function runFinder(event) {
     event?.preventDefault?.()
-    if (!finder.number.trim()) return
+    if (finderBusy || (!finder.number.trim() && !finder.name.trim() && !finder.collection)) return
     setFinderBusy(true)
     setError('')
     try {
-      setFinderResults(await findItemsByCardNumber(draft, category, { franchiseId: finder.franchiseId, subsetId: finder.subsetId, cardNumber: finder.number }))
+      setFinderResults(await findItemsByCardNumber(draft, category, { franchiseId: finder.franchiseId, subsetId: finder.subsetId, cardNumber: finder.number, name: finder.name, collection: finder.collection }))
     } catch (err) {
       setError(err.message || 'Could not search the catalogue by card number.')
     } finally {
@@ -5885,7 +6467,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
 
   function chooseCategory(nextCategory) {
     setFinderResults(null)
-    setFinder((current) => ({ ...current, franchiseId: '', subsetId: '' }))
+    setFinder((current) => ({ ...current, franchiseId: '', subsetId: '', collection: '' }))
     setCategory(nextCategory)
     setOptions({})
     // Keep edits already made; seed any fields the new category adds.
@@ -6158,7 +6740,8 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
                     <option key={candidate.item.item_id} value={candidate.item.item_id}>
                       {candidate.item.name || candidate.item.subject || candidate.item.item_id}
                       {candidate.item.card_number ? ` #${candidate.item.card_number}` : ''}
-                      {candidate.item.release_year ? ` (${candidate.item.release_year})` : ''} · {candidate.score}%
+                      {candidate.item.release_year ? ` (${candidate.item.release_year})` : ''}
+                      {itemTypeLabel(itemTypeNames, candidate.item) ? ` · ${itemTypeLabel(itemTypeNames, candidate.item)}` : ''} · {candidate.score}%
                     </option>
                   ))}
                 </select>
@@ -6172,7 +6755,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
         <div className="scan-review-summary">
           {matchItem ? (
             <span>
-              Comparing with <strong>{matchItem.name || matchItem.subject}</strong>
+              Comparing with <strong>{matchItem.name || matchItem.subject}{itemTypeLabel(itemTypeNames, matchItem) ? ` (${itemTypeLabel(itemTypeNames, matchItem)})` : ''}</strong>
               {matchCandidate?.reasons?.length ? ` · ${matchCandidate.reasons.join(' · ')}` : ''}
               {' · '}{conflictCount ? `${conflictCount} field${conflictCount === 1 ? '' : 's'} differ` : 'no conflicting fields'}
             </span>
@@ -6189,21 +6772,30 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
           <div className="scan-review-finder">
             <form className="scan-review-finder-controls" onSubmit={runFinder}>
               <label>Franchise
-                <select value={finder.franchiseId} onChange={(event) => setFinder((current) => ({ ...current, franchiseId: event.target.value, subsetId: '' }))}>
+                <select value={finder.franchiseId} onChange={(event) => { setFinderResults(null); setFinder((current) => ({ ...current, franchiseId: event.target.value, subsetId: '', collection: '' })) }} disabled={finderBusy}>
                   <option value="">{finderOptions.franchisesFor === categoryScope.categoryId ? `All ${category} franchises` : 'Loading franchises…'}</option>
                   {finderOptions.franchises.map((franchise) => <option key={franchise.id} value={franchise.id}>{franchise.name}</option>)}
                 </select>
               </label>
               <label>Subfranchise
-                <select value={finder.subsetId} onChange={(event) => setFinder((current) => ({ ...current, subsetId: event.target.value }))} disabled={!finder.franchiseId || !finderOptions.subsets.length}>
+                <select value={finder.subsetId} onChange={(event) => { setFinderResults(null); setFinder((current) => ({ ...current, subsetId: event.target.value, collection: '' })) }} disabled={finderBusy || !finder.franchiseId || !finderOptions.subsets.length}>
                   <option value="">{finder.franchiseId && !finderOptions.subsets.length ? 'No subfranchises' : 'All subfranchises'}</option>
                   {finderOptions.subsets.map((subset) => <option key={subset.id} value={subset.id}>{subset.name}</option>)}
                 </select>
               </label>
               <label>Card number
-                <input autoFocus value={finder.number} onChange={(event) => setFinder((current) => ({ ...current, number: event.target.value }))} placeholder="e.g. 12" />
+                <input autoFocus value={finder.number} onChange={(event) => { setFinderResults(null); setFinder((current) => ({ ...current, number: event.target.value })) }} placeholder="e.g. 12" disabled={finderBusy} />
               </label>
-              <button type="submit" className="admin-gold-button" disabled={finderBusy || !finder.number.trim()}>{finderBusy ? 'Searching…' : 'Search'}</button>
+              <label>Name
+                <input className="scan-review-finder-name" value={finder.name} onChange={(event) => { setFinderResults(null); setFinder((current) => ({ ...current, name: event.target.value })) }} placeholder="Player or card name" disabled={finderBusy} />
+              </label>
+              <label>Collection
+                <select value={finder.collection} onChange={(event) => { setFinderResults(null); setFinder((current) => ({ ...current, collection: event.target.value })) }} disabled={finderBusy || finderCollectionsBusy}>
+                  <option value="">{finderCollectionsBusy ? 'Loading collections…' : 'All collections'}</option>
+                  {finderCollections.map((name) => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </label>
+              <button type="submit" className="admin-gold-button" disabled={finderBusy || (!finder.number.trim() && !finder.name.trim() && !finder.collection)}>{finderBusy ? 'Searching…' : 'Search'}</button>
             </form>
             {finderResults ? (
               finderResults.length ? (
@@ -6217,7 +6809,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
                           {candidate.item.card_number ? ` #${candidate.item.card_number}` : ''}
                           {candidate.item.release_year ? ` (${candidate.item.release_year})` : ''}
                         </strong>
-                        <small>{[candidate.subsetName, isChecklistPlaceholder(candidate.item) ? 'Placeholder' : '', candidate.score ? `${candidate.score}% match` : ''].filter(Boolean).join(' · ')}</small>
+                        <small>{[itemTypeLabel(itemTypeNames, candidate.item), candidate.subsetName, String(candidate.item.dynamic_fields?.collection || '').trim() ? `Collection: ${candidate.item.dynamic_fields.collection}` : /card/i.test(category) ? 'Collection: Base' : '', isChecklistPlaceholder(candidate.item) ? 'Placeholder' : '', candidate.score ? `${candidate.score}% match` : ''].filter(Boolean).join(' · ')}</small>
                       </div>
                       <button type="button" onClick={() => chooseMatch(candidate.item.item_id, candidate)} disabled={Boolean(busy) || candidate.item.item_id === matchId}>
                         {candidate.item.item_id === matchId ? 'Selected' : 'Match to this'}
@@ -6225,7 +6817,7 @@ function ScanReviewEditor({ draft, onUpdateDraft, onClose }) {
                     </li>
                   ))}
                 </ul>
-              ) : <p className="scan-review-finder-empty">No {category} items with card number “{finder.number.trim()}”{finder.franchiseId ? ' in this franchise' : ''}.</p>
+              ) : <p className="scan-review-finder-empty">No {category} items match these search filters.</p>
             ) : null}
           </div>
         ) : null}
@@ -6371,7 +6963,7 @@ function TaxonomyAdmin() {
           {sections.map((section) => (
             <button className={selected?.key === section.key ? 'active' : ''} type="button" key={section.key} onClick={() => setActiveSection(section.key)}>
               <span>{section.title}</span>
-              <strong>{formatNumber(section.rows.length)}</strong>
+              <strong>{formatNumber(section.total ?? section.rows.length)}</strong>
             </button>
           ))}
         </div>
@@ -6420,34 +7012,43 @@ function TaxonomyAdmin() {
   )
 }
 
-function AdminSectionBrowser({ title, kicker, loader }) {
+// serverSearch: the loader takes { search } and searches the database, so a search
+// covers every record rather than only the rows loaded. rowAction: a button for the
+// selected record ({ label, show(row), run(row) }).
+function AdminSectionBrowser({ title, kicker, loader, serverSearch = false, rowAction = null }) {
   const [data, setData] = useState(null)
   const [activeSection, setActiveSection] = useState('')
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState(null)
   const [page, setPage] = useState(1)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const serverQuery = serverSearch ? search.trim() : ''
 
   useEffect(() => {
     let cancelled = false
-    loader()
-      .then((nextData) => {
-        if (!cancelled) {
-          setData(nextData)
-          setActiveSection(nextData.sections?.[0]?.key || '')
-          setSelected(nextData.sections?.[0]?.rows?.[0] || null)
-          setError('')
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message || `Could not load ${title}.`)
-      })
-    return () => { cancelled = true }
-  }, [loader, title])
+    setLoading(true)
+    const timer = window.setTimeout(() => {
+      loader(serverSearch ? { search: serverQuery } : undefined)
+        .then((nextData) => {
+          if (!cancelled) {
+            setData(nextData)
+            setActiveSection((currentKey) => (nextData.sections || []).some((section) => section.key === currentKey) ? currentKey : nextData.sections?.[0]?.key || '')
+            setSelected(serverSearch ? null : nextData.sections?.[0]?.rows?.[0] || null)
+            setError('')
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err.message || `Could not load ${title}.`)
+        })
+        .finally(() => { if (!cancelled) setLoading(false) })
+    }, serverQuery ? 350 : 0)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [loader, title, serverQuery])
 
   const sections = data?.sections || []
   const current = sections.find((section) => section.key === activeSection) || sections[0]
-  const query = search.trim().toLowerCase()
+  const query = serverSearch ? '' : search.trim().toLowerCase()
   const filteredRows = (current?.rows || []).filter((row) => (
     !query || [row.title, row.detail, row.status, row.id].some((value) => String(value || '').toLowerCase().includes(query))
   ))
@@ -6461,7 +7062,8 @@ function AdminSectionBrowser({ title, kicker, loader }) {
   function chooseSection(section) {
     setActiveSection(section.key)
     setSelected(section.rows[0] || null)
-    setSearch('')
+    // A database search applies to every section, so it stays when switching.
+    if (!serverSearch) setSearch('')
     setPage(1)
   }
 
@@ -6479,7 +7081,7 @@ function AdminSectionBrowser({ title, kicker, loader }) {
           {sections.map((section) => (
             <button className={current?.key === section.key ? 'active' : ''} type="button" key={section.key} onClick={() => chooseSection(section)}>
               <span>{section.title}</span>
-              <strong>{formatNumber(section.rows.length)}</strong>
+              <strong>{formatNumber(section.total ?? section.rows.length)}</strong>
             </button>
           ))}
         </div>
@@ -6496,9 +7098,16 @@ function AdminSectionBrowser({ title, kicker, loader }) {
         <div className="admin-filters">
           <label className="admin-search">
             <Search size={16} />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${current?.title || title}...`} />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={serverSearch ? 'Search the whole catalogue: name, card number, set number, UPC…' : `Search ${current?.title || title}...`} />
           </label>
         </div>
+        {serverSearch ? (
+          <div className="admin-table-note">
+            {loading ? 'Searching…' : current?.total != null && current.total > (current.rows || []).length
+              ? `Showing ${formatNumber((current.rows || []).length)} of ${formatNumber(current.total)}${serverQuery ? '' : ' (most recent)'}; search to find any item.`
+              : `${formatNumber((current?.rows || []).length)} record${(current?.rows || []).length === 1 ? '' : 's'}`}
+          </div>
+        ) : null}
         <div className="admin-split-records">
           <div className="admin-table-wrap">
             <table className="admin-table compact">
@@ -6526,6 +7135,9 @@ function AdminSectionBrowser({ title, kicker, loader }) {
           <PaginationControls page={page} totalPages={totalPages} total={filteredRows.length} onPage={setPage} />
           <div className="admin-record-summary">
             <h3>Selected Record</h3>
+            {selected && rowAction?.show(selected) ? (
+              <button type="button" className="admin-gold-button" onClick={() => rowAction.run(selected)}>{rowAction.label}</button>
+            ) : null}
             <JsonBlock value={selected || {}} />
           </div>
         </div>

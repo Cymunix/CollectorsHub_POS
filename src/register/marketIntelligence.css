@@ -1,0 +1,136 @@
+/* Market Intelligence drawer (Register, Buy / Trade-In). It overlays the right
+   side of the Register instead of shrinking the table; on narrow screens it
+   takes the full width. */
+.mi-drawer {
+  background: #f7f8fa;
+  border-left: 1px solid #d8dee8;
+  bottom: 0;
+  box-shadow: -18px 0 40px rgba(11, 17, 27, 0.18);
+  color: #0b111b;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  max-width: 100vw;
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: 640px;
+  /* Above the Register's own controls (actions menu 90, scanner results 80),
+     below real pop-up windows (140+) and notices (200). */
+  z-index: 120;
+}
+@media (max-width: 1280px) { .mi-drawer { width: 100vw; } }
+
+.mi-head { align-items: center; background: #0b111b; color: #ffffff; display: flex; gap: 12px; justify-content: space-between; padding: 12px 16px; }
+.mi-head-item { align-items: center; display: flex; gap: 10px; min-width: 0; }
+.mi-head-item img, .mi-thumb { background: #e5e9f0; border-radius: 6px; flex: none; height: 44px; object-fit: contain; width: 44px; }
+.mi-thumb.large { height: 96px; width: 96px; }
+.mi-head-item small { color: #c9a646; display: block; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.mi-head-item strong { display: block; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-head-nav { align-items: center; display: flex; flex: none; gap: 6px; font-size: 13px; }
+.mi-head-nav button { align-items: center; background: transparent; border: 1px solid #3a475c; border-radius: 6px; color: #ffffff; cursor: pointer; display: inline-flex; padding: 5px 7px; }
+.mi-head-nav button:disabled { opacity: 0.35; cursor: default; }
+.mi-head-nav .mi-close { border-color: transparent; }
+
+.mi-body { display: grid; align-content: start; gap: 12px; overflow-y: auto; padding: 14px 16px 24px; }
+.mi-section { background: #ffffff; border: 1px solid #e3e8ef; border-radius: 10px; display: grid; gap: 10px; padding: 12px 14px; }
+.mi-section h3 { font-size: 15px; margin: 0; }
+.mi-section h3 small { color: #64748b; font-weight: 600; }
+.mi-section button, .mi-offer-row button { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 7px; cursor: pointer; font-weight: 700; padding: 6px 10px; }
+.mi-section button:disabled, .mi-offer-row button:disabled { cursor: default; opacity: 0.5; }
+.mi-primary { background: linear-gradient(180deg, #e9bd46, #d6a632) !important; border: 0 !important; color: #0b111b !important; }
+.mi-row { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.mi-spread { justify-content: space-between; }
+.mi-end { justify-content: flex-end; }
+.mi-muted { color: #64748b; font-size: 12px; margin: 0; }
+.mi-empty { color: #475467; margin: 0; }
+.mi-note { background: #f8fafc; border: 1px solid #e3e8ef; border-radius: 8px; color: #475467; font-size: 13px; margin: 0; padding: 8px 10px; }
+.mi-error { background: #fef3f2; border: 1px solid #fecdca; border-radius: 8px; color: #b42318; font-size: 13px; margin: 0; padding: 8px 10px; }
+.mi-warn { align-items: center; color: #b54708; display: inline-flex; font-size: 12px; font-weight: 700; gap: 4px; margin: 0; }
+.mi-source { border-top: 1px solid #eef2f6; color: #64748b; font-size: 11px; margin: 0; padding-top: 6px; }
+
+.mi-set { align-items: start; display: flex; gap: 12px; }
+.mi-set img { border-radius: 8px; height: 96px; object-fit: contain; width: 96px; }
+.mi-set dl { display: grid; gap: 2px 10px; grid-template-columns: max-content 1fr; margin: 0; }
+.mi-set dt { color: #64748b; font-size: 12px; font-weight: 700; }
+.mi-set dd { margin: 0; }
+
+.mi-figs { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.mi-figs li { align-items: center; border: 1px solid #e3e8ef; border-left: 4px solid #98a2b3; border-radius: 8px; display: grid; gap: 10px; grid-template-columns: 44px 1fr auto; padding: 6px 8px; }
+.mi-figs li.present { border-left-color: #17b26a; }
+.mi-figs li.missing { background: #fffbfa; border-left-color: #f04438; }
+.mi-figs li img { border-radius: 6px; height: 44px; object-fit: contain; width: 44px; }
+.mi-fig-text { display: grid; min-width: 0; }
+.mi-fig-text small { color: #64748b; font-size: 12px; }
+.mi-fig-counts { align-items: center; display: flex; gap: 8px; }
+.mi-stepper { align-items: center; display: inline-flex; gap: 4px; }
+.mi-stepper small { color: #64748b; font-size: 11px; font-weight: 700; }
+.mi-stepper button { align-items: center; display: inline-flex; padding: 3px 5px !important; }
+.mi-stepper b { min-width: 14px; text-align: center; }
+.mi-pill { background: #ecfdf3; border-radius: 999px; color: #067647; font-size: 11px; font-weight: 800; padding: 2px 8px; white-space: nowrap; }
+.mi-pill.warn { background: #fffaeb; color: #b54708; }
+
+.mi-grid { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+.mi-grid label, .mi-offer-row label { display: grid; font-size: 12px; font-weight: 700; gap: 4px; }
+.mi-grid input, .mi-grid select, .mi-offer-row input { border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; font-weight: 400; padding: 6px 8px; }
+.mi-check { align-items: center; display: flex; font-size: 12px; gap: 6px; }
+
+.mi-calc { border-collapse: collapse; width: 100%; }
+.mi-calc th, .mi-calc td { border-bottom: 1px solid #eef2f6; font-size: 13px; padding: 6px 4px; text-align: left; }
+.mi-calc th { color: #475467; font-weight: 600; }
+.mi-calc td { font-variant-numeric: tabular-nums; text-align: right; }
+.mi-calc .mi-deduct th { padding-left: 14px; }
+.mi-calc .mi-deduct td { color: #b42318; }
+.mi-calc .mi-strong th, .mi-calc .mi-strong td { color: #0b111b; font-weight: 800; }
+.mi-offer-row { align-items: end; display: flex; flex-wrap: wrap; gap: 10px; }
+.mi-offer-row input { font-size: 18px; font-weight: 800; width: 140px; }
+
+.mi-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mi-chips button { border-radius: 999px !important; font-size: 12px; }
+.mi-chips button.active { background: #0b111b; border-color: #0b111b; color: #ffffff; }
+.mi-chips b { margin-left: 4px; opacity: 0.75; }
+.mi-stats { display: grid; gap: 8px; grid-template-columns: repeat(4, 1fr); }
+.mi-stat { background: #f8fafc; border: 1px solid #eef2f6; border-radius: 8px; display: grid; gap: 2px; padding: 6px 8px; }
+.mi-stat span { color: #64748b; font-size: 11px; font-weight: 700; }
+.mi-stat strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.mi-chart { background: #fbfcfd; border: 1px solid #eef2f6; border-radius: 8px; width: 100%; }
+.mi-chart-line { fill: none; stroke: #b0851f; stroke-width: 2; }
+.mi-chart-dot { fill: #d6a632; }
+.mi-chart-bar { fill: #dbe3ee; }
+.mi-chart-label { fill: #64748b; font-size: 10px; }
+.mi-table { border-collapse: collapse; width: 100%; }
+.mi-table th, .mi-table td { border-bottom: 1px solid #eef2f6; font-size: 12px; padding: 5px 4px; text-align: left; }
+.mi-table th { color: #64748b; }
+.mi-table td:last-child { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.mi-table a { color: #175cd3; }
+.mi-summary p { margin: 0; }
+
+/* The Register's Market value opens the drawer. */
+.mi-market-link { background: none; border: 0; border-bottom: 1px dashed #98a2b3; color: inherit; cursor: pointer; font: inherit; padding: 0; }
+.mi-market-link:hover { border-bottom-color: #b0851f; color: #0b111b; }
+.mi-research-button { align-items: center; display: inline-flex; }
+.mi-inspected { color: #b54708; display: block; font-size: 11px; font-weight: 700; }
+
+/* Settings: Purchase Pricing */
+.purchase-pricing h3 small { color: #64748b; font-weight: 500; }
+.purchase-pricing-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.purchase-pricing-grid label { display: grid; font-size: 12px; font-weight: 700; gap: 4px; }
+.purchase-pricing-input { align-items: center; display: inline-flex; gap: 4px; }
+.purchase-pricing-input input { border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; padding: 6px 8px; width: 90px; }
+.purchase-pricing-check { align-items: center; display: flex; font-size: 13px; gap: 6px; }
+.purchase-pricing-saved { background: #ecfdf3; border: 1px solid #abefc6; border-radius: 8px; color: #067647; font-size: 13px; margin: 0; padding: 8px 10px; }
+
+/* Inventory: the purchase inspection, for describing the item when listing it. */
+.mi-inventory-note { background: #fffaeb; border: 1px solid #fedf89; border-radius: 8px; display: grid; font-size: 13px; gap: 3px; margin: 8px 0; padding: 8px 10px; }
+.mi-inventory-note small { color: #64748b; }
+
+/* The customer-facing listing description in the inspection. */
+.mi-listing { background: #fffaeb; border: 1px solid #fedf89; border-radius: 8px; display: grid; gap: 6px; padding: 8px 10px; }
+.mi-listing label { display: grid; font-size: 12px; font-weight: 700; gap: 4px; }
+.mi-listing label small { color: #64748b; font-weight: 500; }
+.mi-listing textarea { border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; font-weight: 400; padding: 6px 8px; resize: vertical; }
+.mi-listing button { align-items: center; display: inline-flex; gap: 4px; }
+.mi-listing-preview { background: #fffaeb; border-radius: 6px; padding: 6px 8px; }
+.mi-inventory-note.listing { background: #f8fafc; border-color: #d8dee8; }
+.mi-inventory-note textarea { border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; padding: 6px 8px; resize: vertical; }
+.mi-inventory-note small { font-weight: 500; }
+.mi-inventory-note button { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 7px; cursor: pointer; font-weight: 700; padding: 4px 10px; }

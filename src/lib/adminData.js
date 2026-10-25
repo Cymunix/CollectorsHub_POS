@@ -195,10 +195,9 @@ export async function loadCatalogueItemIds(filters = {}, max = 5000) {
 // Franchises for the catalogue filter. With a category, only that category's franchises:
 // those linked to its subcategories, plus any its catalogue items use. Each other franchise is
 // checked with a small "one item in this category?" lookup (in parallel batches); a lookup
-// that fails keeps the franchise rather than hiding it. Remembered per category for the session.
-const franchiseIdsByCategory = new Map()
+// that fails keeps the franchise rather than hiding it. Not cached: a franchise added during the
+// session (catalogue editor, scan review) must show up the next time the list loads.
 async function categoryFranchiseIds(categoryId) {
-  if (franchiseIdsByCategory.has(categoryId)) return franchiseIdsByCategory.get(categoryId)
   const ids = new Set()
   const { data: subcats } = await supabase.from('subcategories').select('subcategory_id').eq('category_id', categoryId)
   const subcategoryIds = (subcats || []).map((row) => row.subcategory_id).filter(Boolean)
@@ -213,7 +212,6 @@ async function categoryFranchiseIds(categoryId) {
     const results = await Promise.all(batch.map((id) => supabase.from('items').select('item_id').eq('category_id', categoryId).eq('franchise_id', id).limit(1)))
     results.forEach((result, j) => { if (result.error || result.data?.length) ids.add(batch[j]) })
   }
-  franchiseIdsByCategory.set(categoryId, ids)
   return ids
 }
 
@@ -421,8 +419,9 @@ export async function loadCatalogueItemRecord(itemId, context = {}) {
     supabase.from('item_market_prices').select('*').eq('item_id', itemId).maybeSingle(),
     supabase.from('item_condition_prices').select('*').eq('catalog_item_id', itemId).order('price_date', { ascending: false }).limit(25),
     supabase.rpc('catalog_item_listings', { p_catalog_item_id: itemId }),
-    safeRows('market_sales', '*', 'sold_at').then((result) => ({ ...result, data: result.rows.filter((row) => marketRowItemId(row) === itemId) })),
-    safeRows('market_sales_imports', '*', 'started_at').then((result) => ({ ...result, data: result.rows.filter((row) => marketRowItemId(row) === itemId).slice(0, 20) })),
+    // This item's rows only (the whole table would stop at 1000 rows and miss most items).
+    supabase.from('market_sales').select('*').eq('item_id', itemId).order('sold_at', { ascending: false, nullsFirst: false }).limit(1000),
+    supabase.from('market_sales_imports').select('*').eq('item_id', itemId).order('started_at', { ascending: false, nullsFirst: false }).limit(20),
     loadMarketBuckets(itemId, context),
   ])
 
@@ -672,16 +671,15 @@ export async function fetchMarketSales({ catalogueItemId, provider = 'ebay', sin
 }
 
 export async function loadMarketDataAdmin({ search = '', page = 1, limit = 25, context = {} } = {}) {
-  const [catalogue, imports, sales] = await Promise.all([
+  // The most recent fetches (a whole-table load stops at the first 1000, oldest first).
+  const [catalogue, imports] = await Promise.all([
     loadCatalogueItems({ search, page, limit }),
-    safeRows('market_sales_imports', '*', 'started_at'),
-    safeRows('market_sales', '*', 'sold_at'),
+    pricingRows(() => supabase.from('market_sales_imports').select('*').order('started_at', { ascending: false, nullsFirst: false }).limit(50)),
   ])
   return {
     catalogue,
     imports: imports.rows,
-    sales: sales.rows,
-    errors: [imports.error, sales.error].filter(Boolean),
+    errors: [imports.error].filter(Boolean),
   }
 }
 
@@ -1105,40 +1103,96 @@ export async function loadImagesMediaData() {
   }
 }
 
-export async function loadPricingData() {
-  const [itemsMissingPricing, marketPrices, conditionPrices, marketSales] = await Promise.all([
-    safeRows('items', 'item_id, name, subject, market_price, retail_price', 'name'),
-    safeRows('item_market_prices', '*', 'updated_at'),
-    safeRows('item_condition_prices', '*', 'price_date'),
-    safeRows('market_sales', '*', 'sold_at'),
+// A page of rows plus the table's full count. One request returns at most 1000
+// rows, so these lists show the most recent PRICING_LIST_LIMIT and searching
+// goes to the database (loadPricingData({ search })) rather than the loaded rows.
+const PRICING_LIST_LIMIT = 500
+async function pricingRows(build) {
+  try {
+    const { data, error, count } = await build()
+    if (error) throw error
+    return { rows: data || [], total: count ?? (data || []).length, error: '' }
+  } catch (error) {
+    console.warn('[Admin Data] Pricing load failed:', error)
+    return { rows: [], total: 0, error: error.message || 'Could not load pricing data.' }
+  }
+}
+
+async function itemNameMap(ids) {
+  const unique = [...new Set(ids.filter(Boolean))]
+  const names = new Map()
+  for (let i = 0; i < unique.length; i += 150) {
+    const { data } = await supabase.from('items').select('item_id, name, subject, card_number').in('item_id', unique.slice(i, i + 150))
+    ;(data || []).forEach((row) => names.set(row.item_id, [row.name || row.subject, row.card_number ? `#${row.card_number}` : ''].filter(Boolean).join(' ')))
+  }
+  return names
+}
+
+// Pricing / Sales Data. Without a search: items missing pricing and the most recent
+// prices and sales. With one: every catalogue item matching it (searched in the
+// database, not just the loaded rows), with those items' prices and sales.
+export async function loadPricingData({ search = '' } = {}) {
+  const term = String(search || '').trim()
+  let items
+  let itemIds = null
+  if (term) {
+    items = await pricingRows(() => applyCatalogueFilters(
+      supabase.from('items').select('item_id, name, subject, card_number, release_year, market_price, retail_price', { count: 'exact' }),
+      { search: term },
+    ).order('name').limit(PRICING_LIST_LIMIT))
+    itemIds = items.rows.map((row) => row.item_id)
+  } else {
+    items = await pricingRows(() => supabase.from('items').select('item_id, name, subject, card_number, release_year, market_price, retail_price', { count: 'exact' })
+      .is('market_price', null).is('retail_price', null).order('name').limit(PRICING_LIST_LIMIT))
+  }
+  const forItems = (query, column) => (itemIds ? query.in(column, itemIds.length ? itemIds.slice(0, 200) : ['00000000-0000-0000-0000-000000000000']) : query)
+  const [marketPrices, conditionPrices, marketSales] = await Promise.all([
+    pricingRows(() => forItems(supabase.from('item_market_prices').select('*', { count: 'exact' }), 'item_id').order('updated_at', { ascending: false, nullsFirst: false }).limit(PRICING_LIST_LIMIT)),
+    pricingRows(() => forItems(supabase.from('item_condition_prices').select('*', { count: 'exact' }), 'catalog_item_id').order('price_date', { ascending: false, nullsFirst: false }).limit(PRICING_LIST_LIMIT)),
+    pricingRows(() => forItems(supabase.from('market_sales').select('*', { count: 'exact' }), 'item_id').order('sold_at', { ascending: false, nullsFirst: false }).limit(PRICING_LIST_LIMIT)),
   ])
+  const names = await itemNameMap([
+    ...marketPrices.rows.map((row) => row.item_id),
+    ...conditionPrices.rows.map((row) => row.catalog_item_id),
+    ...marketSales.rows.map((row) => marketRowItemId(row)),
+  ])
+  const itemTitle = (row) => [row.name || row.subject || row.item_id, row.card_number ? `#${row.card_number}` : ''].filter(Boolean).join(' ')
+  const priced = (row) => row.market_price != null || row.retail_price != null
 
   return {
     sections: [
       {
-        key: 'missing',
-        title: 'Items Missing Pricing',
-        rows: itemsMissingPricing.rows
-          .filter((row) => row.market_price == null && row.retail_price == null)
-          .map((row) => ({ id: row.item_id, title: row.name || row.subject || row.item_id, detail: 'No market or retail price', status: 'Missing' })),
-        error: itemsMissingPricing.error,
+        key: 'items',
+        title: term ? 'Catalogue Items' : 'Items Missing Pricing',
+        total: items.total,
+        rows: items.rows.map((row) => ({
+          id: row.item_id,
+          itemId: row.item_id,
+          title: itemTitle(row),
+          detail: [row.release_year, priced(row) ? `Market ${row.market_price ?? '—'} · Retail ${row.retail_price ?? '—'}` : 'No market or retail price'].filter(Boolean).join(' · '),
+          status: priced(row) ? 'Priced' : 'Missing',
+        })),
+        error: items.error,
       },
       {
         key: 'market',
         title: 'Market Prices',
-        rows: marketPrices.rows.map((row) => ({ id: row.item_id, title: row.item_id, detail: `Updated ${row.updated_at || '—'}`, status: row.market_average ?? row.tcgplayer ?? row.cardmarket ?? row.cardkingdom ?? 'Cached' })),
+        total: marketPrices.total,
+        rows: marketPrices.rows.map((row) => ({ id: row.item_id, itemId: row.item_id, title: names.get(row.item_id) || row.item_id, detail: `Updated ${row.updated_at || '—'}`, status: row.market_average ?? row.tcgplayer ?? row.cardmarket ?? row.cardkingdom ?? 'Cached' })),
         error: marketPrices.error,
       },
       {
         key: 'condition',
         title: 'Condition Prices',
-        rows: conditionPrices.rows.map((row) => ({ id: row.id, title: row.catalog_item_id, detail: `${row.provider || 'provider'} · ${row.condition || 'condition'} · ${row.finish || 'default'}`, status: row.display_price ?? row.source_price ?? 'No price' })),
+        total: conditionPrices.total,
+        rows: conditionPrices.rows.map((row) => ({ id: row.id, itemId: row.catalog_item_id, title: names.get(row.catalog_item_id) || row.catalog_item_id, detail: `${row.provider || 'provider'} · ${row.condition || 'condition'} · ${row.finish || 'default'}`, status: row.display_price ?? row.source_price ?? 'No price' })),
         error: conditionPrices.error,
       },
       {
         key: 'sales',
         title: 'Sales Records',
-        rows: marketSales.rows.map((row) => ({ id: row.sale_id || row.item_id, title: row.item_id || row.sale_id, detail: `${row.source || 'sale'} · ${row.sold_at || row.created_at || '—'}`, status: row.sold_price ?? 'Recorded' })),
+        total: marketSales.total,
+        rows: marketSales.rows.map((row) => ({ id: row.sale_id || row.item_id, itemId: marketRowItemId(row), title: names.get(marketRowItemId(row)) || marketRowItemId(row) || row.sale_id, detail: `${row.source || 'sale'} · ${row.sold_at || row.created_at || '—'}${row.condition ? ` · ${row.condition}` : ''}`, status: row.sold_price ?? 'Recorded' })),
         error: marketSales.error,
       },
     ],
@@ -1494,26 +1548,69 @@ export async function findDuplicateCatalogueItems(values = {}, { category } = {}
   return candidates.filter((candidate) => candidate.likelyDuplicate)
 }
 
-// Scan review "find by card number": catalogue items in the category (and franchise, and
-// subfranchise when chosen) whose card number is the typed number, e.g. "12" finds "12" and
-// "12/90". If none, any card number containing it. Each is scored against the scan like the
-// automatic candidates, with its subfranchise name for telling sets apart.
-export async function findItemsByCardNumber(draft, category, { franchiseId = '', subsetId = '', cardNumber = '' } = {}) {
+// Collections containing cards that match the finder's name/number and taxonomy.
+export async function loadScanFinderCollections({ categoryId, franchiseId = '', subsetId = '', cardNumber = '', name = '' }) {
+  if (!categoryId) return []
   const number = String(cardNumber || '').trim().replace(/^#/, '')
-  if (!number) return []
+  const searchName = String(name || '').trim()
+  // A franchise alone is narrow enough to list its collections; the whole category is not.
+  if (!number && !searchName && !franchiseId) return []
+  const collections = new Map()
+  const load = async (numberFilter) => {
+    const filters = []
+    if (numberFilter) filters.push(`or(${numberFilter})`)
+    if (searchName) filters.push(`or(${orContains('name', searchName)},${orContains('subject', searchName)})`)
+    for (let from = 0; ; from += 1000) {
+      let query = supabase.from('items').select('item_id, collection:dynamic_fields->>collection').eq('category_id', categoryId)
+      if (filters.length) query = query.or(`and(${filters.join(',')})`)
+      if (franchiseId) query = query.eq('franchise_id', franchiseId)
+      if (subsetId) query = query.eq('subset_id', subsetId)
+      const { data, error } = await query.order('item_id').range(from, from + 999)
+      if (error) throw error
+      for (const row of data || []) {
+        const name = String(row.collection || '').trim() || 'Base'
+        const key = name.toLowerCase()
+        if (!collections.has(key)) collections.set(key, name)
+      }
+      if (!data || data.length < 1000) break
+    }
+  }
+  const escapedNumber = number.replace(/[\\%_]/g, '\\$&')
+  await load(number ? `card_number.ilike.${orValue(escapedNumber)},card_number.ilike.${orValue(`${escapedNumber}/%`)}` : '')
+  if (number && !collections.size) await load(orContains('card_number', number))
+  return [...collections.values()].sort((a, b) => a.localeCompare(b))
+}
+
+// Search by number, name/subject and collection within the selected taxonomy.
+// Numbers prefer exact matches and set-size suffixes ("12/90"), then contains.
+// Apply every selected filter before limiting results and scoring against the scan.
+export async function findItemsByCardNumber(draft, category, { franchiseId = '', subsetId = '', cardNumber = '', name = '', collection = '' } = {}) {
+  const number = String(cardNumber || '').trim().replace(/^#/, '')
+  const searchName = String(name || '').trim()
+  if (!number && !searchName && !collection) return []
   const categoryId = await categoryIdForName(category)
   if (!categoryId) return []
   const like = (value) => String(value).replace(/[\\%_]/g, '\\$&')
   const run = async (filter) => {
-    let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId).or(filter)
+    const filters = []
+    if (filter) filters.push(`or(${filter})`)
+    if (searchName) filters.push(`or(${orContains('name', searchName)},${orContains('subject', searchName)})`)
+    if (collection) {
+      const match = `dynamic_fields->>collection.ilike.${orValue(like(collection))}`
+      filters.push(collection.toLowerCase() === 'base'
+        ? `or(${match},dynamic_fields->>collection.is.null,${orEq('dynamic_fields->>collection', '')})`
+        : match)
+    }
+    let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId)
+    if (filters.length) query = query.or(`and(${filters.join(',')})`)
     if (franchiseId) query = query.eq('franchise_id', franchiseId)
     if (subsetId) query = query.eq('subset_id', subsetId)
     const { data, error } = await query.order('name').limit(60)
     if (error) throw error
     return data || []
   }
-  let rows = await run([`card_number.ilike.${orValue(like(number))}`, `card_number.ilike.${orValue(`${like(number)}/%`)}`].join(','))
-  if (!rows.length) rows = await run(orContains('card_number', number))
+  let rows = await run(number ? [`card_number.ilike.${orValue(like(number))}`, `card_number.ilike.${orValue(`${like(number)}/%`)}`].join(',') : '')
+  if (number && !rows.length) rows = await run(orContains('card_number', number))
   const subsetIds = [...new Set(rows.map((row) => row.subset_id).filter(Boolean))]
   const subsetNames = new Map()
   if (subsetIds.length) {
@@ -1526,7 +1623,7 @@ export async function findItemsByCardNumber(draft, category, { franchiseId = '',
     return {
       item: { ...row, imageUrl: publicImageUrl(row.image_path) },
       score: scored.score,
-      reasons: ['Found by card number', ...scored.reasons],
+      reasons: [number ? 'Found by card number' : 'Found by catalogue search', ...scored.reasons],
       likelyDuplicate: scored.likelyDuplicate,
       comparisons: compareScanFields(row, proposed),
       subsetName: subsetNames.get(row.subset_id) || '',
@@ -1679,6 +1776,7 @@ const TRADING_REVIEW_GROUPS = [
       { key: 'subcategory_id', label: 'Subcategory (brand)', column: 'subcategory_id', taxonomy: 'subcategory', required: true, scan: (meta) => meta.brand || meta.game },
       { key: 'franchise_id', label: 'Franchise', column: 'franchise_id', taxonomy: 'franchise', scan: (meta) => meta.franchise },
       { key: 'subset_id', label: 'Subfranchise (era / storyline)', column: 'subset_id', taxonomy: 'subset', scan: (meta) => meta.series || meta.era },
+      { key: 'series', label: 'Series (optional)', column: 'series', scan: () => '' },
       { key: 'property_id', label: 'Property (release)', taxonomy: 'property', scan: (meta) => meta.set || meta.setName },
       { key: 'item_type_id', label: 'Item Type', column: 'item_type_id', taxonomy: 'item_type', scan: () => 'Card' },
     ],
@@ -1842,7 +1940,9 @@ export function isBaseSetCard(card = {}) {
 // "Base" and an empty collection are the same thing (older catalogue items
 // were saved with it blank).
 function collectionKey(value) {
-  const text = matchText(value)
+  // The logo says "Rated Rookie"; checklists call the collection "Rated
+  // Rookies". Keep parallel suffixes intact so Base never equals a colour.
+  const text = matchText(value).replace(/\brated rookies\b/g, 'rated rookie')
   return text === 'base' ? '' : text
 }
 
@@ -2172,8 +2272,8 @@ export const CATALOGUE_EDIT_GROUPS = [
       { key: 'subcategory_id', label: 'Subcategory', taxonomy: 'subcategory' },
       { key: 'franchise_id', label: 'Franchise', taxonomy: 'franchise' },
       { key: 'subset_id', label: 'Subfranchise', taxonomy: 'subset' },
-      // Building Blocks only: the optional Series under the Subfranchise (Agents 1.0).
-      { key: 'series', label: 'Series', lego: true },
+      // Building Blocks and Trading Cards: the optional Series under the Subfranchise (categoryHasSeries).
+      { key: 'series', label: 'Series', seriesOnly: true },
       // Linked through item_properties, not an items column.
       { key: 'property_id', label: 'Property', taxonomy: 'property', link: true },
       { key: 'item_type_id', label: 'Item Type', taxonomy: 'item_type' },
@@ -2394,8 +2494,26 @@ export async function loadSportsTaxonomyOptions({ category = 'Sports Cards', sub
 
 // LEGO Properties (Star Wars, Harry Potter…) belong to a Subcategory, not a
 // Franchise; every other category's Property sits under its Franchise.
+// Item Type names by id (item_types is small), for labelling catalogue matches so a
+// card and a sticker with the same name and number aren't mixed up. Cached per session.
+let itemTypeNamesPromise = null
+export function loadItemTypeNames() {
+  if (!itemTypeNamesPromise) {
+    itemTypeNamesPromise = supabase.from('item_types').select('item_type_id, name').then(({ data, error }) => {
+      if (error) { itemTypeNamesPromise = null; return new Map() }
+      return new Map((data || []).map((row) => [row.item_type_id, row.name]))
+    })
+  }
+  return itemTypeNamesPromise
+}
+
 export function isLegoCategory(name = '') {
   return /lego|building block/i.test(String(name || ''))
+}
+// Categories with the optional Series (items.series) under the Subfranchise:
+// Building Blocks (Agents 1.0) and Trading Cards.
+export function categoryHasSeries(name = '') {
+  return isLegoCategory(name) || /trading/i.test(String(name || ''))
 }
 export function propertyParentKey(categoryName = '') {
   return isLegoCategory(categoryName) ? 'subcategory_id' : 'franchise_id'
@@ -2822,7 +2940,7 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
   const cardIn = /^\s*\//.test(String(readCard.id_number || '')) ? { ...readCard, id_number: null } : readCard
   const setPosition = trading && !cardIn.id_number && String(cardIn.serial_numbering || '').match(/^\s*#?\s*([a-z]*\d+)\s*\/\s*\d+\s*$/i)
   const card = setPosition ? { ...cardIn, id_number: setPosition[1], serial_numbering: null } : cardIn
-  const subject = String(card.subject || '').trim()
+  const subject = splitPlayers(card.subject).map((name) => trading ? name : name.replace(/\s*[•·|]\s*(?:QB|RB|FB|WR|TE|OT|OG|OL|C|DE|DT|DL|LB|CB|DB|S|EDGE|K|P|LS)\s*$/i, '').trim()).join('/')
   const number = cardNumberText(card.id_number)
   if (!categoryId || (!subject && !number)) return { status: 'none', best: null, candidates: [] }
 
@@ -2833,19 +2951,22 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
   // "Orbital-Mine" finds "Orbital Mine" and quotes don't matter.
   const wordSearch = (column, player) => `${column}.ilike.${orValue(`%${looseNameWords(player).map((word) => word.replace(/[\\%_]/g, '\\$&')).join('%')}%`)}`
   const byWords = trading && players.some((player) => /[^a-z0-9 ]/i.test(player) && looseNameWords(player).length)
-  const runQuery = (words) => {
+  const runQuery = (words, numberOnly = false) => {
     let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId)
-    if (players.length) query = query.or(players.flatMap((player) => [words ? wordSearch('name', player) : orContains('name', player), words ? wordSearch('subject', player) : orContains('subject', player)]).join(','))
+    if (players.length && !numberOnly) query = query.or(players.flatMap((player) => [words ? wordSearch('name', player) : orContains('name', player), words ? wordSearch('subject', player) : orContains('subject', player)]).join(','))
     // Trading card numbers are often printed differently from the catalogue's
     // ("os050" for 50), so with a name to search by they are compared below.
     // The stored number may have spaces ("EC - 20") or not ("EC-20").
-    if (number && !(trading && players.length)) query = query.in('card_number', [...new Set([number, `#${number}`, number.toUpperCase(), number.toUpperCase().replace(/-/g, ' - '), String(card.id_number || '').trim(), numberCore].filter(Boolean))])
+    if (number && (numberOnly || !(trading && players.length))) query = query.in('card_number', [...new Set([number, `#${number}`, number.toUpperCase(), number.toUpperCase().replace(/-/g, ' - '), String(card.id_number || '').trim(), numberCore].filter(Boolean))])
     return query.limit(300)
   }
   let { data, error } = await runQuery(byWords)
   // A word-by-word search can be slow on very short words; fall back to the
   // plain search.
   if (error && byWords) ({ data, error } = await runQuery(false))
+  // A trading card name read wrongly (e.g. the character in the art instead of
+  // the printed title) finds nothing; the card number still lists the cards to choose from.
+  if (!error && !(data || []).length && trading && players.length && number) ({ data, error } = await runQuery(false, true))
   if (error) throw error
   const rows = data || []
 
@@ -3174,7 +3295,8 @@ export function parseSetRefs(text) {
 const CHECKLIST_NOISE = /^(\*\s*)?(\+\s*(collection|wishlist)\b|(un)?graded\b|price\b|\$)/i
 // The number, then a space, ".", ")", ":" or "," before the name
 // ("1 Bulbasaur", "pha009, Mummy", "sw0001a,Battle Droid").
-const CHECKLIST_LEADING_NUMBER = /^#?\s*([A-Za-z]{0,6}-?[A-Za-z]{0,4}\d+[A-Za-z0-9-]*)(?:[.):,]\s*|\s+)(.+)$/
+// Card identifiers may contain only letters ("NNO", "SP-JA") or a slash ("N/A").
+const CHECKLIST_LEADING_NUMBER = /^#?\s*([A-Za-z0-9][A-Za-z0-9/-]*)(?:[.):,]\s*|\s+)(.+)$/
 
 // sets: LEGO minifig lists, where a line may end with the sets the minifig
 // comes in ("pha009, Mummy Warrior, 7306"; a tab column works too).
@@ -3190,9 +3312,10 @@ export function parseChecklist(text, { teams = true, brackets = 'collection', se
     line = line.replace(/\s*\[([^\]]+)\]/, (all, value) => { variant = value.trim(); return '' })
     let serial = ''
     line = line.replace(/\s+\/\s*(\d+)\s*$/, (all, run) => { serial = `/${run}`; return '' }).trim()
-    // "Aaron Jones #64" (price guides list the number after the name).
-    if (!line.includes('\t') && !CHECKLIST_LEADING_NUMBER.test(line)) {
-      const trailing = line.match(/^(.*\S)\s+#\s*([A-Za-z0-9-]+)$/)
+    // An explicit trailing #identifier takes priority over a name's first word.
+    // Price guides list the number after the name: "Aaron Jones #64" or "Aaron Jones #NNO".
+    if (!line.includes('\t')) {
+      const trailing = line.match(/^(.*\S)\s+#\s*([A-Za-z0-9][A-Za-z0-9/-]*)$/)
       if (trailing) line = `${trailing[2]} ${trailing[1]}`
     }
     let collection = ''
@@ -3240,17 +3363,211 @@ export function parseChecklist(text, { teams = true, brackets = 'collection', se
   return rows
 }
 
+// ---------------------------------------------------------------------------
+// Checklist as a spreadsheet with a header row: any column can carry the set
+// fields as well as the card's own, so one paste can cover many sets (every
+// LEGO theme and year). Blank cells use the dialog's choices. Tab- (pasted from
+// a spreadsheet) or comma-separated (CSV); quotes are honoured.
+const CHECKLIST_COLUMNS = {
+  number: ['number', 'no', 'no.', '#', 'num', 'card number', 'card no', 'card #', 'set number', 'set no', 'set #', 'item number', 'minifig', 'minifig code', 'minifig number', 'fig number', 'code', 'id'],
+  name: ['name', 'card', 'card name', 'player', 'title', 'item', 'item name', 'set name', 'minifig name', 'character'],
+  team: ['team'],
+  collection: ['collection', 'insert', 'subset name'],
+  parallel: ['parallel', 'variant'],
+  serial: ['serial', 'serial numbering', 'numbered', 'print run', '/'],
+  rookie: ['rookie', 'rc'],
+  shortPrint: ['sp', 'short print'],
+  sets: ['in set', 'in sets', 'sets', 'appears in', 'found in'],
+  subcategory: ['subcategory', 'brand', 'sport', 'game'],
+  franchise: ['franchise', 'theme', 'league'],
+  subset: ['subfranchise', 'subtheme', 'sub theme', 'product line', 'era'],
+  property: ['property', 'release', 'set', 'product'],
+  series: ['series', 'wave'],
+  year: ['year', 'release year', 'released', 'year released'],
+  season: ['season'],
+  item_type: ['item type', 'type', 'item_type'],
+  publisher: ['publisher', 'manufacturer'],
+}
+const CHECKLIST_HEADER_FIELD = new Map(Object.entries(CHECKLIST_COLUMNS).flatMap(([field, names]) => names.map((name) => [name, field])))
+export const CHECKLIST_SET_FIELDS = ['subcategory', 'franchise', 'subset', 'property', 'series', 'year', 'season', 'item_type', 'publisher']
+
+function splitChecklistCells(line, separator) {
+  if (separator === '\t') return line.split('\t').map((cell) => cell.trim())
+  const cells = []
+  let cell = ''
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (quoted) {
+      if (char === '"' && line[index + 1] === '"') { cell += '"'; index += 1 }
+      else if (char === '"') quoted = false
+      else cell += char
+    } else if (char === '"') quoted = true
+    else if (char === separator) { cells.push(cell.trim()); cell = '' }
+    else cell += char
+  }
+  cells.push(cell.trim())
+  return cells
+}
+
+const yesText = (value) => /^(y|yes|true|1|x|rc|rookie|sp|ssp)$/i.test(String(value || '').trim())
+
+// null when the text isn't a spreadsheet with a header row (it then goes through
+// parseChecklist). Otherwise { columns, unknown, rows }; rows as parseChecklist's,
+// plus setFields: { subcategory, franchise, subset, property, series, year, season,
+// item_type, publisher } (names as written, '' when blank).
+export function parseChecklistTable(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.replace(/ /g, ' ')).filter((line) => line.trim())
+  if (lines.length < 2) return null
+  const separator = lines[0].includes('\t') ? '\t' : lines[0].includes(',') ? ',' : ''
+  if (!separator) return null
+  const headers = splitChecklistCells(lines[0], separator)
+  const fields = headers.map((header) => CHECKLIST_HEADER_FIELD.get(header.toLowerCase().replace(/\s+/g, ' ').replace(/[:*]$/, '').trim()) || '')
+  if (!fields.includes('number') || !fields.includes('name')) return null
+  const rows = []
+  for (const rawLine of lines.slice(1)) {
+    const cells = splitChecklistCells(rawLine, separator)
+    if (cells.every((cell) => !cell)) continue
+    const value = (field) => {
+      const index = fields.indexOf(field)
+      return index === -1 ? '' : String(cells[index] || '').trim()
+    }
+    const flags = { rookie: yesText(value('rookie')), shortPrint: yesText(value('shortPrint')) }
+    const name = value('name').replace(/\s+\b(RC|Rookie|SSP|SP)\b\.?$/i, (all, flag) => {
+      if (/^(rc|rookie)$/i.test(flag)) flags.rookie = true
+      else flags.shortPrint = true
+      return ''
+    }).replace(/^["“”'‘’]+|["“”'‘’]+$/g, '').trim()
+    const number = value('number').replace(/^#/, '').trim()
+    if (!number || !name) { rows.push({ raw: rawLine.trim(), error: 'Needs a number and a name' }); continue }
+    const serialText = value('serial')
+    const year = value('year').match(/\b(18|19|20)\d{2}\b/)?.[0] || ''
+    rows.push({
+      raw: rawLine.trim(),
+      number,
+      name,
+      team: value('team'),
+      collection: value('collection'),
+      parallel: value('parallel'),
+      serial: serialText ? `/${serialText.replace(/^.*\//, '').trim()}` : '',
+      rookie: flags.rookie,
+      shortPrint: flags.shortPrint,
+      sets: parseSetRefs(value('sets')),
+      setFields: {
+        subcategory: value('subcategory'), franchise: value('franchise'), subset: value('subset'), property: value('property'),
+        series: value('series'), year, season: value('season'), item_type: value('item_type'), publisher: value('publisher'),
+      },
+    })
+  }
+  return {
+    columns: headers.map((header, index) => ({ header, field: fields[index] })).filter((column) => column.field),
+    unknown: headers.filter((header, index) => header && !fields[index]),
+    rows,
+  }
+}
+
+const CHECKLIST_LEVELS = ['subcategory', 'franchise', 'subset', 'property']
+
+// Groups spreadsheet rows into the sets they belong to. A row's set is what its
+// own cells say; a level it leaves blank uses the dialog's choice (defaults), but
+// only above the first level the row names: a row naming its own Theme doesn't
+// inherit the dialog's Subtheme. The Item Type, when the row's Subcategory differs
+// from the dialog's, is carried over by name ("Minifigure" in each theme).
+//   defaults: { ids: { subcategory, franchise, subset, property, item_type, publisher },
+//               names: { same levels }, year, season, series }
+// Returns [{ key, spec, rows, duplicates }], spec: { [level]: { id } | { name } , year, season, series }.
+export function groupChecklistRows(rows, defaults = {}) {
+  const groups = new Map()
+  for (const row of rows) {
+    if (row.error) continue
+    const own = row.setFields || {}
+    const spec = {}
+    let named = false
+    for (const level of CHECKLIST_LEVELS) {
+      if (String(own[level] || '').trim()) { spec[level] = { name: own[level].trim() }; named = true }
+      else if (!named && defaults.ids?.[level]) spec[level] = { id: defaults.ids[level], name: defaults.names?.[level] || '' }
+    }
+    const subcategoryChanged = Boolean(String(own.subcategory || '').trim())
+    if (String(own.item_type || '').trim()) spec.item_type = { name: own.item_type.trim() }
+    else if (defaults.ids?.item_type) spec.item_type = subcategoryChanged ? { name: defaults.names?.item_type || '' } : { id: defaults.ids.item_type, name: defaults.names?.item_type || '' }
+    if (String(own.publisher || '').trim()) spec.publisher = { name: own.publisher.trim() }
+    else if (defaults.ids?.publisher) spec.publisher = { id: defaults.ids.publisher, name: defaults.names?.publisher || '' }
+    spec.year = own.year || defaults.year || ''
+    spec.season = own.season || defaults.season || ''
+    spec.series = own.series || defaults.series || ''
+    const key = JSON.stringify([...CHECKLIST_LEVELS, 'item_type', 'publisher'].map((level) => spec[level]?.id || matchText(spec[level]?.name)).concat([spec.year, seasonKey(spec.season) || matchText(spec.season), matchText(spec.series)]))
+    if (!groups.has(key)) groups.set(key, { key, spec, rows: [], seen: new Set(), duplicates: [] })
+    const group = groups.get(key)
+    const rowKey = checklistRowKey(row)
+    if (group.seen.has(rowKey)) { group.duplicates.push(row); continue }
+    group.seen.add(rowKey)
+    group.rows.push(row)
+  }
+  return [...groups.values()].map(({ seen: _seen, ...group }) => group)
+}
+
+// A group's set label ("LEGO › Star Wars › Clone Wars · 2008").
+export function checklistGroupLabel(spec = {}) {
+  return [...CHECKLIST_LEVELS.map((level) => spec[level]?.name), spec.series].filter(Boolean).join(' › ')
+    + (spec.season || spec.year ? ` · ${spec.season || spec.year}` : '')
+}
+
+// Resolves a group's names to catalogue ids, level by level under their parents.
+// create: false lists what's missing (missing: [{ level, name }]); true adds it.
+// options: a Map shared across groups (parents key -> loaded options).
+export async function resolveChecklistGroup({ category, categoryId, spec, create = false, cache = new Map() }) {
+  const ids = {}
+  const missing = []
+  const optionsFor = async (parents) => {
+    const key = [parents.subcategoryId, parents.franchiseId, parents.subsetId].join('|')
+    if (!cache.has(key)) cache.set(key, loadCatalogueTaxonomyOptions({ categoryId, ...parents }))
+    return cache.get(key)
+  }
+  let blocked = false
+  for (const level of [...CHECKLIST_LEVELS, 'item_type', 'publisher']) {
+    const wanted = spec[level]
+    if (!wanted) continue
+    if (wanted.id) { ids[level] = wanted.id; continue }
+    const name = String(wanted.name || '').trim()
+    if (!name) continue
+    // A parent that doesn't exist yet: everything under it is new too. (Item Types
+    // belong to the Subcategory; Publishers to nothing.)
+    const parentMissing = level === 'publisher' ? false
+      : level === 'item_type' ? missing.some((entry) => entry.level === 'subcategory')
+      : blocked
+    let found = null
+    if (!parentMissing) {
+      const options = await optionsFor({ subcategoryId: ids.subcategory || '', franchiseId: ids.franchise || '', subsetId: ids.subset || '' })
+      found = (options[level] || []).find((option) => matchText(option.name) === matchText(name)) || null
+    }
+    if (found) { ids[level] = found.id; continue }
+    if (!create) {
+      missing.push({ level, name })
+      if (CHECKLIST_LEVELS.includes(level)) blocked = true
+      continue
+    }
+    const made = await createTaxonomyOption(level, name, { category, subcategoryId: ids.subcategory || '', franchiseId: ids.franchise || '', subsetId: ids.subset || '' })
+    ids[level] = made.id
+    // New children for this parent: reload its options next time.
+    cache.clear()
+  }
+  return { ids, missing }
+}
+
 // The cards already in the catalogue for a set: by Property when one is
 // chosen, otherwise by Subfranchise (+ year for sports product lines).
 // season: sports sets (Properties) span seasons, so a set is a Property + season.
-export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId = '', subsetId = '', propertyId = '', releaseYear = '', season = '' }) {
+// itemTypeId: only items of that Item Type count as already in the set, so a checklist
+// imported as another Item Type (e.g. Sticker vs Card) creates its own items.
+export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId = '', subsetId = '', propertyId = '', itemTypeId = '', releaseYear = '', season = '' }) {
   if (!categoryId) return []
   const rows = []
   for (let from = 0; ; from += 1000) {
     let query = supabase.from('items')
-      .select(`item_id, name, subject, card_number, minifig_code, lego_set_number, catalog_code, release_year, season, image_path, dynamic_fields${propertyId ? ', item_properties!inner(property_id)' : ''}`)
+      .select(`item_id, category_id, name, subject, card_number, minifig_code, lego_set_number, catalog_code, release_year, season, series, image_path, item_type_id, dynamic_fields${propertyId ? ', item_properties!inner(property_id)' : ''}`)
       .eq('category_id', categoryId)
     if (subcategoryId) query = query.eq('subcategory_id', subcategoryId)
+    if (itemTypeId) query = query.eq('item_type_id', itemTypeId)
     if (franchiseId) query = query.eq('franchise_id', franchiseId)
     if (subsetId) query = query.eq('subset_id', subsetId)
     if (propertyId) query = query.eq('item_properties.property_id', propertyId)
@@ -3264,6 +3581,175 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
   return rows
 }
 
+// ---------------------------------------------------------------------------
+// Photograph a set (admin Scan Intake). The admin picks the set a stack comes
+// from (target), so each scan only has to be found among that set's items: the
+// card number first (the AI's reading, checked against the text the scanner read
+// off the card, and against the number expected next in the stack), the name
+// as a cross-check, and the stack's Collection (or the photo) for printings that
+// share a number. Scans of a set are usually for giving its items their photos.
+//   target: { categoryId, category, subcategoryId, franchiseId, subsetId, propertyId,
+//             itemTypeId, releaseYear, season, series, collection, label }
+
+export function targetSetKey(target = {}) {
+  return [target.categoryId, target.subcategoryId, target.franchiseId, target.subsetId, target.propertyId, target.itemTypeId,
+    target.releaseYear, target.season, matchText(target.series), collectionKey(target.collection)].join('|')
+}
+
+const targetSetItemsCache = new Map()
+// The set's items (once per target; refresh after photos are attached).
+export function loadTargetSetItems(target = {}, { refresh = false } = {}) {
+  if (!target?.categoryId) return Promise.resolve([])
+  const key = targetSetKey(target)
+  if (!refresh && targetSetItemsCache.has(key)) return targetSetItemsCache.get(key)
+  const promise = loadSetItems({
+    categoryId: target.categoryId, subcategoryId: target.subcategoryId, franchiseId: target.franchiseId, subsetId: target.subsetId,
+    propertyId: target.propertyId, itemTypeId: target.itemTypeId, releaseYear: target.releaseYear, season: target.season,
+  }).then((rows) => rows
+    // loadSetItems leaves the year out when a Property is chosen; a Property can span
+    // years whose card numbers repeat, so the chosen year still applies here.
+    .filter((row) => !target.releaseYear || !target.propertyId || seasonKey(target.season) || String(row.release_year || '') === String(target.releaseYear))
+    .filter((row) => !String(target.series || '').trim() || matchText(row.series) === matchText(target.series))
+    .filter((row) => !String(target.collection || '').trim() || collectionKey(row.dynamic_fields?.collection) === collectionKey(target.collection))
+    .map((row) => ({ ...row, imageUrl: publicImageUrl(row.image_path) })))
+  targetSetItemsCache.set(key, promise)
+  promise.catch(() => targetSetItemsCache.delete(key))
+  return promise
+}
+
+function regexText(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Whether a card number appears in the text read off the card: 'marked' when written
+// as "#12" / "No. 12" (or "12/120"), 'plain' when only the bare number is there.
+function numberInCardText(text, number) {
+  if (!text || !number) return ''
+  const value = regexText(number)
+  if (new RegExp(`(#|\\bno\\.?)\\s*${value}(?![a-z0-9])|(^|[^a-z0-9/])${value}\\s*/\\s*\\d`).test(text)) return 'marked'
+  return new RegExp(`(^|[^a-z0-9])${value}(?![a-z0-9])`).test(text) ? 'plain' : ''
+}
+
+// A set item's number, for comparing with a reading (exact text, then the digits).
+function targetNumberKeys(value) {
+  return [cardNumberText(value), cardNumberCore(value)].filter(Boolean)
+}
+
+// Matches one recognised card against the target set's items.
+//   result: the AI reading; ocrText: text the scanner read off both sides (may be '');
+//   expectedNumber: the number after the previous card in the stack (may be '').
+// Returns a scanAnalysis (same shape the review screens read) with setCheck details.
+export function matchScanInTargetSet({ result = {}, target = {}, items = [], ocrText = '', expectedNumber = '' }) {
+  const text = matchText(ocrText)
+  const hasText = text.split(/\s+/).length >= 12
+  const byKey = new Map()
+  for (const item of items) {
+    for (const key of targetNumberKeys(checklistItemNumber(item))) {
+      if (!byKey.has(key)) byKey.set(key, [])
+      if (!byKey.get(key).includes(item)) byKey.get(key).push(item)
+    }
+  }
+  const itemsFor = (number) => {
+    const exact = byKey.get(cardNumberText(number))
+    return exact?.length ? exact : byKey.get(cardNumberCore(number)) || []
+  }
+
+  // 1. The number: the AI's reading; else the one set number written "#n" in the
+  //    card text; else the number expected next in the stack, if the text shows it.
+  const aiNumber = cardNumberText(result.id_number).split('/')[0]
+  let number = ''
+  let numberFrom = ''
+  if (aiNumber && itemsFor(aiNumber).length) { number = aiNumber; numberFrom = 'ai' }
+  if (!number && hasText) {
+    const setNumbers = [...new Set(items.map((item) => cardNumberText(checklistItemNumber(item))).filter(Boolean))]
+    const marked = setNumbers.filter((value) => numberInCardText(text, value) === 'marked')
+    if (marked.length === 1) { number = marked[0]; numberFrom = 'ocr' }
+  }
+  if (!number && expectedNumber && itemsFor(expectedNumber).length && numberInCardText(text, cardNumberText(expectedNumber))) {
+    number = cardNumberText(expectedNumber); numberFrom = 'sequence'
+  }
+
+  const ocr = !hasText ? 'unavailable' : number ? (numberInCardText(text, cardNumberText(number)) === 'marked' ? 'confirmed' : numberInCardText(text, cardNumberText(number)) ? 'seen' : 'missing') : 'missing'
+  let sequence = null
+  if (number && expectedNumber) {
+    const core = cardNumberCore(number)
+    const expectedCore = cardNumberCore(expectedNumber)
+    sequence = core === expectedCore ? 'in-order' : String(Number(expectedCore) - 1) === core ? 'repeat' : 'out-of-order'
+  }
+
+  // 2. The item(s) with that number; printings of one number are told apart by the
+  //    Collection / parallel the AI read, else left for the photo to decide.
+  let found = number ? itemsFor(number) : []
+  const printings = found.length
+  // Nothing read: no guess at Base; the photo (or the stack's Collection) decides.
+  if (found.length > 1 && (String(result.collection || '').trim() || String(result.parallel || '').trim())) {
+    const read = collectionKey(result.collection) || matchText(result.parallel)
+    const byCollection = found.filter((item) => collectionKey(item.dynamic_fields?.collection) === collectionKey(result.collection)
+      && matchText(item.dynamic_fields?.parallel) === matchText(result.parallel))
+    if (byCollection.length === 1) found = byCollection
+    else if (read) {
+      const named = found.filter((item) => sameVariantName(read, item.dynamic_fields?.collection) || sameVariantName(read, item.dynamic_fields?.parallel))
+      if (named.length === 1) found = named
+    }
+  }
+
+  // 3. The name as a cross-check (never the deciding factor in a set).
+  const readName = looseNameWords(result.subject).join(' ')
+  const nameAgrees = (item) => {
+    if (!readName) return null
+    const names = [item.name, item.subject].map((value) => looseNameWords(value).join(' ')).filter(Boolean)
+    return names.some((name) => name === readName || name.includes(readName) || readName.includes(name))
+  }
+
+  const candidates = found.map((item) => {
+    const agrees = nameAgrees(item)
+    const reasons = ['In the chosen set', numberFrom === 'ocr' ? 'Card number read from the card text' : numberFrom === 'sequence' ? 'Next number in the stack' : 'Same card number']
+    if (agrees) reasons.push('Same name')
+    let score = 80 + (agrees ? 10 : agrees === false ? -15 : 0) + (ocr === 'confirmed' ? 10 : ocr === 'seen' ? 5 : 0) + (sequence === 'in-order' || sequence === 'repeat' ? 5 : sequence === 'out-of-order' ? -5 : 0)
+    if (found.length > 1) score -= 10
+    score = Math.max(0, Math.min(100, score))
+    return {
+      item: { ...item, imageUrl: item.imageUrl || publicImageUrl(item.image_path) },
+      score,
+      reasons,
+      differences: agrees === false ? ['name'] : [],
+      comparisons: [],
+      nameAgrees: agrees,
+      likelyDuplicate: false,
+    }
+  })
+  const matchStatus = candidates.length === 1 ? 'exact' : candidates.length > 1 ? 'multiple' : 'none'
+  const [route, status] = MATCH_STATUS_ROUTE[matchStatus]
+  return {
+    source: 'target-set',
+    route,
+    status: matchStatus === 'none' ? 'Not in the chosen set' : status,
+    matchStatus,
+    bestMatch: matchStatus === 'exact' ? candidates[0] : null,
+    candidates,
+    confidence: candidates[0]?.score || 0,
+    analyzedAt: new Date().toISOString(),
+    target: { key: targetSetKey(target), label: target.label || '' },
+    setCheck: {
+      number,
+      readNumber: aiNumber,
+      numberFrom,
+      ocr,
+      nameAgrees: candidates.length === 1 ? candidates[0].nameAgrees : null,
+      expectedNumber: expectedNumber ? cardNumberText(expectedNumber) : '',
+      sequence,
+      printings,
+    },
+  }
+}
+
+// The number after a matched set item ("12" -> "13"; prefixes kept: "EC-12" -> "EC-13").
+export function nextCardNumber(value) {
+  const text = String(checklistItemNumber(value) || value || '').trim()
+  const match = text.match(/^(.*?)(\d+)(\D*)$/)
+  return match ? `${match[1]}${Number(match[2]) + 1}${match[3]}` : ''
+}
+
 // Creates a placeholder item for each checklist row that the set doesn't have
 // yet, then links rows that name LEGO sets (row.sets, plus inSets for every
 // row) to those sets. Returns { created: [ids], skipped, linked, missingSets }.
@@ -3272,8 +3758,9 @@ export async function createChecklistPlaceholders({ category, ids, itemTypeName 
   if (!categoryId || !ids?.subcategory_id) throw new Error('Choose the set (at least the category and subcategory) first.')
   const numberColumn = checklistNumberColumn(category, itemTypeName)
   const itemKey = (item) => checklistItemKey({ number: checklistItemNumber(item), collection: item.dynamic_fields?.collection, parallel: item.dynamic_fields?.parallel })
-  // Already in the catalogue: same number in the same collection.
-  const itemIdByKey = new Map(existing.map((item) => [itemKey(item), item.item_id]))
+  // Already in the catalogue: same number in the same collection, of the same Item Type.
+  const sameType = (item) => !ids.item_type_id || item.item_type_id === undefined || item.item_type_id === ids.item_type_id
+  const itemIdByKey = new Map(existing.filter(sameType).map((item) => [itemKey(item), item.item_id]))
   const todo = rows.filter((row) => !row.error && !itemIdByKey.has(checklistItemKey(row)))
   const created = []
   for (let index = 0; index < todo.length; index += 100) {
@@ -3296,7 +3783,7 @@ export async function createChecklistPlaceholders({ category, ids, itemTypeName 
         name: row.name,
         subject: row.name,
         [numberColumn]: row.number,
-        ...(isLegoCategory(category) && String(series || '').trim() ? { series: String(series).trim() } : {}),
+        ...(categoryHasSeries(category) && String(series || '').trim() ? { series: String(series).trim() } : {}),
         season: seasonKey(season) || null,
         release_year: releaseYear ? Number(releaseYear) : seasonStartYear(season),
         completion_eligible: true,
@@ -3336,9 +3823,18 @@ export async function linkItemsToLegoSets(links = [], { minifigs = true } = {}) 
   const setIdByNumber = new Map()
   for (let i = 0; i < numbers.length; i += 100) {
     const chunk = numbers.slice(i, i + 100)
-    const { data, error } = await supabase.from('items').select('item_id, lego_set_number').in('lego_set_number', [...chunk, ...chunk.map((number) => `${number}-1`)])
+    const variants = [...chunk, ...chunk.map((number) => `${number}-1`)]
+    const { data, error } = await supabase.from('items').select('item_id, lego_set_number').in('lego_set_number', variants)
     if (error) throw error
     ;(data || []).forEach((row) => { if (!setIdByNumber.has(base(row.lego_set_number))) setIdByNumber.set(base(row.lego_set_number), row.item_id) })
+    // Building Blocks imports keep the set number in card_number: read it
+    // there too (only within Building Blocks, so a card numbered 7306 never matches).
+    const legoIds = [...(await legoCategoryIds())]
+    if (legoIds.length) {
+      const { data: byCard, error: cardError } = await supabase.from('items').select('item_id, card_number').in('category_id', legoIds).in('card_number', variants)
+      if (cardError) throw cardError
+      ;(byCard || []).forEach((row) => { if (!setIdByNumber.has(base(row.card_number))) setIdByNumber.set(base(row.card_number), row.item_id) })
+    }
   }
   const pairs = new Map()
   const missing = new Set()

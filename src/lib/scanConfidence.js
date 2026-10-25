@@ -33,9 +33,48 @@ export function looseCardKey(result = {}) {
   return [players, cardNumber(result.id_number), String(result.release_year ?? '')].join('#')
 }
 
+// The matched item already has a photo that doesn't look like this scan (the photo
+// check in review): linking would replace its photos, so it waits for a person.
+function differentPhoto(draft, itemId) {
+  const check = draft?.catalogueCheck
+  return Boolean(itemId && check?.itemId === itemId && check.similar === false && !check.error)
+}
+
+// A scan matched within the set chosen at Scan Intake ("Photograph a set"): judged on
+// how its number was found and cross-checked, rather than on the AI reading alone.
+function targetSetConfidence(draft) {
+  const analysis = draft.scanAnalysis
+  const check = analysis.setCheck || {}
+  let score = 100
+  const reasons = []
+  const add = (delta, reason, good = false) => { score += delta; reasons.push({ text: reason, good, delta }) }
+  if (analysis.matchStatus === 'none') {
+    add(-100, check.readNumber ? `#${check.readNumber} isn't in the chosen set` : 'No card number read, and none found on the card')
+  } else {
+    if (check.numberFrom === 'ai') add(0, `#${check.number} is in the chosen set`, true)
+    else if (check.numberFrom === 'ocr') add(-5, `#${check.number} read from the card text (the AI missed it)`)
+    else if (check.numberFrom === 'sequence') add(-15, `#${check.number} assumed from the stack order`)
+    if (check.ocr === 'confirmed') add(0, 'Card number printed on the card agrees', true)
+    else if (check.ocr === 'seen') add(-3, 'Card number found in the card text')
+    else if (check.ocr === 'missing') add(-15, 'Card number not found in the card text')
+    if (check.nameAgrees === true) add(0, 'Name agrees with the set item', true)
+    else if (check.nameAgrees === false) add(-20, 'Name read differs from the set item')
+    if (check.sequence === 'in-order') add(0, 'Next card in the stack', true)
+    else if (check.sequence === 'repeat') add(0, 'Another copy of the previous card', true)
+    else if (check.sequence === 'out-of-order') add(-15, `Out of order (expected #${check.expectedNumber})`)
+    if (analysis.matchStatus === 'multiple') add(-30, `${check.printings} printings share #${check.number}: pick one`)
+    else if (check.variantBy === 'photo') add(-5, 'Printing chosen by its photo')
+    if (differentPhoto(draft, analysis.bestMatch?.item?.item_id)) add(-40, 'The item already has a different photo')
+  }
+  score = Math.max(0, Math.min(100, Math.round(score)))
+  const tier = score >= HIGH ? 'high' : score >= MEDIUM ? 'medium' : 'low'
+  return { score, tier, reasons, readiness: analysis.matchStatus === 'exact' ? 'link' : 'check' }
+}
+
 export function scanConfidence(draft, { copies = [], exactMatch = null } = {}) {
   const result = draft?.recognition?.result
   if (!result) return null
+  if (draft.scanAnalysis?.source === 'target-set' && !exactMatch) return targetSetConfidence(draft)
   let score = 100
   const reasons = []
   const add = (delta, reason, good = false) => { score += delta; reasons.push({ text: reason, good, delta }) }
@@ -93,6 +132,7 @@ export function scanConfidence(draft, { copies = [], exactMatch = null } = {}) {
   // 6. A possible (not exact) catalogue match might be this card.
   const matchStatus = exactMatch ? 'exact' : draft.scanAnalysis?.matchStatus || 'none'
   if (matchStatus === 'likely' || matchStatus === 'multiple') add(-10, 'Similar catalogue item to compare')
+  if (matchStatus === 'exact' && differentPhoto(draft, (exactMatch || draft.scanAnalysis?.bestMatch)?.item?.item_id)) add(-40, 'The item already has a different photo')
 
   score = Math.max(0, Math.min(100, Math.round(score)))
   const tier = score >= HIGH ? 'high' : score >= MEDIUM ? 'medium' : 'low'

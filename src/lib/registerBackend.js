@@ -1,5 +1,7 @@
 import { supabase } from './supabaseClient'
-import { UNGRADED, isCardCategory, ungradedStat } from './cardCondition'
+import { DEFAULT_RAW_CONDITION, UNGRADED, isCardCategory, isRawCardCondition, ungradedStat } from './cardCondition'
+import { legoGroupFromCondition } from './marketMath'
+import { savePurchaseInspections } from './marketIntelligence'
 
 const CATALOGUE_IMAGE_BUCKET = 'item-images'
 
@@ -18,7 +20,7 @@ function catalogueSearchValue(value) {
  * candidate does not need an existing store_inventory row because the item is
  * being offered by the customer for the first time.
  */
-const DESKTOP_CATALOGUE_SELECT = 'item_id, name, subject, description, card_number, lego_set_number, minifig_code, bricklink_id, catalog_code, upc, external_ids, release_year, category_id, market_price, retail_price, image_path, dynamic_fields'
+const DESKTOP_CATALOGUE_SELECT = 'item_id, name, subject, description, card_number, lego_set_number, minifig_code, bricklink_id, catalog_code, upc, external_ids, release_year, category_id, franchise_id, subset_id, market_price, retail_price, image_path, dynamic_fields'
 
 // One catalogue item as a register candidate, looked up by its id (the AI
 // match already knows it; a text search for it was slow).
@@ -31,11 +33,25 @@ export async function loadDesktopCatalogueItem(itemId) {
   return data ? (await buildDesktopCatalogueCandidates([data]))[0] || null : null
 }
 
-export async function searchDesktopTradeCatalogue(query) {
+export async function searchDesktopTradeCatalogue(query, { allMatches = false } = {}) {
   const term = catalogueSearchValue(query)
   if (term.length < 2) return []
 
   const catalogueSelect = DESKTOP_CATALOGUE_SELECT
+  // Scan matching needs every printing, including Base rows that may occur
+  // after many parallels. Fetch stable pages instead of a fifteen-row sample.
+  async function searchRows(request) {
+    if (!allMatches) return request
+    const rows = []
+    const pageSize = 200
+    request = request.order('item_id')
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await request.range(offset, offset + pageSize - 1)
+      if (error) return { data: null, error }
+      rows.push(...(data || []))
+      if ((data || []).length < pageSize) return { data: rows, error: null }
+    }
+  }
   const results = []
   const seen = new Set()
   const addRows = (rows) => {
@@ -44,6 +60,23 @@ export async function searchDesktopTradeCatalogue(query) {
       seen.add(row.item_id)
       results.push(row)
     }
+  }
+
+  // Treat the named collection as a phrase, including its common plural.
+  // Broad name/description fallbacks must not bypass this constraint.
+  const ratedRookie = /\brated\s+rookies?\b/i
+  if (ratedRookie.test(term)) {
+    const remainingWords = [...new Set(term.replace(ratedRookie, ' ').split(/\s+/)
+      .map((word) => word.replace(/[^\p{L}\p{N}'-]/gu, '')).filter(Boolean))]
+    let request = supabase.from('items').select(catalogueSelect)
+      .or('dynamic_fields->>collection.ilike."Rated Rookie",dynamic_fields->>collection.ilike."Rated Rookies",dynamic_fields->>collection.ilike."Rated Rookie - %",dynamic_fields->>collection.ilike."Rated Rookies - %"')
+    const fields = ['name', 'subject', 'card_number', 'dynamic_fields->>parallel', 'dynamic_fields->>finish', 'dynamic_fields->>set_name']
+    for (const word of remainingWords) {
+      request = request.or(fields.map((field) => `${field}.ilike."%${word}%"`).join(','))
+    }
+    const { data, error } = await searchRows(request.limit(15))
+    if (error) throw error
+    return buildDesktopCatalogueCandidates(data || [])
   }
 
   const textQueries = [
@@ -60,6 +93,20 @@ export async function searchDesktopTradeCatalogue(query) {
   // Several words, e.g. "jalen hurts 64": the name words in order, and any
   // word with a digit as the card number.
   const words = term.split(/\s+/).map((word) => word.replace(/^#/, '')).filter(Boolean)
+  // A query can span fields: "Trevor Etienne Rated Rookie" has the player
+  // in name/subject and "Rated Rookie" in the collection. Require every
+  // word, allowing each one to match a different catalogue field.
+  const searchWords = [...new Set(words.map((word) => word.replace(/[^\p{L}\p{N}'-]/gu, '')).filter(Boolean))]
+  if (searchWords.length > 1) {
+    const fields = ['name', 'subject', 'description', 'card_number', 'dynamic_fields->>collection', 'dynamic_fields->>parallel', 'dynamic_fields->>finish', 'dynamic_fields->>set_name']
+    let combined = supabase.from('items').select(catalogueSelect)
+    for (const word of searchWords) {
+      combined = combined.or(fields.map((field) => `${field}.ilike."%${word}%"`).join(','))
+    }
+    // Put the combined matches first so broad legacy results cannot crowd
+    // them out of the displayed candidates.
+    textQueries.unshift(combined.limit(15))
+  }
   const numberWords = words.filter((word) => /\d/.test(word))
   const nameWords = words.filter((word) => !/\d/.test(word)).map((word) => word.replace(/[^\p{L}\p{N}'-]/gu, '')).filter((word) => word.length >= 2)
   if (words.length > 1 && nameWords.length) {
@@ -72,7 +119,7 @@ export async function searchDesktopTradeCatalogue(query) {
       textQueries.push(supabase.from('items').select(catalogueSelect).ilike('name', namePattern).limit(15))
     }
   }
-  const responses = await Promise.all(textQueries)
+  const responses = await Promise.all(textQueries.map(searchRows))
   // Keep a supported name search useful even if an older database instance is
   // missing one of the optional identifier columns.
   const successfulResponses = responses.filter((response) => !response.error)
@@ -89,17 +136,17 @@ export async function searchDesktopTradeCatalogue(query) {
 
     const subjectIds = (subjects || []).map((row) => row.subject_id).filter(Boolean)
     if (subjectIds.length) {
-      const { data, error } = await supabase
+      const { data, error } = await searchRows(supabase
         .from('items')
         .select(catalogueSelect)
         .in('subject_id', subjectIds)
-        .limit(15)
+        .limit(15))
       if (error) console.warn('[Desktop Register] Catalogue subject item search unavailable:', error)
       else addRows(data)
     }
   }
 
-  return buildDesktopCatalogueCandidates(results.slice(0, 15))
+  return buildDesktopCatalogueCandidates(allMatches ? results : results.slice(0, 15))
 }
 
 // Catalogue rows -> register candidates (category, photo, market value from
@@ -108,19 +155,31 @@ async function buildDesktopCatalogueCandidates(rows) {
   if (!rows.length) return []
 
   const categoryIds = [...new Set(rows.map((row) => row.category_id).filter(Boolean))]
+  const franchiseIds = [...new Set(rows.map((row) => row.franchise_id).filter(Boolean))]
+  const subsetIds = [...new Set(rows.map((row) => row.subset_id).filter(Boolean))]
   const itemIds = rows.map((row) => row.item_id).filter(Boolean)
-  const [{ data: categories, error: categoryError }, { data: images, error: imageError }, aggregateMarketStats, marketSales] = await Promise.all([
+  const [{ data: categories, error: categoryError }, { data: images, error: imageError }, aggregateMarketStats, marketSales, { data: franchises, error: franchiseError }, { data: subsets, error: subsetError }] = await Promise.all([
     categoryIds.length
       ? supabase.from('categories').select('category_id, name').in('category_id', categoryIds)
       : Promise.resolve({ data: [], error: null }),
     supabase.from('item_images').select('item_id, image_path, position').in('item_id', itemIds).order('position'),
     loadRegisterMarketStatsForItems(itemIds),
     loadMarketSalesForItems(itemIds),
+    franchiseIds.length
+      ? supabase.from('franchises').select('franchise_id, name').in('franchise_id', franchiseIds)
+      : Promise.resolve({ data: [], error: null }),
+    subsetIds.length
+      ? supabase.from('subsets').select('subset_id, name').in('subset_id', subsetIds)
+      : Promise.resolve({ data: [], error: null }),
   ])
   if (categoryError) console.warn('[Desktop Register] Catalogue category lookup failed:', categoryError)
   if (imageError) console.warn('[Desktop Register] Catalogue image lookup failed:', imageError)
+  if (franchiseError) console.warn('[Desktop Register] Catalogue franchise lookup failed:', franchiseError)
+  if (subsetError) console.warn('[Desktop Register] Catalogue set lookup failed:', subsetError)
 
   const categoryMap = Object.fromEntries((categories || []).map((row) => [row.category_id, row.name]))
+  const franchiseMap = Object.fromEntries((franchises || []).map((row) => [row.franchise_id, row.name]))
+  const subsetMap = Object.fromEntries((subsets || []).map((row) => [row.subset_id, row.name]))
   const imageMap = {}
   for (const row of images || []) {
     if (row.item_id && row.image_path && !imageMap[row.item_id]) imageMap[row.item_id] = publicCatalogueImage(row.image_path)
@@ -130,7 +189,7 @@ async function buildDesktopCatalogueCandidates(rows) {
     const fallbackValue = Number(row.market_price ?? row.retail_price ?? 0)
     const marketStats = aggregateMarketStats[row.item_id] || buildConditionMarketStats(marketSales[row.item_id] || [])
     const defaultCondition = preferredConditionForCategory(categoryMap[row.category_id] || '')
-    const defaultConditionStats = marketValueForCondition(marketStats, defaultCondition)
+    const defaultConditionStats = marketValueForCondition(marketStats, defaultCondition, categoryMap[row.category_id] || '')
     const marketValue = defaultConditionStats?.average30Day ?? defaultConditionStats?.average ?? fallbackValue
     return {
       id: `catalog_${row.item_id}`,
@@ -141,6 +200,7 @@ async function buildDesktopCatalogueCandidates(rows) {
       name: row.name || row.subject || row.description || 'Catalogue item',
       title: row.name || row.subject || row.description || 'Catalogue item',
       category: categoryMap[row.category_id] || '',
+      setName: row.dynamic_fields?.set_name || [...new Set([franchiseMap[row.franchise_id], subsetMap[row.subset_id]].filter(Boolean))].join(' › '),
       marketValue,
       price: marketValue,
       marketStats,
@@ -318,16 +378,21 @@ function normalizeMarketCondition(condition) {
 
 function preferredConditionForCategory(category) {
   const text = String(category || '').toLowerCase()
-  if (text.includes('lego') || text.includes('building')) return 'New/Sealed'
-  if (isCardCategory(text)) return UNGRADED
+  if (text.includes('lego') || text.includes('building')) return 'Sealed'
+  if (isCardCategory(text)) return DEFAULT_RAW_CONDITION
   return 'Near Mint'
 }
 
-function marketValueForCondition(marketStats, condition) {
-  // Ungraded cards: every raw-card sale (Near Mint, Lightly Played…) together.
-  if (condition === UNGRADED) return ungradedStat(marketStats?.byCondition)
+function marketValueForCondition(marketStats, condition, category = '') {
+  // Raw cards: every raw-card sale (Near Mint, Lightly Played…) together.
+  if (condition === UNGRADED || (isCardCategory(category) && isRawCardCondition(condition))) return ungradedStat(marketStats?.byCondition)
   const normalized = normalizeMarketCondition(condition)
-  return marketStats?.byCondition?.[normalized] || null
+  const exact = marketStats?.byCondition?.[normalized]
+  if (exact) return exact
+  // LEGO: another wording of the same pricing group ("Pre-Owned 100%" for Used Complete).
+  const group = legoGroupFromCondition(condition)
+  if (!group) return null
+  return Object.entries(marketStats?.byCondition || {}).filter(([key]) => legoGroupFromCondition(key) === group).map(([, stat]) => stat).sort((a, b) => Number(b?.count || 0) - Number(a?.count || 0))[0] || null
 }
 
 export async function loadRegisterLocation(locationId) {
@@ -492,6 +557,11 @@ export async function completeDesktopCheckout(session, draft) {
   const saleItems = (draft.items || []).filter((line) => line.direction !== 'incoming').map(saleLine)
   const tradeDraftItems = (draft.items || []).filter((line) => line.direction === 'incoming')
   const tradeItems = tradeDraftItems.map((line) => tradeLine(line, draft.payout?.method))
+  // Market Intelligence: each researched line's inspection, matched to its
+  // new stock record afterwards by the line's (unique) SKU.
+  const inspections = tradeDraftItems
+    .map((line, index) => (line.research?.pricing_group || line.research?.stage ? inspectionFor(line.research, tradeItems[index].sku_snapshot) : null))
+    .filter(Boolean)
   const payments = (draft.payments || [])
     .filter((payment) => Math.abs(Number(payment.amount || 0)) > 0)
     .map((payment) => ({
@@ -525,7 +595,44 @@ export async function completeDesktopCheckout(session, draft) {
     p_checkout: checkout,
   })
   if (error) throw error
+  // The sale is done; saving the inspections can't undo it.
+  if (inspections.length && data?.transaction_id) {
+    try {
+      data.inspections_saved = await savePurchaseInspections(data.transaction_id, inspections)
+    } catch (inspectionError) {
+      data.inspections_error = inspectionError.message || 'The inspections could not be saved.'
+    }
+  }
   return data
+}
+
+// What's saved with a bought item from its Market Intelligence research.
+function inspectionFor(research, sku) {
+  if (!sku) return null
+  return {
+    sku,
+    pricing_group: research.pricing_group || null,
+    minifigs: research.minifig_list || [],
+    missing_pieces: research.missing_pieces || '',
+    missing_accessories: research.missing_accessories || '',
+    instructions: research.instructions || 'unknown',
+    box: research.box || 'unknown',
+    damage: research.damage || '',
+    notes: research.notes || '',
+    // Public: what customers see about the item (goes on the new stock record).
+    listing_description: research.listing_description || '',
+    market_reference: research.market_reference ?? null,
+    market_reference_label: research.market_reference_label || null,
+    market_currency: research.market_currency || null,
+    market_sales_count: research.market_sales_count ?? null,
+    market_data_at: research.market_data_at || null,
+    deductions: research.deductions ?? null,
+    deduction_complete: research.deduction_complete ?? null,
+    adjusted_reference: research.adjusted_reference ?? null,
+    buy_percent: research.buy_percent ?? null,
+    buy_rule: research.buy_rule || null,
+    baseline: research.baseline ?? null,
+  }
 }
 
 export async function openRegisterShift(session, { openingCash = 0, registerName = 'REG-01' } = {}) {

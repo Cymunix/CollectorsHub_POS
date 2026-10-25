@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient'
 import { resolvePrimaryLocation } from './sync'
-import { GRADED, UNGRADED, isRawCardCondition } from './cardCondition'
+import { DEFAULT_RAW_CONDITION, GRADED, canonicalRawCondition } from './cardCondition'
 
 // Store scan intake: scanned cards that matched a catalogue item are added to
 // the signed-in store's stock exactly the way the website adds stock - a
@@ -25,7 +25,7 @@ function makeSku(name) {
 }
 
 // Returns { inventoryId, created }.
-export async function addScannedCardToStock({ session, item, condition = UNGRADED, gradingCompany = '', grade = '', certNumber = '', quantity = 1, sellPrice = '', buyPrice = '' }) {
+export async function addScannedCardToStock({ session, item, condition = DEFAULT_RAW_CONDITION, gradingCompany = '', grade = '', certNumber = '', quantity = 1, sellPrice = '', buyPrice = '' }) {
   if (!session?.storeId) throw new Error('No store is signed in.')
   if (!session?.locationId) throw new Error('This store has no location to receive stock into.')
   if (!item?.item_id) throw new Error('Pick the catalogue item for this card first.')
@@ -41,7 +41,8 @@ export async function addScannedCardToStock({ session, item, condition = UNGRADE
     catalog_item_id: item.item_id,
     sku: makeSku(item.card_number || item.name || item.subject),
     // A card queued before Ungraded/Graded (Near Mint etc.) goes in as Ungraded.
-    condition: graded ? GRADED : isRawCardCondition(condition) || !condition ? UNGRADED : condition,
+    // The condition staff assessed (the six-step scale), or the slab.
+    condition: graded ? GRADED : canonicalRawCondition(condition) || condition || DEFAULT_RAW_CONDITION,
     grade: graded ? String(grade || '').trim() || null : null,
     grading_company: graded ? String(gradingCompany || '').trim() || null : null,
     cert_number: graded ? String(certNumber || '').trim() || null : null,

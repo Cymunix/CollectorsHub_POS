@@ -1,13 +1,35 @@
-// Single cards are Ungraded or Graded. A graded card keeps its grading company,
-// grade and cert number on the record; an ungraded card has no condition scale
-// (Near Mint, Lightly Played… are no longer used for cards).
+// Single cards: an ungraded card's physical condition is assessed by staff on
+// the six-step scale; a graded card keeps its grading company, grade and cert
+// number. Market pricing still groups every raw condition together as
+// "Ungraded" (ungradedStat) until there is reliable condition-specific sold
+// data, and never mixes certified grades.
+//
+// "Ungraded" is also the condition of cards saved while the scale was off
+// (v0.1.85-0.1.88); it stays valid and shows as itself, but new cards get a
+// condition from the scale.
 
 export const UNGRADED = 'Ungraded'
 export const GRADED = 'Graded'
-export const CARD_CONDITIONS = [UNGRADED, GRADED]
+export const RAW_CARD_CONDITIONS = ['Mint', 'Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged']
+export const DEFAULT_RAW_CONDITION = 'Near Mint'
+export const CARD_CONDITIONS = [...RAW_CARD_CONDITIONS, GRADED]
 
 export function isCardCategory(category) {
   return /card/i.test(String(category || ''))
+}
+
+// A raw condition written any common way ("NM", "lightly-played", "SP") as
+// its name on the scale, or '' when it isn't one.
+const CANONICAL = {
+  mint: 'Mint', gemmint: 'Mint', m: 'Mint',
+  nearmint: 'Near Mint', nm: 'Near Mint', nmmt: 'Near Mint', nearmintmint: 'Near Mint', excellent: 'Near Mint', ex: 'Near Mint',
+  lightlyplayed: 'Lightly Played', lightplayed: 'Lightly Played', lp: 'Lightly Played', slightlyplayed: 'Lightly Played', sp: 'Lightly Played', verygood: 'Lightly Played', vg: 'Lightly Played',
+  moderatelyplayed: 'Moderately Played', mp: 'Moderately Played', good: 'Moderately Played',
+  heavilyplayed: 'Heavily Played', hp: 'Heavily Played', poor: 'Heavily Played',
+  damaged: 'Damaged', dmg: 'Damaged',
+}
+export function canonicalRawCondition(condition) {
+  return CANONICAL[String(condition || '').toLowerCase().replace(/[^a-z0-9]/g, '')] || ''
 }
 
 // The older raw-card conditions, and the ways market sales describe a raw

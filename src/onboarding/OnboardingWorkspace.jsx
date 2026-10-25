@@ -6,7 +6,7 @@ import {
   updateItem, advanceItems, assignItems, qaCheck, setException, sampleForQa, parseDelimited, guessMapping, rowsToItems, matchBarcodes, importRows,
   catalogueNames, money,
 } from '../lib/onboarding'
-import { CARD_CONDITIONS, GRADED, isCardCategory } from '../lib/cardCondition'
+import { CARD_CONDITIONS, DEFAULT_RAW_CONDITION, GRADED, canonicalRawCondition, isCardCategory } from '../lib/cardCondition'
 import { CatalogueSearchDialog } from '../StoreScanIntake'
 import './onboarding.css'
 
@@ -291,11 +291,14 @@ function Queue({ project, session, access, staff, summary, onChanged }) {
               <td>{money(item.in_store_price) || '—'}</td>
               <td>{money(item.online_price) || '—'}</td>
               <td>{staffName[item.assigned_employee_id] || '—'}</td>
-              <td className="ob-flags">
-                {item.price_missing ? <span className="ob-pill warn">No price</span> : null}
-                {item.exception ? <span className="ob-pill bad" title={item.exception}>Exception</span> : null}
-                {item.qa_status !== 'unchecked' ? <span className={`ob-pill ${item.qa_status}`}>QA {item.qa_status}</span> : null}
-                {item.marketplace_status !== 'not_listed' ? <span className="ob-pill">eBay: {MARKETPLACE_LABEL[item.marketplace_status]}</span> : null}
+              <td>
+                {/* The flex wrapper sits inside the cell: a flex <td> breaks the row's table layout. */}
+                <div className="ob-flags">
+                  {item.price_missing ? <span className="ob-pill warn">No price</span> : null}
+                  {item.exception ? <span className="ob-pill bad" title={item.exception}>Exception</span> : null}
+                  {item.qa_status !== 'unchecked' ? <span className={`ob-pill ${item.qa_status}`}>QA {item.qa_status}</span> : null}
+                  {item.marketplace_status !== 'not_listed' ? <span className="ob-pill">eBay: {MARKETPLACE_LABEL[item.marketplace_status]}</span> : null}
+                </div>
               </td>
             </tr>
           ))}
@@ -371,7 +374,7 @@ function ItemPanel({ item, project, access, catalogueName, onClose, onChanged })
           {field('category_name', 'Category')}
           {card ? (
             <label>Condition
-              <select value={values.condition === GRADED ? GRADED : 'Ungraded'} onChange={(event) => setValues({ ...values, condition: event.target.value })} disabled={!canIdentity || busy}>
+              <select value={values.condition === GRADED ? GRADED : canonicalRawCondition(values.condition) || DEFAULT_RAW_CONDITION} onChange={(event) => setValues({ ...values, condition: event.target.value })} disabled={!canIdentity || busy}>
                 {CARD_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
               </select>
             </label>
