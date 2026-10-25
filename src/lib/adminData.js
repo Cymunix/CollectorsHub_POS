@@ -2951,13 +2951,14 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
   // "Orbital-Mine" finds "Orbital Mine" and quotes don't matter.
   const wordSearch = (column, player) => `${column}.ilike.${orValue(`%${looseNameWords(player).map((word) => word.replace(/[\\%_]/g, '\\$&')).join('%')}%`)}`
   const byWords = trading && players.some((player) => /[^a-z0-9 ]/i.test(player) && looseNameWords(player).length)
-  const runQuery = (words, numberOnly = false) => {
+  // The stored number may have spaces ("EC - 20") or not ("EC-20").
+  const numberForms = number ? [...new Set([number, `#${number}`, number.toUpperCase(), number.toUpperCase().replace(/-/g, ' - '), String(card.id_number || '').trim(), numberCore].filter(Boolean))] : []
+  const runQuery = (words, numberOnly = false, nameAndNumber = false) => {
     let query = supabase.from('items').select(CATALOGUE_SELECT.join(',')).eq('category_id', categoryId)
     if (players.length && !numberOnly) query = query.or(players.flatMap((player) => [words ? wordSearch('name', player) : orContains('name', player), words ? wordSearch('subject', player) : orContains('subject', player)]).join(','))
     // Trading card numbers are often printed differently from the catalogue's
     // ("os050" for 50), so with a name to search by they are compared below.
-    // The stored number may have spaces ("EC - 20") or not ("EC-20").
-    if (number && (numberOnly || !(trading && players.length))) query = query.in('card_number', [...new Set([number, `#${number}`, number.toUpperCase(), number.toUpperCase().replace(/-/g, ' - '), String(card.id_number || '').trim(), numberCore].filter(Boolean))])
+    if (number && (numberOnly || nameAndNumber || !(trading && players.length))) query = query.in('card_number', numberForms)
     return query.limit(300)
   }
   let { data, error } = await runQuery(byWords)
@@ -2967,6 +2968,13 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
   // A trading card name read wrongly (e.g. the character in the art instead of
   // the printed title) finds nothing; the card number still lists the cards to choose from.
   if (!error && !(data || []).length && trading && players.length && number) ({ data, error } = await runQuery(false, true))
+  // A very common name (a Magic basic land has well over 300 printings) fills the
+  // limit, so the printing scanned may not be among them: also fetch the name at
+  // the number read, and add those.
+  if (!error && trading && players.length && number && (data || []).length >= 300) {
+    const exact = await runQuery(byWords, false, true)
+    if (!exact.error) data = [...exact.data, ...data.filter((row) => !exact.data.some((hit) => hit.item_id === row.item_id))]
+  }
   if (error) throw error
   const rows = data || []
 
