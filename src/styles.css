@@ -8183,6 +8183,8 @@ button:disabled {
 .store-scan-card img, .store-scan-noimage { background: #eef1f5; border-radius: 6px; display: block; height: 88px; object-fit: contain; width: 64px; }
 .store-scan-card-body { display: grid; gap: 3px; min-width: 0; }
 .store-scan-card-body small { color: #5b6677; }
+/* Magic set symbol before the set name (not the card thumbnail's size). */
+.store-scan-card .store-scan-set-icon { background: none; border-radius: 0; display: inline-block; height: 15px; margin-right: 6px; object-fit: contain; vertical-align: -3px; width: auto; }
 .store-scan-status { font-size: 12px; font-weight: 800; color: #455066; }
 .store-scan-status.ready { color: #1d6b35; }
 .store-scan-status.choose, .store-scan-status.unmatched, .store-scan-status.failed { color: #9a5b00; }

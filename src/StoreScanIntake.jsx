@@ -4,6 +4,7 @@ import { analyseRecognizedCard, catalogueFrontPhotoUrl } from './lib/adminData'
 import { searchDesktopTradeCatalogue } from './lib/registerBackend'
 import { sendWishlistAlerts, useWishlistDemand, wantedLabel, wantedTitle } from './lib/wishlistDemand'
 import { addScannedCardToStock, COLLECTION_CONDITIONS } from './lib/storeScan'
+import { useMtgSetIcons } from './lib/mtgSetIcons'
 import { CARD_CONDITIONS, DEFAULT_RAW_CONDITION, GRADED, canonicalRawCondition } from './lib/cardCondition'
 import ConditionHint from './ConditionHint'
 import SlabCertFields from './SlabCertFields'
@@ -46,9 +47,11 @@ function cardTitle(result = {}) {
   return [result.subject, result.id_number ? `#${String(result.id_number).replace(/^(no\.?|#)\s*/i, '')}` : ''].filter(Boolean).join(' ') || 'Unidentified card'
 }
 
+// "Abundant Harvest · #147 · Modern Horizons · 2019 · Foil": the set (Property, or a trading
+// card set's Subfranchise) tells apart the same card printed in different releases.
 function itemLabel(item = {}) {
   const variant = [item.dynamic_fields?.collection, item.dynamic_fields?.parallel, item.dynamic_fields?.finish].map((value) => String(value || '').trim()).filter(Boolean).join(' ')
-  return [item.name || item.subject, item.card_number ? `#${item.card_number}` : '', item.release_year, variant].filter(Boolean).join(' · ')
+  return [item.name || item.subject, item.card_number ? `#${item.card_number}` : '', item.set_name || item._set_name, item.release_year, variant].filter(Boolean).join(' · ')
 }
 
 // Matching order: 1. the card's name, 2. its card number, 3. the image. Printings
@@ -85,6 +88,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
   const statusText = (status) => (toDestination && status === 'ready' ? 'Ready to save' : toDestination && status === 'added' ? (destination.addedLabel || 'Saved') : toDestination && status === 'adding' ? 'Saving…' : STATUS_TEXT[status])
   // Coming back to the screen starts clean: finished cards from last time are
   // cleared; cards still waiting (identifying, ready, need a look) are kept.
+  const setIcon = useMtgSetIcons()
   const [startQueue] = useState(() => savedQueue.filter((card) => !isFinished(card)))
   const [cards, setCards] = useState(startQueue)
   const cardsRef = useRef(startQueue)
@@ -157,9 +161,11 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
       backImage,
       feed: feedInfo,
       category: categoryRef.current,
-      // Store stock: Ungraded unless staff mark it Graded. Collection: set by
-      // the AI once the card is identified (test stores); staff can change it.
-      condition: toCollection ? '' : DEFAULT_RAW_CONDITION,
+      // Store stock: Ungraded unless staff mark it Graded. Collection: the
+      // batch's condition when one is set, otherwise set by the AI once the card
+      // is identified (test stores); staff can change it.
+      condition: toCollection ? (defaultsRef.current.collectionCondition || '') : DEFAULT_RAW_CONDITION,
+      conditionTouched: toCollection && Boolean(defaultsRef.current.collectionCondition),
       quantity: 1,
       sellPrice: defaultsRef.current.sellPrice,
       buyPrice: defaultsRef.current.buyPrice,
@@ -221,6 +227,8 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
               ? { ...entry, conditionSuggestion: { condition: suggested, notes: response.result.condition_notes || [] }, ...(entry.conditionTouched ? {} : { condition: suggested }) }
               : entry)))
           }
+          // Scan to Collection: an exact match is saved straight away.
+          if (toCollection) await autoSave(card.id)
         } catch (matchError) {
           patch(card.id, { ...fixed, result: response.result, status: 'unmatched', error: `Catalogue lookup failed: ${matchError.message}` })
         }
@@ -232,7 +240,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
 
   // Only what stock needs from a catalogue item (kept small in the saved queue).
   function pickItem(item) {
-    return { item_id: item.item_id, name: item.name, subject: item.subject, card_number: item.card_number, release_year: item.release_year, dynamic_fields: item.dynamic_fields || null, imageUrl: item.imageUrl || '' }
+    return { item_id: item.item_id, name: item.name, subject: item.subject, card_number: item.card_number, release_year: item.release_year, set_name: item._set_name || item.set_name || '', dynamic_fields: item.dynamic_fields || null, imageUrl: item.imageUrl || '' }
   }
 
   async function scanStack() {
@@ -319,6 +327,27 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
     analyseQueued()
   }
 
+  // Scan to Collection saves an exact match without a click, once it has a condition
+  // chosen by staff or the batch (an AI-suggested condition still waits for a look).
+  async function autoSave(cardId) {
+    if (!toCollection) return
+    const card = cardsRef.current.find((entry) => entry.id === cardId)
+    if (!card || card.status !== 'ready' || !card.condition || !card.conditionTouched) return
+    if (await addToStock(card)) destination.onChanged?.()
+  }
+
+  // The collection's condition for this batch: given to new cards and to waiting
+  // cards nobody has set one on, then any ready card it completes is saved.
+  async function setBatchCondition(condition) {
+    const previous = defaultsRef.current.collectionCondition || ''
+    defaultsRef.current = { ...defaultsRef.current, collectionCondition: condition }
+    setDefaults((current) => ({ ...current, collectionCondition: condition }))
+    save((list) => list.map((card) => (['added', 'adding', 'skipped'].includes(card.status) || (card.conditionTouched && card.condition !== previous)
+      ? card
+      : { ...card, condition, conditionTouched: Boolean(condition), error: '' })))
+    for (const card of cardsRef.current.filter((entry) => entry.status === 'ready')) await autoSave(card.id)
+  }
+
   async function addAllReady() {
     const ready = cardsRef.current.filter((card) => card.status === 'ready')
     let added = 0
@@ -369,7 +398,17 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             <option>Trading Cards</option>
           </select>
         </label>
-        {toCollection ? destination.controls || null : (
+        {toCollection ? (
+          <>
+            {destination.controls || null}
+            <label title="Exact matches are saved automatically once they have a condition">Condition for this batch
+              <select value={defaults.collectionCondition || ''} onChange={(event) => setBatchCondition(event.target.value)}>
+                <option value="">Pick per card</option>
+                {COLLECTION_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+              </select>
+            </label>
+          </>
+        ) : (
           <>
             {destination?.controls || null}
             <label>Sell price (each)
@@ -425,12 +464,19 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
             {card.frontImage?.url ? <img src={card.frontImage.url} alt="" /> : <span className="store-scan-noimage" />}
             <div className="store-scan-card-body">
               <strong>{card.result ? cardTitle(card.result) : statusText(card.status)}</strong>
-              <small>{card.result ? [card.result.release_year, card.result.property || card.result.subfranchise, card.result.parallel].filter(Boolean).join(' · ') : ''}</small>
+              {/* Matched: the catalogue's year and set name (as on the website); otherwise what the AI read.
+                  A Magic card also shows its set symbol: the matched item's set, or the code read off the card. */}
+              <small>{(() => {
+                const code = card.item?.dynamic_fields?.set_code || card.result?.set_code || ''
+                return code ? <img key={setIcon(code)} className="store-scan-set-icon" src={setIcon(code)} alt="" title={code.toUpperCase()} onError={(event) => { event.currentTarget.style.display = 'none' }} /> : null
+              })()}{card.item?.set_name
+                ? [card.item.release_year, card.item.set_name, card.item.dynamic_fields?.parallel].filter(Boolean).join(' · ')
+                : card.result ? [card.result.release_year, card.result.property || card.result.subfranchise, card.result.parallel].filter(Boolean).join(' · ') : ''}</small>
               <span className={`store-scan-status ${card.status}`}>{statusText(card.status)}</span>
               {card.item ? <span className="store-scan-match">Catalogue: {itemLabel(card.item)}</span> : null}
               {card.item && wishlistDemand[card.item.item_id] ? <span className="wanted-badge" title={wantedTitle(wishlistDemand[card.item.item_id])}>♥ {wantedLabel(wishlistDemand[card.item.item_id])}</span> : null}
               {card.status === 'choose' ? (
-                <select value="" onChange={(event) => { const chosen = card.candidates.find((candidate) => candidate.item.item_id === event.target.value); if (chosen) patch(card.id, { item: pickItem(chosen.item), status: 'ready' }) }}>
+                <select value="" onChange={(event) => { const chosen = card.candidates.find((candidate) => candidate.item.item_id === event.target.value); if (chosen) { patch(card.id, { item: pickItem(chosen.item), status: 'ready' }); autoSave(card.id) } }}>
                   <option value="">Choose the matching item…</option>
                   {card.candidates.map((candidate) => <option key={candidate.item.item_id} value={candidate.item.item_id}>{itemLabel(candidate.item)} ({candidate.score}%{candidate.photoMatch ? ', photo match' : ''})</option>)}
                 </select>
@@ -444,7 +490,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
               <div className="store-scan-card-fields">
                 {toCollection ? (
                   <span className="store-scan-condition">
-                    <select value={card.condition || ''} onChange={(event) => patch(card.id, { condition: event.target.value, conditionTouched: true, error: '' })} title={session?.aiCondition ? 'Condition (set by the AI; change it if needed)' : 'Condition'}>
+                    <select value={card.condition || ''} onChange={(event) => { patch(card.id, { condition: event.target.value, conditionTouched: true, error: '' }); autoSave(card.id) }} title={session?.aiCondition ? 'Condition (set by the AI; change it if needed)' : 'Condition'}>
                       {!card.condition ? <option value="">Condition…</option> : null}
                       {COLLECTION_CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
                       {card.condition && !COLLECTION_CONDITIONS.includes(card.condition) ? <option>{card.condition}</option> : null}
@@ -489,7 +535,7 @@ export default function StoreScanIntake({ session, savedQueue = [], onSaveQueue 
         <CatalogueSearchDialog
           initialQuery={searching.query}
           onClose={() => setSearching(null)}
-          onPick={(item) => { patch(searching.cardId, { item: pickItem(item), status: 'ready', error: '' }); setSearching(null) }}
+          onPick={(item) => { const cardId = searching.cardId; patch(cardId, { item: pickItem(item), status: 'ready', error: '' }); setSearching(null); autoSave(cardId) }}
         />
       ) : null}
     </section>

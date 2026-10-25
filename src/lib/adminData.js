@@ -2870,6 +2870,18 @@ const REFINE_FIELDS = [
       return cardFinish === itemFinish ? 'match' : 'mismatch'
     },
   },
+  // The language printed on a Magic card ("MH2 ★ EN"), where both sides say: a set's foreign
+  // printings share its name and number.
+  {
+    key: 'language',
+    weight: 6,
+    compare: (card, item) => {
+      const cardLanguage = card._trading ? String(card.lang_code || '').toLowerCase() : ''
+      const itemLanguage = String(item.dynamic_fields?.lang_code || '').toLowerCase()
+      if (!cardLanguage || !itemLanguage) return 'unknown'
+      return cardLanguage === itemLanguage ? 'match' : 'mismatch'
+    },
+  },
   // The catalogue often keeps parallels in Collection ("Cracked Ice Ticket"),
   // while the AI reads them as a parallel ("Cracked Ice"): a parallel that
   // names the item's collection counts for both.
@@ -2981,6 +2993,7 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
   const propertyByItem = new Map()
   const subsetNames = new Map()
   const franchiseNames = new Map()
+  const propertyNames = new Map()
   if (rows.length) {
     const subsetIds = [...new Set(rows.map((row) => row.subset_id).filter(Boolean))]
     const franchiseIds = trading ? [...new Set(rows.map((row) => row.franchise_id).filter(Boolean))] : []
@@ -2992,15 +3005,28 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
     ;(links || []).forEach((link) => { if (!propertyByItem.has(link.item_id)) propertyByItem.set(link.item_id, link.property_id) })
     ;(subsets || []).forEach((subset) => subsetNames.set(subset.subset_id, subset.name))
     ;(franchises || []).forEach((franchise) => franchiseNames.set(franchise.franchise_id, franchise.name))
+    // The Properties' names, so a match shows the catalogue's set name (the website's), not the AI's reading.
+    const propertyIds = [...new Set(propertyByItem.values())]
+    if (propertyIds.length) {
+      const { data: properties } = await supabase.from('properties').select('property_id, name').in('property_id', propertyIds)
+      ;(properties || []).forEach((property) => propertyNames.set(property.property_id, property.name))
+    }
   }
   // The set as the AI read it (trading card games keep the set on the
   // subfranchise, e.g. each Magic or Yu-Gi-Oh! set is one).
-  const setTexts = [card.property, card.subfranchise].map(looseSetName).filter(Boolean)
+  // The game's own name read where the set goes ("Magic: The Gathering") says nothing about the set.
+  const gameText = trading ? looseSetName(card.subcategory) : ''
+  const setTexts = [card.property, card.subfranchise].map(looseSetName).filter((text) => text && text !== gameText)
   const cardForRefine = { ...card, _trading: trading }
 
   const uncertain = new Set((card.uncertain_fields || []).map((field) => String(field).toLowerCase()))
   const candidates = rows.map((row) => {
-    const item = { ...row, imageUrl: publicImageUrl(row.image_path), _property_id: propertyByItem.get(row.item_id) || '' }
+    const propertyId = propertyByItem.get(row.item_id) || ''
+    const item = {
+      ...row, imageUrl: publicImageUrl(row.image_path), _property_id: propertyId,
+      // The catalogue's release name: the Property when the item has one, otherwise its Subfranchise (a trading card set).
+      _set_name: propertyNames.get(propertyId) || subsetNames.get(row.subset_id) || '',
+    }
     const reasons = []
     const differences = []
     // Score = share of comparable evidence that agrees, so a card matching on
@@ -3029,7 +3055,16 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
     // Subfranchise is a product line spanning years, so the year still counts.
     let specificRelease = false
     const itemSetName = looseSetName(subsetNames.get(item.subset_id))
-    if (ids.property_id && item._property_id) {
+    // A Magic card prints its set's code ("MH2"), never the set's name: when it was read, it is the
+    // surest set evidence. A set's promos/tokens/art cards (Scryfall "pmh2", "tmh2") print the parent's.
+    const cardSetCode = trading ? String(card.set_code || '').toLowerCase() : ''
+    const itemSetCode = String(item.dynamic_fields?.set_code || '').toLowerCase()
+    if (cardSetCode && itemSetCode) {
+      possible += 15
+      specificRelease = true
+      releaseMatch = itemSetCode === cardSetCode || (Boolean(item.dynamic_fields?.product) && itemSetCode.slice(1) === cardSetCode)
+      if (releaseMatch) { score += 15; reasons.push('Same set') } else differences.push('set')
+    } else if (ids.property_id && item._property_id) {
       possible += 20
       // Sets are named without their season now, so a Property is one set
       // across seasons: the season (below) still has to agree. (Items with no
@@ -3078,8 +3113,11 @@ export async function matchRecognizedCard({ categoryId, ids = {}, card: readCard
     // being proposed as a new catalogue item.
     const yearOnly = trading && subjectMatch && numberMatch && releaseBeforeYear && !releaseMatch && differences.includes('year')
     let refineAllMatch = true
+    // A Magic set code and collector number name one printing, treatment included (the AI doesn't
+    // read Showcase/Borderless): its collection and parallel aren't held against it.
+    const codePrinting = Boolean(cardSetCode && itemSetCode && releaseMatch && numberMatch)
     REFINE_FIELDS.forEach((field) => {
-      const outcome = field.compare(cardForRefine, item)
+      const outcome = codePrinting && ['collection', 'parallel'].includes(field.key) ? 'unknown' : field.compare(cardForRefine, item)
       if (outcome !== 'unknown') possible += field.weight
       if (outcome === 'match') { score += field.weight; if (['collection', 'parallel'].includes(field.key)) reasons.push(`Same ${field.key}`) }
       if (outcome === 'mismatch') { refineAllMatch = false; differences.push(field.key.replace('_', ' ')) }

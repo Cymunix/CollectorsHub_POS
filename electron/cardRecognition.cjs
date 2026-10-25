@@ -15,6 +15,9 @@ const { rotateNativeImage } = require('./imageRotate.cjs')
 
 const OLLAMA_URL = 'http://127.0.0.1:11434'
 const QWEN_MODEL = 'qwen3-vl:8b-instruct'
+// Every request (warm-up, orientation checks, identify) uses ONE context size: Ollama reloads the
+// whole model whenever the size changes, which cost several seconds per check and timed cards out.
+const OLLAMA_NUM_CTX = 16384
 // Long edge sent to the model: enough to read card numbers, copyright lines
 // and serial stamps without sending the full 600 DPI scan. Measured on
 // FastFoto scans: 1600 gives the same results as 2000 about 30% faster
@@ -437,7 +440,7 @@ class OllamaCardRecognitionProvider {
   // the first card). Best effort: failures surface on the real request.
   async warmUp() {
     try {
-      await ollamaFetch('/api/generate', { method: 'POST', timeoutMs: RECOGNITION_TIMEOUT_MS, body: { model: this.model, keep_alive: '10m' } })
+      await ollamaFetch('/api/generate', { method: 'POST', timeoutMs: RECOGNITION_TIMEOUT_MS, body: { model: this.model, keep_alive: '10m', options: { num_ctx: OLLAMA_NUM_CTX } } })
     } catch {}
   }
 
@@ -454,7 +457,7 @@ class OllamaCardRecognitionProvider {
         model: this.model,
         stream: false,
         keep_alive: '10m',
-        options: { num_ctx: 4096, temperature: 0 },
+        options: { num_ctx: OLLAMA_NUM_CTX, temperature: 0 },
         format: { type: 'object', properties: { back_image: { type: 'integer', enum: [1, 2] } }, required: ['back_image'] },
         messages: [{
           role: 'user',
@@ -498,7 +501,7 @@ class OllamaCardRecognitionProvider {
         model: this.model,
         stream: false,
         keep_alive: '10m',
-        options: { num_ctx: 8192, temperature: 0 },
+        options: { num_ctx: OLLAMA_NUM_CTX, temperature: 0 },
         format: { type: 'object', properties: { upright_image: { type: 'integer', enum: [1, 2, 3, 4] } }, required: ['upright_image'] },
         messages: [{
           role: 'user',
@@ -534,7 +537,7 @@ class OllamaCardRecognitionProvider {
         stream: false,
         format: CARD_SCHEMA,
         keep_alive: '10m',
-        options: { num_ctx: 16384, temperature: 0 },
+        options: { num_ctx: OLLAMA_NUM_CTX, temperature: 0 },
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           {
@@ -581,10 +584,11 @@ const IDENTIFY_SCHEMA = {
   type: 'object',
   properties: {
     ...Object.fromEntries(IDENTIFY_FIELDS.map((key) => [key, CARD_SCHEMA.properties[key]])),
+    collector_line: { type: ['string', 'null'] },
     suggested_condition: { type: ['string', 'null'], enum: [...CARD_CONDITIONS, null] },
     condition_notes: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4 },
   },
-  required: [...IDENTIFY_FIELDS, 'suggested_condition', 'condition_notes'],
+  required: [...IDENTIFY_FIELDS, 'collector_line', 'suggested_condition', 'condition_notes'],
   additionalProperties: false,
 }
 // Smaller images than a full reading (fewer image tokens), still enough for
@@ -616,6 +620,11 @@ Read only what identifies the card. Use only what is printed on the card; never 
 - serial_numbering: hand/stamped numbering such as 14/99 (NOT the card number of a trading card game).
 - autograph, memorabilia_relic: true only if the physical card has one.
 - finish: trading card games only: Foil / Nonfoil (Magic, Yu-Gi-Oh!) or Holo / Reverse Holo / None (Pokémon).
+- collector_line: trading card games only: the small print in the bottom-left corner of the FRONT, copied exactly as
+  printed, symbols included, lines separated by " / ". Magic, e.g. "123 U / ABC • EN": collector number, rarity letter,
+  then the SET CODE (2-5 letters/digits), ★ or •, and the language. A Magic card never prints its set's name: never put
+  the set code's meaning or a guess in subfranchise/property. The name after the paintbrush icon is the ARTIST, never a
+  set. null for sports cards or when there is no such line.
 - uncertain_fields: the fields you could not read clearly.
 - suggested_condition: the card's physical condition from what you can see on BOTH sides:
   Near Mint: sharp corners, clean edges, no creases, at most a tiny flaw.
@@ -627,6 +636,75 @@ Read only what identifies the card. Use only what is printed on the card; never 
 - condition_notes: 1 to 4 short observations behind that condition, naming where (e.g. "top-left corner slightly
   rounded", "white wear along the back edges", "no creases or scratches visible"). Mention clearly off-centre
   printing if you see it.`
+
+// A trading card's collector line, as the AI copied it. Magic prints "SET ★ LANG" on a foil and
+// "SET • LANG" on a non-foil: the set code and that symbol are read here rather than trusted to
+// the model's own finish (a flat scan shows no foil shine). Returns the fields it settles.
+function readCollectorLine(line) {
+  const text = String(line || '').trim()
+  if (!text) return { collector_line: null }
+  const out = { collector_line: text }
+  const magic = text.match(/\b([A-Z0-9]{2,5})\s*([★☆*•·])\s*([A-Z]{2,3})\b/)
+  if (magic) {
+    out.set_code = magic[1].toLowerCase()
+    out.finish = /[★☆*]/.test(magic[2]) ? 'Foil' : 'Nonfoil'
+    out.lang_code = PRINTED_LANGUAGES[magic[3].toUpperCase()] || null
+  }
+  return out
+}
+// Language codes printed on Magic cards → the catalogue's (Scryfall's) codes.
+const PRINTED_LANGUAGES = { EN: 'en', JP: 'ja', JA: 'ja', DE: 'de', FR: 'fr', IT: 'it', SP: 'es', ES: 'es', PT: 'pt', RU: 'ru', KO: 'ko', KR: 'ko', CS: 'zhs', CT: 'zht', PH: 'ph' }
+
+// Magic foil mark, looked at closely: the whole card at identify size is too small for the model to
+// tell the collector line's ★ from its • (it also mistakes the artist's paintbrush for a star), so
+// the bottom-left corner of the full-size front is cropped and asked about alone.
+const FOIL_MARK_SCHEMA = {
+  type: 'object',
+  properties: {
+    code_line: { type: 'boolean' },
+    set_code: { type: ['string', 'null'] },
+    mark: { type: 'string', enum: ['star', 'dot', 'unclear'] },
+  },
+  required: ['code_line', 'set_code', 'mark'],
+  additionalProperties: false,
+}
+const FOIL_MARK_PROMPT = 'This is the bottom-left corner of a Magic: The Gathering card. Newer cards print a line with the set '
+  + 'code, a small symbol, then the language, e.g. "ABC ★ EN" or "XYZ • EN", followed by a paintbrush icon and the artist\'s '
+  + 'name. Older cards have no such line: only the artist and a copyright line (e.g. "™ & © 1993-2010 Wizards of the Coast"). '
+  + 'code_line: true only if a set code + symbol + language line is actually printed here. set_code: that code exactly as '
+  + 'printed, or null. mark: the small symbol BETWEEN the set code and the language: a five-pointed star (★) is star, a round '
+  + 'dot (•) is dot; unclear if there is no such line or you cannot tell. Ignore the paintbrush icon and anything after it.'
+
+// Returns { codeLine, setCode, mark } from the corner alone.
+async function readMagicFoilMark(model, frontPath, signal) {
+  const unclear = { codeLine: false, setCode: null, mark: 'unclear' }
+  const image = nativeImage.createFromBuffer(await readFile(frontPath))
+  if (image.isEmpty()) return unclear
+  const { width, height } = image.getSize()
+  // Portrait card, upright: the collector line sits in the bottom ~10%, left half.
+  const corner = image.crop({ x: 0, y: Math.round(height * 0.88), width: Math.round(width * 0.6), height: Math.round(height * 0.12) })
+  const response = await ollamaFetch('/api/chat', {
+    method: 'POST',
+    timeoutMs: RECOGNITION_TIMEOUT_MS,
+    signal,
+    body: {
+      model,
+      stream: false,
+      format: FOIL_MARK_SCHEMA,
+      keep_alive: '10m',
+      options: { num_ctx: OLLAMA_NUM_CTX, temperature: 0 },
+      messages: [{ role: 'user', content: FOIL_MARK_PROMPT, images: [corner.toJPEG(95).toString('base64')] }],
+    },
+  })
+  if (!response.ok) return unclear
+  const data = await response.json().catch(() => null)
+  let parsed
+  try { parsed = JSON.parse(data?.message?.content) } catch { return unclear }
+  // The model tends to copy the whole line ("MH2★EN"): the code is what comes before the ★ / •.
+  const text = String(parsed?.set_code || '').trim()
+  const setCode = (text.match(/\b([A-Z][A-Z0-9]{1,4})\s*[★☆*•·]/i)?.[1] || text.match(/^[A-Z][A-Z0-9]{1,4}$/i)?.[0] || '').toLowerCase() || null
+  return { codeLine: parsed?.code_line === true, setCode, mark: ['star', 'dot'].includes(parsed?.mark) ? parsed.mark : 'unclear' }
+}
 
 OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCard({ frontPath, backPath, category = '' }, signal) {
   if (!frontPath) throw new CardRecognitionError('IMAGE_MISSING', 'The front scan is missing.')
@@ -643,7 +721,7 @@ OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCa
       keep_alive: '10m',
       // Same context size as a full reading: a different one makes Ollama
       // reload the model, which would stall a scan queue running alongside.
-      options: { num_ctx: 16384, temperature: 0 },
+      options: { num_ctx: OLLAMA_NUM_CTX, temperature: 0 },
       messages: [
         { role: 'system', content: IDENTIFY_PROMPT },
         {
@@ -668,6 +746,25 @@ OllamaCardRecognitionProvider.prototype.identifyCard = async function identifyCa
     throw new CardRecognitionError('INVALID_JSON', 'The local AI returned an unexpected result. Retry the card.')
   }
   const result = normaliseResult(parsed)
+  const modelFinish = result.finish
+  Object.assign(result, readCollectorLine(parsed.collector_line))
+  // A Magic collector line was read: confirm it from a close look at the corner (older cards have
+  // none, and the model can invent one), then settle the set code and foil from its ★ / •.
+  if (result.set_code) {
+    const corner = await readMagicFoilMark(this.model, frontPath, signal).catch(() => null)
+    if (!corner?.codeLine) {
+      // No set-code line on the card: neither the code nor the foil reading from it stands.
+      delete result.set_code
+      delete result.lang_code
+      result.finish = modelFinish
+      result.foil_mark = 'none'
+    } else {
+      // The full reading copies the code well (it's the ★ / • it gets wrong); the corner's is the fallback.
+      result.set_code = result.set_code || corner.setCode
+      if (corner.mark !== 'unclear') result.finish = corner.mark === 'star' ? 'Foil' : 'Nonfoil'
+      result.foil_mark = corner.mark
+    }
+  }
   result.suggested_condition = CARD_CONDITIONS.includes(parsed.suggested_condition) ? parsed.suggested_condition : null
   result.condition_notes = Array.isArray(parsed.condition_notes) ? parsed.condition_notes.map((note) => String(note).trim()).filter(Boolean).slice(0, 4) : []
   return { result, model: this.model, durationMs: Date.now() - started, mode: 'identify' }
@@ -694,7 +791,7 @@ OllamaCardRecognitionProvider.prototype.writeListingDescription = async function
       stream: false,
       keep_alive: '10m',
       // Same context size as the scans so the model isn't reloaded.
-      options: { num_ctx: 16384, temperature: 0.2 },
+      options: { num_ctx: OLLAMA_NUM_CTX, temperature: 0.2 },
       messages: [
         { role: 'system', content: DESCRIPTION_PROMPT },
         { role: 'user', content: `Item facts (JSON):\n${JSON.stringify(facts, null, 2)}\n\nWrite the condition note.` },
@@ -708,4 +805,4 @@ OllamaCardRecognitionProvider.prototype.writeListingDescription = async function
   return text.slice(0, 1200)
 }
 
-module.exports = { OllamaCardRecognitionProvider, CardRecognitionError, QWEN_MODEL, normaliseResult }
+module.exports = { OllamaCardRecognitionProvider, CardRecognitionError, QWEN_MODEL, normaliseResult, readMagicFoilMark }
