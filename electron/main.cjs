@@ -1855,7 +1855,10 @@ ipcMain.handle('scanner:compare-with-photo', async (_event, image, photoUrl) => 
     const scan = nativeImage.createFromPath(resolveScanImagePath(image))
     if (scan.isEmpty()) return { ok: false, message: 'The scan could not be read.' }
     if (!PHOTO_SIGNATURES.has(photoUrl)) {
-      const response = await net.fetch(photoUrl)
+      // Node's fetch, not Electron's net.fetch: Scryfall names the file in Content-Disposition, and a promo's
+      // collector number can hold a ★, which net.fetch can't put in a header and throws outside this try,
+      // crashing the main process. Scryfall wants a User-Agent and Accept header.
+      const response = await fetch(photoUrl, { headers: { 'User-Agent': `CollectorsHub-POS/${app.getVersion()}`, Accept: 'image/*' } })
       if (!response.ok) return { ok: false, message: 'The catalogue photo could not be loaded.' }
       const photo = nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()))
       if (photo.isEmpty()) return { ok: false, message: 'The catalogue photo could not be read.' }
