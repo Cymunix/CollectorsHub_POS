@@ -3620,22 +3620,57 @@ export async function resolveChecklistGroup({ category, categoryId, spec, create
 // imported as another Item Type (e.g. Sticker vs Card) creates its own items.
 export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId = '', subsetId = '', propertyId = '', itemTypeId = '', releaseYear = '', season = '' }) {
   if (!categoryId) return []
-  const rows = []
-  for (let from = 0; ; from += 1000) {
-    let query = supabase.from('items')
-      .select(`item_id, category_id, name, subject, card_number, minifig_code, lego_set_number, catalog_code, release_year, season, series, image_path, item_type_id, dynamic_fields${propertyId ? ', item_properties!inner(property_id)' : ''}`)
-      .eq('category_id', categoryId)
+  const scoped = (query) => {
+    query = query.eq('category_id', categoryId)
     if (subcategoryId) query = query.eq('subcategory_id', subcategoryId)
     if (itemTypeId) query = query.eq('item_type_id', itemTypeId)
     if (franchiseId) query = query.eq('franchise_id', franchiseId)
     if (subsetId) query = query.eq('subset_id', subsetId)
-    if (propertyId) query = query.eq('item_properties.property_id', propertyId)
     if (seasonKey(season)) query = query.eq('season', seasonKey(season))
     else if (!propertyId && releaseYear) query = query.eq('release_year', Number(releaseYear))
-    const { data, error } = await query.order('item_id').range(from, from + 999)
+    return query
+  }
+
+  const columns = 'item_id, category_id, name, subject, card_number, minifig_code, lego_set_number, catalog_code, release_year, season, series, image_path, item_type_id, dynamic_fields'
+  const rows = []
+
+  // Pages continue after the last item_id rather than skipping N rows: with offsets each
+  // page re-read every earlier one, so big sets (a Property can hold 200k cards) slowed
+  // until every page hit the statement timeout and a checklist check overloaded the
+  // database.
+  if (propertyId) {
+    // The Property's next item ids (item_properties (property_id, item_id) index), then
+    // those items with the set's other filters, a few batches of 200 at a time.
+    for (let after = null; ;) {
+      let idQuery = supabase.from('item_properties').select('item_id').eq('property_id', propertyId)
+      if (after) idQuery = idQuery.gt('item_id', after)
+      const { data: links, error: linkError } = await idQuery.order('item_id').limit(1000)
+      if (linkError) throw linkError
+      const ids = (links || []).map((row) => row.item_id)
+      const batches = []
+      for (let index = 0; index < ids.length; index += 200) batches.push(ids.slice(index, index + 200))
+      for (let index = 0; index < batches.length; index += 4) {
+        const results = await Promise.all(batches.slice(index, index + 4)
+          .map((batch) => scoped(supabase.from('items').select(columns)).in('item_id', batch)))
+        for (const { data, error } of results) {
+          if (error) throw error
+          rows.push(...(data || []))
+        }
+      }
+      if (ids.length < 1000) break
+      after = ids[ids.length - 1]
+    }
+    return rows.sort((left, right) => (left.item_id < right.item_id ? -1 : left.item_id > right.item_id ? 1 : 0))
+  }
+
+  for (let after = null; ;) {
+    let query = scoped(supabase.from('items').select(columns))
+    if (after) query = query.gt('item_id', after)
+    const { data, error } = await query.order('item_id').limit(1000)
     if (error) throw error
     rows.push(...(data || []))
     if (!data || data.length < 1000) break
+    after = data[data.length - 1].item_id
   }
   return rows
 }
