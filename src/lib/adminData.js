@@ -193,24 +193,24 @@ export async function loadCatalogueItemIds(filters = {}, max = 5000) {
 }
 
 // Franchises for the catalogue filter. With a category, only that category's franchises:
-// those linked to its subcategories, plus any its catalogue items use. Each other franchise is
-// checked with a small "one item in this category?" lookup (in parallel batches); a lookup
-// that fails keeps the franchise rather than hiding it. Not cached: a franchise added during the
-// session (catalogue editor, scan review) must show up the next time the list loads.
+// those linked to its subcategories, plus any its catalogue items use (from the catalogue's
+// filter summary, catalog_facet_values). Checking each other franchise with a "one item in this
+// category?" lookup timed out on big categories, 25 at a time, and loaded the database.
+// Not cached: a franchise added during the session (catalogue editor, scan review) must show
+// up the next time the list loads, so franchises created since the summary's last refresh
+// (every 3 hours) still come in through franchise_subcategory.
 async function categoryFranchiseIds(categoryId) {
   const ids = new Set()
-  const { data: subcats } = await supabase.from('subcategories').select('subcategory_id').eq('category_id', categoryId)
+  const [{ data: subcats }, { data: used, error: usedError }] = await Promise.all([
+    supabase.from('subcategories').select('subcategory_id').eq('category_id', categoryId),
+    supabase.rpc('catalog_facet_values', { p_column: 'franchise_id', p_filters: { category_id: categoryId } }),
+  ])
+  if (usedError) console.warn('[Catalogue] Franchises used in this category could not be loaded:', usedError.message)
+  ;(Array.isArray(used) ? used : []).forEach((id) => id && ids.add(id))
   const subcategoryIds = (subcats || []).map((row) => row.subcategory_id).filter(Boolean)
   if (subcategoryIds.length) {
     const { data: links } = await supabase.from('franchise_subcategory').select('franchise_id').in('subcategory_id', subcategoryIds)
     ;(links || []).forEach((row) => row.franchise_id && ids.add(row.franchise_id))
-  }
-  const { data: everyFranchise } = await supabase.from('franchises').select('franchise_id')
-  const rest = (everyFranchise || []).map((row) => row.franchise_id).filter((id) => id && !ids.has(id))
-  for (let i = 0; i < rest.length; i += 25) {
-    const batch = rest.slice(i, i + 25)
-    const results = await Promise.all(batch.map((id) => supabase.from('items').select('item_id').eq('category_id', categoryId).eq('franchise_id', id).limit(1)))
-    results.forEach((result, j) => { if (result.error || result.data?.length) ids.add(batch[j]) })
   }
   return ids
 }
