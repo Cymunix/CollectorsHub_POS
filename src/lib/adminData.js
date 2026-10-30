@@ -10,7 +10,7 @@ export const ADMIN_EXPLORER_TABLES = [
   { label: 'Franchises', table: 'franchises', order: 'name', pk: 'franchise_id', editable: true },
   { label: 'Brands', table: 'brands', order: 'name', pk: 'brand_id', editable: true },
   { label: 'Collectible Sets', table: 'collectible_sets', order: 'name', pk: 'collectible_set_id', editable: true },
-  { label: 'Item Images', table: 'item_images', order: 'created_at', pk: 'id', editable: true },
+  { label: 'Item Images', table: 'item_images', order: 'created_at', pk: 'item_image_id', editable: true },
   { label: 'Image Candidates', table: 'image_candidates', order: 'created_at', pk: 'id', editable: true },
   { label: 'Image Search Jobs', table: 'image_search_jobs', order: 'created_at', pk: 'id', editable: true },
   { label: 'Market Prices', table: 'item_market_prices', order: 'updated_at', pk: 'item_id', editable: true },
@@ -1066,7 +1066,7 @@ export async function loadTaxonomyData() {
 export async function loadImagesMediaData() {
   const [itemsMissingImages, itemImages, imageCandidates, imageJobs] = await Promise.all([
     safeRows('items', 'item_id, name, subject, image_path, category_id', 'name'),
-    safeRows('item_images', 'id, item_id, image_path, source_url, source_name, is_primary, is_verified, position, updated_at', 'updated_at'),
+    safeRows('item_images', 'id:item_image_id, item_id, image_path, source_url, source_name, is_primary, is_verified, position, updated_at', 'updated_at'),
     safeRows('image_candidates', 'id, item_id, image_url, thumb_url, source_name, match_score, status, created_at', 'created_at'),
     safeRows('image_search_jobs', 'id, item_id, status, trigger, candidates_found, error_message, created_at', 'created_at'),
   ])
