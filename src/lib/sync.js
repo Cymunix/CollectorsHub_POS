@@ -161,22 +161,35 @@ async function logEmptyDiagnostics(storeId, locationId) {
   })
 }
 
-export async function syncInventoryFromSupabase(session) {
-  const startedAt = new Date().toISOString()
-  const { data: userData, error: userError } = await supabase.auth.getUser()
-  if (userError) throw userError
-
-  const userId = userData?.user?.id || null
-  const { storeId, locationId } = await resolveContext(session)
-
-  console.info('[Desktop Sync] Authenticated User:', userId)
-  console.info('[Desktop Sync] Store:', storeId)
-  console.info('[Desktop Sync] Location:', locationId)
-
-  if (!storeId || !locationId) {
-    throw new Error('No active store/location could be resolved for this desktop session.')
+// One request for the whole location (supabase/pos_inventory_snapshot.sql).
+// Returns null when the database doesn't have the function yet.
+async function loadSnapshotRows(storeId, locationId) {
+  const { data, error } = await supabase.rpc('pos_inventory_snapshot', { p_store_id: storeId, p_location_id: locationId })
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883') {
+      console.warn('[Desktop Sync] pos_inventory_snapshot is missing; using the batched sync.')
+      return null
+    }
+    console.error('[Desktop Sync] RLS/query error:', error)
+    throw error
   }
 
+  return (data || []).map((row) => ({
+    row,
+    quantity: row,
+    meta: row.catalog_item_id ? {
+      name: row.catalog_name || '',
+      number: row.catalog_number || '',
+      category: row.category_name || '',
+      imagePath: row.catalog_image_path || '',
+    } : {},
+    image: publicUrl(STORE_INVENTORY_IMAGES_BUCKET, row.inventory_image_path)
+      || publicUrl(ITEM_IMAGES_BUCKET, row.item_image_path),
+  }))
+}
+
+// The older path: quantities, inventory, catalogue and images fetched in batches.
+async function loadBatchedRows(storeId, locationId) {
   // Every stock record at this location, including ones at 0 (favourites stay
   // listed and the Sold out filter needs them; the register only sells what's
   // available). Paged past Supabase's 1,000-row limit.
@@ -198,96 +211,102 @@ export async function syncInventoryFromSupabase(session) {
     if (!data || data.length < 1000) break
   }
 
-  const quantityList = quantityRows
-  const inventoryIds = quantityList.map((row) => row.inventory_id)
-  console.info('[Desktop Sync] Quantity rows returned:', quantityList.length)
-
-  if (!inventoryIds.length) {
-    console.info('[Desktop Sync] Inventory returned: 0 records')
-    await logEmptyDiagnostics(storeId, locationId)
-    return {
-      inventory: [],
-      context: { userId, storeId, locationId },
-      status: { startedAt, completedAt: new Date().toISOString(), returned: 0, written: 0 },
-    }
-  }
+  const inventoryIds = quantityRows.map((row) => row.inventory_id)
+  if (!inventoryIds.length) return []
 
   // In batches: one request listing thousands of ids is too long for the server.
-  const inventoryRows = []
-  for (let index = 0; index < inventoryIds.length; index += 200) {
-    const { data, error: inventoryError } = await supabase
-      .from('store_inventory')
-      .select('id, store_id, catalog_item_id, sku, barcode, condition, grade, grading_company, cert_number, buy_price, sell_price, in_store_price, name_snapshot, status, is_trade_in, listed_for_sale')
-      .eq('store_id', storeId)
-      .eq('status', 'active')
-      .in('id', inventoryIds.slice(index, index + 200))
-    if (inventoryError) {
-      console.error('[Desktop Sync] RLS/query error:', inventoryError)
-      throw inventoryError
-    }
-    inventoryRows.push(...(data || []))
-  }
+  const { data: inventoryRows } = await inBatches(inventoryIds, (batch) => supabase
+    .from('store_inventory')
+    .select('id, store_id, catalog_item_id, sku, barcode, condition, grade, grading_company, cert_number, buy_price, sell_price, in_store_price, name_snapshot, status, is_trade_in, listed_for_sale')
+    .eq('store_id', storeId)
+    .eq('status', 'active')
+    .in('id', batch), 200)
 
-  const quantityMap = Object.fromEntries(quantityList.map((row) => [row.inventory_id, row]))
-  const activeInventory = inventoryRows || []
-  const catalogIds = activeInventory.map((row) => row.catalog_item_id)
+  const quantityMap = Object.fromEntries(quantityRows.map((row) => [row.inventory_id, row]))
+  const catalogIds = inventoryRows.map((row) => row.catalog_item_id)
   const [catalogMeta, imageMaps] = await Promise.all([
     loadCatalogueMeta(catalogIds),
     loadImageMaps(inventoryIds, uniq(catalogIds)),
   ])
 
-  const inventory = activeInventory.map((row) => {
-    const quantity = quantityMap[row.id] || {}
-    const meta = catalogMeta[row.catalog_item_id] || {}
-    const onHand = Number(quantity.quantity) || 0
-    const reserved = Number(quantity.quantity_reserved) || 0
-    const available = Math.max(0, onHand - reserved)
-    const onlinePrice = row.sell_price != null ? Number(row.sell_price) : null
-    const inStorePrice = row.in_store_price != null ? Number(row.in_store_price) : null
-    const price = inStorePrice ?? onlinePrice ?? 0
-    const fallbackCatalogImage = meta.imagePath ? publicUrl(ITEM_IMAGES_BUCKET, meta.imagePath) : ''
-    const image = imageMaps.inventoryImageMap[row.id] || imageMaps.catalogImageMap[row.catalog_item_id] || fallbackCatalogImage
+  return inventoryRows.map((row) => ({
+    row,
+    quantity: quantityMap[row.id] || {},
+    meta: catalogMeta[row.catalog_item_id] || {},
+    image: imageMaps.inventoryImageMap[row.id] || imageMaps.catalogImageMap[row.catalog_item_id] || '',
+  }))
+}
 
-    return {
-      id: row.id,
-      inventoryId: row.id,
-      catalogItemId: row.catalog_item_id,
-      storeId: row.store_id,
-      locationId: quantity.location_id || locationId,
-      sku: row.sku || '',
-      barcode: row.barcode || '',
-      name: row.name_snapshot || meta.name || row.sku || 'Inventory Item',
-      title: row.name_snapshot || meta.name || row.sku || 'Inventory Item',
-      // A store's own item (a drink, a snack…) has no catalogue card.
-      category: meta.category || (row.catalog_item_id ? '' : 'Store item'),
-      number: meta.number || '',
-      condition: row.grade || row.condition || '',
-      rawCondition: row.condition || '',
-      grade: row.grade || '',
-      gradingCompany: row.grading_company || '',
-      certificationNumber: row.cert_number || '',
-      quantity: available,
-      onHand,
-      reserved,
-      available,
-      price,
-      inStorePrice,
-      onlinePrice,
-      cost: row.buy_price != null ? Number(row.buy_price) : null,
-      buyPrice: row.buy_price != null ? Number(row.buy_price) : null,
-      image,
-      imageUrl: image,
-      status: row.status,
-      listedForSale: !!row.listed_for_sale,
-      isTradeIn: !!row.is_trade_in,
-      availability: available > 0 ? 'available' : 'out_of_stock',
-      unit_price: price,
-      syncedAt: new Date().toISOString(),
-    }
-  })
+function toInventoryItem({ row, quantity, meta, image }, locationId) {
+  const onHand = Number(quantity.quantity) || 0
+  const reserved = Number(quantity.quantity_reserved) || 0
+  const available = Math.max(0, onHand - reserved)
+  const onlinePrice = row.sell_price != null ? Number(row.sell_price) : null
+  const inStorePrice = row.in_store_price != null ? Number(row.in_store_price) : null
+  const price = inStorePrice ?? onlinePrice ?? 0
+  const fallbackCatalogImage = meta.imagePath ? publicUrl(ITEM_IMAGES_BUCKET, meta.imagePath) : ''
+  const imageUrl = image || fallbackCatalogImage
+
+  return {
+    id: row.id,
+    inventoryId: row.id,
+    catalogItemId: row.catalog_item_id,
+    storeId: row.store_id,
+    locationId: quantity.location_id || locationId,
+    sku: row.sku || '',
+    barcode: row.barcode || '',
+    name: row.name_snapshot || meta.name || row.sku || 'Inventory Item',
+    title: row.name_snapshot || meta.name || row.sku || 'Inventory Item',
+    // A store's own item (a drink, a snack…) has no catalogue card.
+    category: meta.category || (row.catalog_item_id ? '' : 'Store item'),
+    number: meta.number || '',
+    condition: row.grade || row.condition || '',
+    rawCondition: row.condition || '',
+    grade: row.grade || '',
+    gradingCompany: row.grading_company || '',
+    certificationNumber: row.cert_number || '',
+    quantity: available,
+    onHand,
+    reserved,
+    available,
+    price,
+    inStorePrice,
+    onlinePrice,
+    cost: row.buy_price != null ? Number(row.buy_price) : null,
+    buyPrice: row.buy_price != null ? Number(row.buy_price) : null,
+    image: imageUrl,
+    imageUrl,
+    status: row.status,
+    listedForSale: !!row.listed_for_sale,
+    isTradeIn: !!row.is_trade_in,
+    availability: available > 0 ? 'available' : 'out_of_stock',
+    unit_price: price,
+    syncedAt: new Date().toISOString(),
+  }
+}
+
+export async function syncInventoryFromSupabase(session) {
+  const startedAt = new Date().toISOString()
+  const [{ data: userData, error: userError }, { storeId, locationId }] = await Promise.all([
+    supabase.auth.getUser(),
+    resolveContext(session),
+  ])
+  if (userError) throw userError
+
+  const userId = userData?.user?.id || null
+
+  console.info('[Desktop Sync] Authenticated User:', userId)
+  console.info('[Desktop Sync] Store:', storeId)
+  console.info('[Desktop Sync] Location:', locationId)
+
+  if (!storeId || !locationId) {
+    throw new Error('No active store/location could be resolved for this desktop session.')
+  }
+
+  const rows = (await loadSnapshotRows(storeId, locationId)) ?? (await loadBatchedRows(storeId, locationId))
+  const inventory = rows.map((entry) => toInventoryItem(entry, locationId))
 
   console.info(`[Desktop Sync] Inventory returned: ${inventory.length} records`)
-  console.info(`[Desktop Sync] Local cache written: ${inventory.length} records`)
   console.info('[Desktop Sync] Complete')
 
   if (inventory.length === 0) await logEmptyDiagnostics(storeId, locationId)

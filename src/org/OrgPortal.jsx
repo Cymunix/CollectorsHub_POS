@@ -16,6 +16,7 @@ import BuybackRulesModal from './BuybackRules'
 import StoreFeaturesModal from './StoreFeatures'
 import PawnSettings from '../pawn/PawnSettings'
 import ReportAccess from '../reports/ReportAccess'
+import { NAV, NAV_GROUPS } from './orgNav'
 
 // Normalise whatever the browser's address autofill gives (full name or code) to
 // a 2-letter province code so tax + region derivation work.
@@ -377,21 +378,7 @@ export default function OrgPortal({ session, activeModule = 'overview', onModule
   )
 }
 
-// The organization sidebar, grouped (the same destinations as NAV).
-export const NAV_GROUPS = [
-  ['Network', ['overview', 'stores', 'locations']],
-  ['People', ['staff', 'myhr', 'expenses', 'payroll']],
-  ['Commerce', ['inventory', 'orders', 'sales', 'tradeins', 'promos']],
-  ['Administration', ['reports', 'policies', 'integrations', 'settings']],
-]
-
-export const NAV = [
-  ['overview', 'Overview', '▤'], ['stores', 'Stores', '🏬'], ['locations', 'Locations', '📍'],
-  ['staff', 'Staff', '👥'], ['expenses', 'Travel & Expenses', '✈'], ['payroll', 'Payroll', '💵'], ['inventory', 'Inventory', '📦'], ['orders', 'Orders', '🧾'],
-  ['sales', 'Sales', '💰'], ['tradeins', 'Trade-Ins', '📥'], ['promos', 'Promotions & Events', '🎪'],
-  ['reports', 'Reports', '📊'], ['policies', 'Policies', '📋'], ['integrations', 'Integrations', '🔌'],
-  ['settings', 'Settings', '⚙'],
-]
+export { NAV, NAV_GROUPS }
 
 function Kpi({ label, value, hint, onClick }) {
   const Comp = onClick ? 'button' : 'div'

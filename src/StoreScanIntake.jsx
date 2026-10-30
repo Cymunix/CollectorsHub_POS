@@ -8,7 +8,7 @@ import { useMtgSetIcons } from './lib/mtgSetIcons'
 import { CARD_CONDITIONS, DEFAULT_RAW_CONDITION, GRADED, canonicalRawCondition } from './lib/cardCondition'
 import ConditionHint from './ConditionHint'
 import SlabCertFields from './SlabCertFields'
-import { needsSideCheck, needsUprightCheck, readScannerPref, writeScannerPref } from './AdminWorkspace'
+import { needsSideCheck, needsUprightCheck, readScannerPref, writeScannerPref } from './lib/scanHelpers'
 
 // Store scan intake (store staff): scan cards on the FastFoto or flatbed, the
 // local AI identifies them, each is matched to the catalogue, and matched

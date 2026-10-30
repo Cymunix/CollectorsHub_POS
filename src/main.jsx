@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Archive,
@@ -50,22 +50,13 @@ import {
   IdCard,
 } from 'lucide-react'
 import './styles.css'
-import AdminWorkspace, { needsSideCheck, needsUprightCheck } from './AdminWorkspace'
-import ScanCentre from './scan/ScanCentre'
+import { needsSideCheck, needsUprightCheck } from './lib/scanHelpers'
 import MarketIntelligencePanel from './register/MarketIntelligencePanel'
-import PurchasePricing from './settings/PurchasePricing'
 import PurchaseInspectionNote from './register/PurchaseInspectionNote'
 import { loadListingNotes, loadPurchasePolicy, setActivePurchasePolicy, suggestedOffer } from './lib/marketIntelligence'
 import { LEGO_CONDITIONS } from './lib/marketMath'
-import OnboardingStore from './onboarding/OnboardingStore'
 import { loadProjects as loadOnboardingProjects } from './lib/onboarding'
-import CustomersView from './customers/CustomersView'
-import CollectorListings from './CollectorListings'
 import { loadListingUnreadCount } from './lib/collectorListings'
-import TransactionsView from './transactions/TransactionsView'
-import PawnView from './pawn/PawnView'
-import ReportsView from './reports/ReportsView'
-import PersonalSettings from './settings/PersonalSettings'
 import { DEFAULT_PREFERENCES, applyPreferences, loadPreferences, mfaNeeded, mfaVerify } from './lib/personalSettings'
 import { deviceLanguage, setLanguage } from './i18n/runtime'
 
@@ -75,7 +66,6 @@ import ConditionHint from './ConditionHint'
 import SlabCertFields from './SlabCertFields'
 import { CARD_CONDITIONS, DEFAULT_RAW_CONDITION, GRADED, UNGRADED, canonicalRawCondition, isCardCategory, isRawCardCondition, ungradedStat } from './lib/cardCondition'
 import { legoGroupFromCondition } from './lib/marketMath'
-import MyHRView from './MyHR'
 import UpdateCheck from './UpdateCheck'
 import SalesHistoryList from './SalesHistoryPanel'
 import { analyseRecognizedCard } from './lib/adminData'
@@ -96,8 +86,23 @@ import IdentityCustomerCard from './identity/IdentityCustomerCard'
 import ManualIdCheck from './identity/ManualIdCheck'
 import { DEFAULT_RULES, loadBuybackRules } from './lib/buybackIdentification'
 import { loadStoreFeatures } from './lib/storeFeatures'
-import OrgPortal, { NAV as ORG_NAV, NAV_GROUPS as ORG_NAV_GROUPS } from './org/OrgPortal'
+import { NAV as ORG_NAV, NAV_GROUPS as ORG_NAV_GROUPS } from './org/orgNav'
 import { supabase } from './lib/supabaseClient'
+
+// Screens that aren't the Register: loaded the first time they're opened, so
+// the app starts without parsing them.
+const AdminWorkspace = lazy(() => import('./AdminWorkspace'))
+const ScanCentre = lazy(() => import('./scan/ScanCentre'))
+const PurchasePricing = lazy(() => import('./settings/PurchasePricing'))
+const OnboardingStore = lazy(() => import('./onboarding/OnboardingStore'))
+const CustomersView = lazy(() => import('./customers/CustomersView'))
+const CollectorListings = lazy(() => import('./CollectorListings'))
+const TransactionsView = lazy(() => import('./transactions/TransactionsView'))
+const PawnView = lazy(() => import('./pawn/PawnView'))
+const ReportsView = lazy(() => import('./reports/ReportsView'))
+const PersonalSettings = lazy(() => import('./settings/PersonalSettings'))
+const MyHRView = lazy(() => import('./MyHR'))
+const OrgPortal = lazy(() => import('./org/OrgPortal'))
 
 const emptyStore = {
   meta: { version: 1 },
@@ -633,49 +638,29 @@ function App() {
       inspectionsError: backendResult?.inspections_error || '',
     }
 
-    const [nextInventory, customers, nextSync] = isTransientStore
-      ? [
-        applyTransientInventoryChanges(store.inventory, draft.items || []),
-        store.customers || [],
-        {
-          ...emptyStore.sync,
-          ...(store.sync || {}),
-          online: true,
-          lastSyncAt: new Date().toISOString(),
-          inventoryCount: store.inventory.length,
-          pendingLocalChanges: 0,
-          error: '',
-          context: {
-            ...(store.sync?.context || {}),
-            storeCode: authSession?.storeCode || '',
-            storeId: authSession?.storeId || '',
-            locationId: authSession?.locationId || '',
-          },
-          failedRecords: [],
+    // Sold items come off the shelf straight away; for a real store the full
+    // refresh from Supabase (items bought in, other registers' sales) runs in
+    // the background below so the cashier isn't kept waiting.
+    const nextInventory = applyTransientInventoryChanges(store.inventory, draft.items || [])
+    const customers = store.customers || []
+    const nextSync = isTransientStore
+      ? {
+        ...emptyStore.sync,
+        ...(store.sync || {}),
+        online: true,
+        lastSyncAt: new Date().toISOString(),
+        inventoryCount: store.inventory.length,
+        pendingLocalChanges: 0,
+        error: '',
+        context: {
+          ...(store.sync?.context || {}),
+          storeCode: authSession?.storeCode || '',
+          storeId: authSession?.storeId || '',
+          locationId: authSession?.locationId || '',
         },
-      ]
-      : await Promise.all([
-        syncInventoryFromSupabase(authSession),
-        syncCustomersFromSupabase(authSession),
-      ]).then(([syncResult, syncedCustomers]) => [
-        syncResult.inventory,
-        syncedCustomers,
-        {
-          online: true,
-          lastSyncAt: syncResult.status.completedAt,
-          inventoryCount: syncResult.inventory.length,
-          pendingLocalChanges: 0,
-          error: '',
-          context: syncResult.context,
-          failedRecords: syncResult.status.failedRecords || [],
-        },
-      ]).catch((error) => [
-        // The transaction is already saved; only the refresh failed. Keep what's on screen and
-        // say so; the next sync picks up the changes.
-        store.inventory,
-        store.customers || [],
-        { ...(store.sync || {}), error: `Transaction saved, but refreshing inventory failed: ${error?.message || error}. Use Sync Now.` },
-      ])
+        failedRecords: [],
+      }
+      : { ...emptyStore.sync, ...(store.sync || {}) }
 
     // Scan intakes whose cards were bought in this transaction are complete
     // (their counters start again at 0).
@@ -697,7 +682,41 @@ function App() {
       sync: nextSync,
     })
 
+    if (!isTransientStore) refreshAfterCheckout()
     return transaction
+  }
+
+  // Applied on top of whatever is saved by the time it finishes (another sale may have
+  // happened meanwhile).
+  async function refreshAfterCheckout() {
+    try {
+      const [syncResult, syncedCustomers] = await Promise.all([
+        syncInventoryFromSupabase(authSession),
+        syncCustomersFromSupabase(authSession),
+      ])
+      await persist({
+        ...storeRef.current,
+        inventory: syncResult.inventory,
+        customers: syncedCustomers,
+        sync: {
+          online: true,
+          lastSyncAt: syncResult.status.completedAt,
+          inventoryCount: syncResult.inventory.length,
+          pendingLocalChanges: 0,
+          error: '',
+          context: syncResult.context,
+          failedRecords: syncResult.status.failedRecords || [],
+        },
+      })
+    } catch (error) {
+      // The transaction is already saved; only the refresh failed. Keep what's on screen and
+      // say so; the next sync picks up the changes.
+      console.error('[Desktop Sync] Refresh after checkout failed:', error)
+      await persist({
+        ...storeRef.current,
+        sync: { ...(storeRef.current.sync || {}), error: `Transaction saved, but refreshing inventory failed: ${error?.message || error}. Use Sync Now.` },
+      }).catch(() => {})
+    }
   }
 
   async function completeRegisterRefund(draft) {
@@ -1016,11 +1035,13 @@ function App() {
     return (
       <>
         {expiredBanner}
-        <AdminWorkspace
-          session={authSession}
-          syncStatus={syncStatus}
-          onLogout={handleLogout}
-        />
+        <Suspense fallback={null}>
+          <AdminWorkspace
+            session={authSession}
+            syncStatus={syncStatus}
+            onLogout={handleLogout}
+          />
+        </Suspense>
       </>
     )
   }
@@ -1083,6 +1104,8 @@ function App() {
       </aside>
 
       <section className="workspace">
+        {/* Screens other than the Register load on first open (local files: near instant). */}
+        <Suspense fallback={null}>
         {activeView !== 'register' && activeView !== 'inventory' && activeView !== 'scan' && activeView !== 'customers' && activeView !== 'listings' && activeView !== 'pawns' && activeView !== 'reports' && activeView !== 'settings' && activeView !== 'myhr' && !activeView.startsWith('org-') ? (
           <>
             <header className="topbar">
@@ -1265,6 +1288,7 @@ function App() {
           <OrgPortal session={authSession} activeModule={activeView.slice(4)} onModule={(module) => setActiveView(`org-${module}`)} />
         ) : null}
         {activeView === 'myhr' ? <MyHRView session={authSession} onClockChange={refreshClockStatus} /> : null}
+        </Suspense>
       </section>
       {stockToast ? (
         <div className="stock-toast" role="status">
