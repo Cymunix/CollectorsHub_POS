@@ -3642,7 +3642,15 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
   // Subfranchise (items (subset_id, season, item_id) index) joined to the Property. Paging
   // the whole Property instead re-read all its seasons (200k+ cards) for every season in a
   // checklist. NHL Upper Deck 2024 (20,056 cards): 21 requests, ~12 s.
+  // A small Property (SP, SP Authentic…) is quicker from its own items: walking a 46k-card
+  // season for a few hundred of them hit the statement timeout.
+  let propertyIsLarge = false
   if (propertyId && subsetId && seasonKey(season)) {
+    const { count, error } = await supabase.from('item_properties').select('item_id', { count: 'exact', head: true }).eq('property_id', propertyId)
+    if (error) throw error
+    propertyIsLarge = (count || 0) > 30000
+  }
+  if (propertyIsLarge) {
     for (let after = null; ;) {
       let query = scoped(supabase.from('items').select(`${columns}, item_properties!inner(property_id)`))
         .eq('item_properties.property_id', propertyId)
