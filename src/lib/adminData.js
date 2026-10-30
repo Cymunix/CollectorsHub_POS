@@ -2326,6 +2326,19 @@ export async function loadCatalogueTaxonomyOptions({ categoryId = '', subcategor
   return { category, ...scoped, manufacturer, brand, collectible_set: collectibleSet }
 }
 
+// The scanner needs only these levels, not the editor's global lookup lists.
+const scanSetOptionsCache = new Map()
+export function loadScanSetOptions({ category = '', categoryId = '', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
+  const key = JSON.stringify([category, categoryId, subcategoryId, franchiseId, subsetId])
+  const cached = scanSetOptionsCache.get(key)
+  if (cached && Date.now() - cached.time < 60000) return cached.promise
+  const promise = loadTaxonomyLevels({ categoryId, subcategoryId, franchiseId, subsetId, category, includePublisher: false })
+  const entry = { promise, time: Date.now() }
+  scanSetOptionsCache.set(key, entry)
+  promise.catch(() => { if (scanSetOptionsCache.get(key) === entry) scanSetOptionsCache.delete(key) })
+  return promise
+}
+
 // Names for an item's current ids, so a value outside the currently loaded
 // options (e.g. legacy data) still shows its name instead of a blank.
 export async function loadCatalogueValueNames(values = {}) {
@@ -2538,8 +2551,8 @@ async function legoCategoryIds() {
 // Subcategory -> Franchise -> Subfranchise -> Property, Item Type and
 // Publisher, each scoped by the level above (shared by scan review and the
 // catalogue editor). LEGO Properties are scoped by the Subcategory.
-async function loadTaxonomyLevels({ categoryId = '', subcategoryId = '', franchiseId = '', subsetId = '' } = {}) {
-  const lego = categoryId ? (await legoCategoryIds()).has(categoryId) : false
+async function loadTaxonomyLevels({ categoryId = '', subcategoryId = '', franchiseId = '', subsetId = '', category = '', includePublisher = true } = {}) {
+  const lego = category ? isLegoCategory(category) : categoryId ? (await legoCategoryIds()).has(categoryId) : false
   const propertyQuery = () => {
     if (lego) return supabase.from('properties').select('property_id, name').eq('subcategory_id', subcategoryId).order('name').then(({ data }) => optionRows(data, 'property_id'))
     let query = supabase.from('properties').select('property_id, name').eq('franchise_id', franchiseId).order('name')
@@ -2555,7 +2568,7 @@ async function loadTaxonomyLevels({ categoryId = '', subcategoryId = '', franchi
     franchiseId ? supabase.from('subsets').select('subset_id, name').eq('franchise_id', franchiseId).order('name').then(({ data }) => optionRows(data, 'subset_id')) : [],
     (lego ? subcategoryId : franchiseId) ? propertyQuery() : [],
     subcategoryId ? supabase.from('item_types').select('item_type_id, name').eq('subcategory_id', subcategoryId).order('name').then(({ data }) => optionRows(data, 'item_type_id')) : [],
-    supabase.from('publishers').select('publisher_id, name').order('name').then(({ data }) => optionRows(data, 'publisher_id')),
+    includePublisher ? supabase.from('publishers').select('publisher_id, name').order('name').then(({ data }) => optionRows(data, 'publisher_id')) : [],
   ])
   return { subcategory, franchise, subset, property, item_type: itemType, publisher }
 }
@@ -3646,21 +3659,25 @@ const targetSetItemsCache = new Map()
 // The set's items (once per target; refresh after photos are attached).
 export function loadTargetSetItems(target = {}, { refresh = false } = {}) {
   if (!target?.categoryId) return Promise.resolve([])
-  const key = targetSetKey(target)
-  if (!refresh && targetSetItemsCache.has(key)) return targetSetItemsCache.get(key)
-  const promise = loadSetItems({
+  // Series and Collection filter the same checklist locally. Share its request
+  // between progress, collection choices and scan matching.
+  const key = targetSetKey({ ...target, series: '', collection: '' })
+  let promise = !refresh && targetSetItemsCache.get(key)
+  if (!promise) {
+    promise = loadSetItems({
     categoryId: target.categoryId, subcategoryId: target.subcategoryId, franchiseId: target.franchiseId, subsetId: target.subsetId,
     propertyId: target.propertyId, itemTypeId: target.itemTypeId, releaseYear: target.releaseYear, season: target.season,
-  }).then((rows) => rows
+    })
+    targetSetItemsCache.set(key, promise)
+    promise.catch(() => { if (targetSetItemsCache.get(key) === promise) targetSetItemsCache.delete(key) })
+  }
+  return promise.then((rows) => rows
     // loadSetItems leaves the year out when a Property is chosen; a Property can span
     // years whose card numbers repeat, so the chosen year still applies here.
     .filter((row) => !target.releaseYear || !target.propertyId || seasonKey(target.season) || String(row.release_year || '') === String(target.releaseYear))
     .filter((row) => !String(target.series || '').trim() || matchText(row.series) === matchText(target.series))
     .filter((row) => !String(target.collection || '').trim() || collectionKey(row.dynamic_fields?.collection) === collectionKey(target.collection))
     .map((row) => ({ ...row, imageUrl: publicImageUrl(row.image_path) })))
-  targetSetItemsCache.set(key, promise)
-  promise.catch(() => targetSetItemsCache.delete(key))
-  return promise
 }
 
 function regexText(value) {
@@ -3796,6 +3813,20 @@ export function nextCardNumber(value) {
   return match ? `${match[1]}${Number(match[2]) + 1}${match[3]}` : ''
 }
 
+// A PostgreSQL statement timeout rolls back that request. Split only that
+// confirmed failure; retrying a network error could duplicate a committed insert.
+async function writeChecklistBatch(rows, write, onSaved = () => {}) {
+  const { data, error } = await write(rows)
+  if (!error) { await onSaved(data || []); return }
+  if (/canceling statement due to statement timeout/i.test(error.message || '') && rows.length > 1) {
+    const middle = Math.ceil(rows.length / 2)
+    await writeChecklistBatch(rows.slice(0, middle), write, onSaved)
+    await writeChecklistBatch(rows.slice(middle), write, onSaved)
+    return
+  }
+  throw error
+}
+
 // Creates a placeholder item for each checklist row that the set doesn't have
 // yet, then links rows that name LEGO sets (row.sets, plus inSets for every
 // row) to those sets. Returns { created: [ids], skipped, linked, missingSets }.
@@ -3809,8 +3840,8 @@ export async function createChecklistPlaceholders({ category, ids, itemTypeName 
   const itemIdByKey = new Map(existing.filter(sameType).map((item) => [itemKey(item), item.item_id]))
   const todo = rows.filter((row) => !row.error && !itemIdByKey.has(checklistItemKey(row)))
   const created = []
-  for (let index = 0; index < todo.length; index += 100) {
-    const payload = todo.slice(index, index + 100).map((row) => {
+  for (let index = 0; index < todo.length; index += 25) {
+    const payload = todo.slice(index, index + 25).map((row) => {
       const dynamic = { [CHECKLIST_PLACEHOLDER_KEY]: true, source: 'Set checklist' }
       if (row.team) dynamic.team = row.team
       // A card with no collection named is the base card.
@@ -3836,19 +3867,27 @@ export async function createChecklistPlaceholders({ category, ids, itemTypeName 
         dynamic_fields: dynamic,
       }
     })
-    const { data, error } = await supabase.from('items').insert(payload).select(`item_id, ${numberColumn}, dynamic_fields`)
-    if (error) {
+    try {
+      await writeChecklistBatch(payload,
+        (part) => supabase.from('items').insert(part).select(`item_id, ${numberColumn}, dynamic_fields`),
+        async (data) => {
+          const newIds = data.map((row) => row.item_id)
+          created.push(...newIds)
+          data.forEach((item) => itemIdByKey.set(itemKey(item), item.item_id))
+          backupCatalogueChange({ action: 'create', itemIds: newIds })
+          if (ids.property_id && newIds.length) {
+            try {
+              await writeChecklistBatch(newIds.map((itemId) => ({ item_id: itemId, property_id: ids.property_id })),
+                (part) => supabase.from('item_properties').insert(part))
+            } catch (linkError) {
+              throw new Error(`Placeholders created, but linking them to the set failed: ${linkError.message}`)
+            }
+          }
+        })
+    } catch (error) {
       backupCatalogueChange({ action: 'create', ok: false, error: error.message, payload: { checklist: payload } })
-      throw error
+      throw new Error(`Checklist import stopped after creating ${created.length} item(s): ${error.message}`)
     }
-    const newIds = (data || []).map((row) => row.item_id)
-    created.push(...newIds)
-    ;(data || []).forEach((item) => itemIdByKey.set(itemKey(item), item.item_id))
-    if (ids.property_id && newIds.length) {
-      const { error: linkError } = await supabase.from('item_properties').insert(newIds.map((itemId) => ({ item_id: itemId, property_id: ids.property_id })))
-      if (linkError) throw new Error(`Placeholders created, but linking them to the set failed: ${linkError.message}`)
-    }
-    backupCatalogueChange({ action: 'create', itemIds: newIds })
   }
   const links = []
   rows.filter((row) => !row.error).forEach((row) => {

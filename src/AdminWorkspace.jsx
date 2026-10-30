@@ -79,6 +79,7 @@ import {
   CATALOGUE_EDIT_GROUPS,
   catalogueEditValues,
   loadCatalogueTaxonomyOptions,
+  loadScanSetOptions,
   loadCatalogueValueNames,
   saveCatalogueItemEdits,
   SPORTS_CARD_TYPE_OPTIONS,
@@ -3389,7 +3390,7 @@ function SetTargetPicker({ category, value, onChange, disabled = false }) {
   const categoryRow = categories.find((row) => row.name === categoryName)
   const sports = categoryName === 'Sports Cards'
   const cards = /cards/i.test(categoryName)
-  const ready = Boolean(target.enabled && categoryRow && target.subcategoryId && (target.subsetId || target.propertyId || target.franchiseId))
+  const ready = Boolean(target.enabled && categoryRow && target.subcategoryId && (target.subsetId || target.propertyId || (!sports && target.franchiseId)) && (!sports || seasonKey(target.season)))
 
   useEffect(() => { loadAdminCategories().then(setCategories).catch(() => setCategories([])) }, [])
   // A target chosen under another category doesn't carry over.
@@ -3400,7 +3401,7 @@ function SetTargetPicker({ category, value, onChange, disabled = false }) {
   useEffect(() => {
     if (!target.enabled || !categoryRow) return undefined
     let cancelled = false
-    loadCatalogueTaxonomyOptions({ categoryId: categoryRow.category_id, subcategoryId: target.subcategoryId || '', franchiseId: target.franchiseId || '', subsetId: target.subsetId || '' })
+    loadScanSetOptions({ category: categoryName, categoryId: categoryRow.category_id, subcategoryId: target.subcategoryId || '', franchiseId: target.franchiseId || '', subsetId: target.subsetId || '' })
       .then((next) => { if (!cancelled) setOptions(next) })
       .catch(() => { if (!cancelled) setOptions({}) })
     return () => { cancelled = true }
@@ -3499,7 +3500,7 @@ function SetTargetPicker({ category, value, onChange, disabled = false }) {
               </label>
               {select('itemTypeId', 'item_type', 'Item Type', Boolean(target.subcategoryId))}
             </div>
-            {!ready ? <p className="scan-mode-note">Choose at least the Subcategory and the Subfranchise or Property.</p> : null}
+            {!ready ? <p className="scan-mode-note">Choose at least the Subcategory and the Subfranchise or Property{sports ? ', and enter the Season' : ''}.</p> : null}
             {ready && progress ? (
               <div className="set-target-progress">
                 {progress.error ? <span className="admin-error">{progress.error}</span>
@@ -3600,6 +3601,7 @@ function SetPhotoGroup({ group, confidenceOf, itemTypeNames, alreadyPhotographed
 function activeSetTarget(value) {
   const target = value || {}
   if (!target.enabled || !target.categoryId || !target.subcategoryId || !(target.subsetId || target.propertyId || target.franchiseId)) return null
+  if (target.category === 'Sports Cards' && (!(target.subsetId || target.propertyId) || !seasonKey(target.season))) return null
   const { enabled: _enabled, ...rest } = target
   return rest
 }
@@ -5424,25 +5426,29 @@ function ChecklistImportDialog({ onClose }) {
   }
   const groupIdsFor = (ids) => ({ subcategory_id: ids.subcategory || '', franchise_id: ids.franchise || '', subset_id: ids.subset || '', property_id: ids.property || '', item_type_id: ids.item_type || '', publisher_id: ids.publisher || '' })
 
-  async function checkGroups() {
+  async function checkGroups({ preserveResult = false } = {}) {
     if (!categoryRow) return
     setBusy('check')
     setError('')
-    setResult(null)
+    if (!preserveResult) setResult(null)
     const cache = new Map()
     const checks = {}
     try {
       for (const [index, group] of tableGroups.entries()) {
         setBusy(`check:${index + 1}/${tableGroups.length}`)
-        const problem = groupProblem(group.spec)
-        if (problem) { checks[group.key] = { error: problem }; continue }
-        const { ids, missing } = await resolveChecklistGroup({ category, categoryId: categoryRow.category_id, spec: group.spec, cache })
-        // A set level that doesn't exist yet: none of its cards can be in the catalogue.
-        const existingItems = missing.some((entry) => ['subcategory', 'franchise', 'subset', 'property', 'item_type'].includes(entry.level)) ? [] : await loadSetItems({
-          categoryId: categoryRow.category_id, subcategoryId: ids.subcategory, franchiseId: ids.franchise, subsetId: ids.subset, propertyId: ids.property,
-          itemTypeId: ids.item_type, releaseYear: trading ? group.spec.year : '', season: trading ? '' : group.spec.season,
-        })
-        checks[group.key] = { ids, missing, existing: existingItems }
+        try {
+          const problem = groupProblem(group.spec)
+          if (problem) { checks[group.key] = { error: problem }; continue }
+          const { ids, missing } = await resolveChecklistGroup({ category, categoryId: categoryRow.category_id, spec: group.spec, cache })
+          // A set level that doesn't exist yet: none of its cards can be in the catalogue.
+          const existingItems = missing.some((entry) => ['subcategory', 'franchise', 'subset', 'property', 'item_type'].includes(entry.level)) ? [] : await loadSetItems({
+            categoryId: categoryRow.category_id, subcategoryId: ids.subcategory, franchiseId: ids.franchise, subsetId: ids.subset, propertyId: ids.property,
+            itemTypeId: ids.item_type, releaseYear: trading ? group.spec.year : '', season: trading ? '' : group.spec.season,
+          })
+          checks[group.key] = { ids, missing, existing: existingItems }
+        } catch (checkError) {
+          checks[group.key] = { error: checkError.message || 'Could not check this set.' }
+        }
       }
       setGroupChecks(checks)
     } catch (checkError) {
@@ -5481,7 +5487,7 @@ function ChecklistImportDialog({ onClose }) {
       }
       totals.missingSets = [...new Set(totals.missingSets)]
       setResult(totals)
-      await checkGroups()
+      await checkGroups({ preserveResult: true })
     } catch (createError) {
       setError(createError.message || 'Could not create the placeholders.')
     } finally {
