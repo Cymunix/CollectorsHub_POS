@@ -3638,6 +3638,24 @@ export async function loadSetItems({ categoryId, subcategoryId = '', franchiseId
   // page re-read every earlier one, so big sets (a Property can hold 200k cards) slowed
   // until every page hit the statement timeout and a checklist check overloaded the
   // database.
+  // A sports set (Property + season within a Subfranchise): that season's items in the
+  // Subfranchise (items (subset_id, season, item_id) index) joined to the Property. Paging
+  // the whole Property instead re-read all its seasons (200k+ cards) for every season in a
+  // checklist. NHL Upper Deck 2024 (20,056 cards): 21 requests, ~12 s.
+  if (propertyId && subsetId && seasonKey(season)) {
+    for (let after = null; ;) {
+      let query = scoped(supabase.from('items').select(`${columns}, item_properties!inner(property_id)`))
+        .eq('item_properties.property_id', propertyId)
+      if (after) query = query.gt('item_id', after)
+      const { data, error } = await query.order('item_id').limit(1000)
+      if (error) throw error
+      rows.push(...(data || []).map(({ item_properties: _link, ...row }) => row))
+      if (!data || data.length < 1000) break
+      after = data[data.length - 1].item_id
+    }
+    return rows
+  }
+
   if (propertyId) {
     // The Property's next item ids (item_properties (property_id, item_id) index), then
     // those items with the set's other filters, a few batches of 200 at a time.
