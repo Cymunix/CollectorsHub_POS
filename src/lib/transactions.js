@@ -1,7 +1,7 @@
 import { supabase } from './supabaseClient'
 
 // Transactions management (supabase/transactions.sql). Everything reads the
-// existing ledger; refunds go through tx_refund (which uses complete_store_return).
+// existing ledger; every refund goes through tx_refund, which enforces the limits.
 
 async function call(name, params) {
   const { data, error } = await supabase.rpc(name, params)

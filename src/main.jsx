@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { newRequestId } from './lib/pawnLoans'
 import { createRoot } from 'react-dom/client'
 import {
   Archive,
@@ -1593,7 +1594,8 @@ function RegisterView({
   const [managerError, setManagerError] = useState('')
   const [isApprovingManager, setIsApprovingManager] = useState(false)
   const [cashAdjustment, setCashAdjustment] = useState({ type: 'in', amount: '', reason: '' })
-  const [refundDraft, setRefundDraft] = useState({ transactionNumber: '', amount: '', method: 'cash', reason: '' })
+  const [refundDraft, setRefundDraft] = useState({ transactionNumber: '', amount: '', method: 'cash', reason: '', cardConfirmed: false })
+  const refundRequestId = useRef(newRequestId())
   const [transactionSaveState, setTransactionSaveState] = useState('synced')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [completedTransaction, setCompletedTransaction] = useState(null)
@@ -2753,11 +2755,11 @@ function RegisterView({
     window.setTimeout(() => scannerRef.current?.focus(), 20)
   }
 
-  function requestManagerApproval(reason, onApprove) {
+  function requestManagerApproval(reason, onApprove, sendPin = false) {
     setManagerUsername('')
     setManagerPin('')
     setManagerError('')
-    setManagerRequest({ reason, onApprove })
+    setManagerRequest({ reason, onApprove, sendPin })
   }
 
   async function approveManagerRequest() {
@@ -2774,7 +2776,8 @@ function RegisterView({
       setIsApprovingManager(false)
       return
     }
-    managerRequest.onApprove(result.approver)
+    // A refund is approved on the server, which checks the PIN itself.
+    managerRequest.onApprove(managerRequest.sendPin ? { ...result.approver, pin: managerPin } : result.approver)
     setManagerRequest(null)
     setIsApprovingManager(false)
   }
@@ -2952,11 +2955,19 @@ function RegisterView({
         refundMethod: refundDraft.method,
         reason: refundDraft.reason,
         approvedBy: approvedBy?.username || '',
+        approver: approvedBy?.pin ? { username: approvedBy.username, pin: approvedBy.pin } : null,
+        requestId: refundRequestId.current,
+        cardConfirmed: refundDraft.method === 'card' && refundDraft.cardConfirmed,
       })
+      refundRequestId.current = newRequestId()
       setNotice(`Refund recorded for ${original.number || original.id}.`)
-      setRefundDraft({ transactionNumber: '', amount: '', method: 'cash', reason: '' })
+      setRefundDraft({ transactionNumber: '', amount: '', method: 'cash', reason: '', cardConfirmed: false })
       setActiveModal('')
     } catch (error) {
+      if (error?.approvalRequired) {
+        requestManagerApproval(`${error.message} Enter their username and PIN to approve this refund.`, submitRefund, true)
+        return
+      }
       setNotice(error?.message || 'Refund could not be completed.')
     }
   }
@@ -2975,6 +2986,14 @@ function RegisterView({
       setNotice('Enter a valid refund amount.')
       return
     }
+    if (!refundDraft.reason.trim()) {
+      setNotice('A refund reason is required.')
+      return
+    }
+    if (refundDraft.method === 'card' && !refundDraft.cardConfirmed) {
+      setNotice('Refund the card on the payment terminal first, then confirm it here.')
+      return
+    }
     if (amount <= REFUND_APPROVAL_THRESHOLD) {
       submitRefund()
       return
@@ -2983,7 +3002,7 @@ function RegisterView({
       submitRefund({ username: employeeName })
       return
     }
-    requestManagerApproval(`Approve this ${money.format(amount)} refund before completing it. Refunds over ${money.format(REFUND_APPROVAL_THRESHOLD)} require supervisor or manager approval.`, submitRefund)
+    requestManagerApproval(`Approve this ${money.format(amount)} refund before completing it. Refunds over ${money.format(REFUND_APPROVAL_THRESHOLD)} require supervisor or manager approval.`, submitRefund, true)
   }
 
   function newSale() {
@@ -3882,6 +3901,12 @@ function RegisterView({
                     <span>Reason</span>
                     <input value={refundDraft.reason} onChange={(event) => setRefundDraft((current) => ({ ...current, reason: event.target.value }))} placeholder="Reason for refund" />
                   </label>
+                  {refundDraft.method === 'card' ? (
+                    <label>
+                      <span>Payment terminal</span>
+                      <span><input type="checkbox" checked={refundDraft.cardConfirmed} onChange={(event) => setRefundDraft((current) => ({ ...current, cardConfirmed: event.target.checked }))} /> I refunded the card on the terminal</span>
+                    </label>
+                  ) : null}
                 </div>
                 <div className="modal-actions">
                   <button type="button" onClick={() => setActiveModal('')}>Cancel</button>

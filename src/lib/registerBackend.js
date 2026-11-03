@@ -2,6 +2,7 @@ import { supabase } from './supabaseClient'
 import { DEFAULT_RAW_CONDITION, UNGRADED, isCardCategory, isRawCardCondition, ungradedStat } from './cardCondition'
 import { legoGroupFromCondition } from './marketMath'
 import { savePurchaseInspections } from './marketIntelligence'
+import { refundTransaction } from './transactions'
 
 const CATALOGUE_IMAGE_BUCKET = 'item-images'
 
@@ -687,16 +688,18 @@ export async function verifyRegisterManagerApproval({ storeCode, username, pin }
   return { ok: true, approver: { employeeId: row.employee_id, role, username: username.trim() } }
 }
 
-export async function completeDesktopRefund(session, { originalTransactionId, refundMethod, refundAmount, reason }) {
+// The server checks the refundable balance, the method and whether approval is needed.
+export async function completeDesktopRefund(session, { originalTransactionId, refundMethod, refundAmount, reason, requestId, approver, cardConfirmed }) {
   if (!session?.locationId) throw new Error('No live store location connected.')
-  const { data, error } = await supabase.rpc('complete_store_return', {
-    p_original_transaction_id: originalTransactionId,
-    p_location_id: session.locationId,
-    p_items: [],
-    p_refund_method: refundMethod || 'cash',
-    p_refund_amount: Number(refundAmount) || 0,
-    p_reason: reason || null,
+  return refundTransaction(session.storeId, {
+    locationId: session.locationId,
+    transactionId: originalTransactionId,
+    lines: [],
+    amount: Number(refundAmount) || 0,
+    method: refundMethod || 'cash',
+    reason,
+    requestId,
+    approver,
+    cardConfirmed,
   })
-  if (error) throw new Error(error.message)
-  return data
 }
