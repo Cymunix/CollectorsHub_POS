@@ -119,6 +119,7 @@ import {
   pushReviewDraft,
   removeCloudImages,
   signRemoteImages,
+  webStackDraftIds,
 } from './lib/scanReviewCloud'
 import { looseCardKey, scanConfidence } from './lib/scanConfidence'
 import UpdateCheck from './UpdateCheck'
@@ -671,7 +672,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
       }
       const newest = rows.reduce((latest, row) => (row.updated_at > latest ? row.updated_at : latest), cloudSinceRef.current)
       if (!onlyIds) cloudSinceRef.current = newest
-      setCloudState((current) => ({ ...current, available: true, error: '', lastSync: new Date().toISOString() }))
+      const webStackIds = await webStackDraftIds()
+      setCloudState((current) => ({ ...current, available: true, error: '', lastSync: new Date().toISOString(), webStackIds }))
     } catch (pullError) {
       setCloudState((current) => ({ ...current, error: pullError.message || 'Could not load the cloud review queue.' }))
     } finally {
@@ -4360,6 +4362,8 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
   const rows = (drafts || []).filter((draft) => (
     !['queued', 'analysing', 'failed'].includes(draft.recognition?.status)
     && !COMPLETED_SCAN_REVIEW_STATUSES.has(draft.status)
+    // Reserved in someone's stack on the website's Scan Match.
+    && !cloud?.webStackIds?.has(draft.id)
   ))
   // Copies of the same card across the whole queue, including scans already
   // added or linked (those tell the rest which catalogue item they are).

@@ -113,6 +113,16 @@ export async function cloudReviewDraftIds() {
   return ids
 }
 
+// Cards reserved in a website Scan Match stack: hidden from Pending Review so
+// two people don't match the same card. Empty until the website's table exists.
+export async function webStackDraftIds() {
+  const ids = new Set()
+  const { data, error } = await supabase.from('scan_match_claims').select('draft_id').limit(5000)
+  if (error) return ids
+  ;(data || []).forEach((row) => ids.add(row.draft_id))
+  return ids
+}
+
 // A reviewed card's uploaded scans are no longer needed (its photos are in
 // the catalogue by then), so the bucket only holds cards awaiting review.
 export async function removeCloudImages(draft) {
