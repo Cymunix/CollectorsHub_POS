@@ -581,7 +581,8 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
 
   async function pushCloudDrafts() {
     if (cloudPushingRef.current) { scheduleCloudPush(2000); return }
-    if (!(await cloudReviewAvailable())) return
+    // Can't reach the queue right now: keep the cards and try again shortly.
+    if (!(await cloudReviewAvailable())) { scheduleCloudPush(30000); return }
     cloudPushingRef.current = true
     setCloudState((current) => ({ ...current, available: true, syncing: true }))
     const api = adminDesktopApi()
@@ -690,12 +691,26 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
     await saveScanDrafts((drafts) => drafts.map((draft) => (ids.includes(draft.id) ? { ...draft, cloudUpload: true } : draft)))
   }
 
+  // Cards that never finished uploading (the app closed first, or the queue
+  // couldn't be reached) only lived in memory as waiting; send them again.
+  function queueUnsentDrafts() {
+    let any = false
+    for (const draft of scanDraftsRef.current) {
+      if (!draft.cloud && cloudEligible(draft)) {
+        cloudDirtyRef.current.add(draft.id)
+        any = true
+      }
+    }
+    if (any) scheduleCloudPush(0)
+  }
+
   useEffect(() => {
     let cancelled = false
     let timer = 0
     const tick = async (full) => {
       if (cancelled) return
       await pullCloudDrafts({ full })
+      if (full && !cancelled) queueUnsentDrafts()
       if (!cancelled) timer = window.setTimeout(() => tick(false), 30000)
     }
     // After the local queue has loaded.
