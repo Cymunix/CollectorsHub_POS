@@ -12,12 +12,14 @@ const IMAGE_SIDES = ['frontImage', 'backImage']
 // Image fields that only make sense on the machine that has the files.
 const LOCAL_IMAGE_FIELDS = ['path', 'url', 'rawPath', 'rawUrl', 'displayPath', 'displayUrl', 'urlExpires', 'cloudSource']
 
-// null = not checked yet, true/false once known.
+// null = not checked yet, true/false as last checked.
 let available = null
 
-// Whether the queue table exists and this sign-in may use it.
+// Whether the queue table exists and this sign-in may use it. Only a yes is
+// remembered: a no (offline, or not signed in yet) is checked again next time,
+// or uploads would stop for the rest of the session.
 export async function cloudReviewAvailable({ refresh = false } = {}) {
-  if (available !== null && !refresh) return available
+  if (available === true && !refresh) return true
   const { error } = await supabase.from(TABLE).select('id', { head: true, count: 'exact' }).limit(1)
   available = !error
   return available
