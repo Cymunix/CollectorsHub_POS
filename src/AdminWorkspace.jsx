@@ -740,8 +740,17 @@ export default function AdminWorkspace({ session, syncStatus, onLogout }) {
       if (full && !cancelled) queueUnsentDrafts()
       if (!cancelled) timer = window.setTimeout(() => tick(false), 30000)
     }
-    // After the local queue has loaded.
-    const start = window.setTimeout(() => tick(true), 1500)
+    // After the local queue has loaded. Cards whose upload never finished (the
+    // app closed, or the upload failed) are only remembered in memory, so pick
+    // them up again here.
+    const start = window.setTimeout(() => {
+      const unsynced = scanDraftsRef.current.filter((draft) => !draft.cloud && cloudEligible(draft))
+      if (unsynced.length) {
+        unsynced.forEach((draft) => cloudDirtyRef.current.add(draft.id))
+        scheduleCloudPush()
+      }
+      tick(true)
+    }, 1500)
     const onFocus = () => { pullCloudDrafts({ full: true }) }
     window.addEventListener('focus', onFocus)
     return () => {
