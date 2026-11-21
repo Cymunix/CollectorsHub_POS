@@ -121,7 +121,7 @@ import {
   signRemoteImages,
   webStackDraftIds,
 } from './lib/scanReviewCloud'
-import { inferredSetTarget, printingFromStackRun } from './lib/scanSetInference'
+import { groupDraftsBySet, inferredSetTarget, printingFromStackRun } from './lib/scanSetInference'
 import { looseCardKey, scanConfidence } from './lib/scanConfidence'
 import UpdateCheck from './UpdateCheck'
 import IdentityReviews from './identity/IdentityReviews'
@@ -4669,14 +4669,18 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
   // A scan with no AI result has no confidence; skip it rather than break the whole queue.
   confidenceById.forEach((entry) => { if (entry?.tier in tierCounts) tierCounts[entry.tier] += 1 })
 
-  const sortedRows = (reviewView === 'set' ? [] : reviewView === 'catalogued' ? cataloguedRows : rows.filter((draft) => !cataloguedIds.has(draft.id)))
+  const filteredRows = (reviewView === 'set' ? [] : reviewView === 'catalogued' ? cataloguedRows : rows.filter((draft) => !cataloguedIds.has(draft.id)))
     .filter((draft) => (tierFilter === 'all' || confidenceOf(draft)?.tier === tierFilter) && matchesSearch(draft))
-    .sort((a, b) => {
-      if (sortBy === 'newest') return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
-      const scoreA = confidenceOf(a)?.score ?? -1
-      const scoreB = confidenceOf(b)?.score ?? -1
-      return sortBy === 'confidence-asc' ? scoreA - scoreB : scoreB - scoreA
-    })
+  const byConfidence = (a, b) => (confidenceOf(b)?.score ?? -1) - (confidenceOf(a)?.score ?? -1)
+  // "Group by likely set": the cards of each probable set together, biggest set first, most confident first inside it.
+  const setView = sortBy === 'set' ? groupDraftsBySet(filteredRows).map((group) => ({ ...group, cards: [...group.cards].sort(byConfidence) })) : null
+  const setHeaderFor = new Map((setView || []).map((group) => [group.cards[0].id, { label: group.label, count: group.cards.length }]))
+  const sortedRows = setView ? setView.flatMap((group) => group.cards) : filteredRows.sort((a, b) => {
+    if (sortBy === 'newest') return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+    const scoreA = confidenceOf(a)?.score ?? -1
+    const scoreB = confidenceOf(b)?.score ?? -1
+    return sortBy === 'confidence-asc' ? scoreA - scoreB : scoreB - scoreA
+  })
 
   // A steady list while the AI is still finishing cards: the cards on screen
   // keep their places, and newly finished ones wait behind a "show" bar
@@ -5038,6 +5042,7 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
               <option value="confidence-desc">Highest confidence first</option>
               <option value="confidence-asc">Lowest confidence first</option>
               <option value="newest">Newest first</option>
+              <option value="set">Group by likely set</option>
             </select>
           </label>
         </div>
@@ -5050,7 +5055,7 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
       ) : null}
       {searchWords.length && !displayRows.length ? <p className="scan-mode-note">No cards in the queue match "{reviewSearch}".</p> : null}
       <div className="review-draft-list">
-        {displayRows.slice(0, shownCount).map((draft) => {
+        {displayRows.slice(0, shownCount).map((draft) => <React.Fragment key={draft.id}>{setHeaderFor.get(draft.id) ? <h3 className="review-set-header">{setHeaderFor.get(draft.id).label} <small>{setHeaderFor.get(draft.id).count} card{setHeaderFor.get(draft.id).count === 1 ? '' : 's'}</small></h3> : null}{((draft) => {
           const title = scanDraftTitle(draft)
           const metadataRows = meaningfulScanMetadata(draft.metadata)
           const route = scanRouteLabel(draft.scanAnalysis?.route)
@@ -5152,7 +5157,7 @@ export function PendingReview({ cloud = null, drafts, onUpdateDraft, onDeleteDra
             </div>
           </div>
           )
-        })}
+        })(draft)}</React.Fragment>)}
       </div>
       {displayRows.length > shownCount ? (
         <div className="review-show-more">
