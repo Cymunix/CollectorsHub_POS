@@ -66,6 +66,7 @@ function targetSetConfidence(draft) {
     if (analysis.matchStatus === 'multiple') add(-30, `${check.printings} printings share #${check.number}: pick one`)
     else if (check.variantBy === 'photo') add(-5, 'Printing chosen by its photo')
     if (differentPhoto(draft, analysis.bestMatch?.item?.item_id)) add(-40, 'The item already has a different photo')
+    if (check.inferred) add(-10, 'Set inferred from the cards scanned just before it')
   }
   score = Math.max(0, Math.min(100, Math.round(score)))
   const tier = score >= HIGH ? 'high' : score >= MEDIUM ? 'medium' : 'low'

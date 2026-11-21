@@ -121,6 +121,7 @@ import {
   signRemoteImages,
   webStackDraftIds,
 } from './lib/scanReviewCloud'
+import { inferredSetTarget } from './lib/scanSetInference'
 import { looseCardKey, scanConfidence } from './lib/scanConfidence'
 import UpdateCheck from './UpdateCheck'
 import IdentityReviews from './identity/IdentityReviews'
@@ -310,17 +311,30 @@ async function pickPrintingByPhoto(scanAnalysis, frontImage) {
 // Matches a scan's AI reading: within its set when it was scanned in "Photograph a
 // set" mode, otherwise against the whole catalogue.
 async function analyseScanReading(draft, result, { drafts = [], frontImage = null } = {}) {
-  const target = draft.target
-  if (!target?.categoryId) return analyseRecognizedCard(result, draft.category)
+  let target = draft.target
+  let inferred = false
+  if (!target?.categoryId) {
+    // No set chosen at Scan Intake: if the cards scanned just before this one were confidently matched into one set,
+    // look for this card in that set first, and fall back to the whole catalogue when it isn't there.
+    target = inferredSetTarget(draft, drafts)
+    inferred = Boolean(target)
+    if (!target) return analyseRecognizedCard(result, draft.category)
+  }
   const items = await loadTargetSetItems(target)
   const scanAnalysis = matchScanInTargetSet({
     result,
     target,
     items,
     ocrText: [draft.feed?.ocrText?.front, draft.feed?.ocrText?.back].filter(Boolean).join('\n'),
-    expectedNumber: expectedSetNumber(draft, drafts),
+    expectedNumber: inferred ? '' : expectedSetNumber(draft, drafts),
   })
   if (scanAnalysis.matchStatus === 'multiple') await pickPrintingByPhoto(scanAnalysis, frontImage || draft.frontImage)
+  if (inferred) {
+    // A guess about the set must earn its place: one clear card whose name doesn't disagree, else the normal search.
+    const best = scanAnalysis.bestMatch
+    if (scanAnalysis.matchStatus !== 'exact' || best?.nameAgrees === false) return analyseRecognizedCard(result, draft.category)
+    scanAnalysis.setCheck = { ...scanAnalysis.setCheck, inferred: true }
+  }
   return {
     scanAnalysis,
     taxonomy: {
