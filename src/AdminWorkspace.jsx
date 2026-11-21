@@ -121,7 +121,7 @@ import {
   signRemoteImages,
   webStackDraftIds,
 } from './lib/scanReviewCloud'
-import { inferredSetTarget } from './lib/scanSetInference'
+import { inferredSetTarget, printingFromStackRun } from './lib/scanSetInference'
 import { looseCardKey, scanConfidence } from './lib/scanConfidence'
 import UpdateCheck from './UpdateCheck'
 import IdentityReviews from './identity/IdentityReviews'
@@ -329,6 +329,19 @@ async function analyseScanReading(draft, result, { drafts = [], frontImage = nul
     expectedNumber: inferred ? '' : expectedSetNumber(draft, drafts),
   })
   if (scanAnalysis.matchStatus === 'multiple') await pickPrintingByPhoto(scanAnalysis, frontImage || draft.frontImage)
+  if (scanAnalysis.matchStatus === 'multiple') {
+    // The photo didn't settle it: follow the Collection the cards just before this one were matched in.
+    const pick = printingFromStackRun(scanAnalysis.candidates, draft, drafts)
+    if (pick) {
+      pick.reasons = [...pick.reasons, 'Same Collection as the cards just before it']
+      scanAnalysis.bestMatch = pick
+      scanAnalysis.candidates = [pick, ...scanAnalysis.candidates.filter((candidate) => candidate !== pick)]
+      scanAnalysis.matchStatus = 'exact'
+      scanAnalysis.route = 'existing_match'
+      scanAnalysis.status = 'Exact catalogue match'
+      scanAnalysis.setCheck = { ...scanAnalysis.setCheck, variantBy: 'stack' }
+    }
+  }
   if (inferred) {
     // A guess about the set must earn its place: one clear card whose name doesn't disagree, else the normal search.
     const best = scanAnalysis.bestMatch

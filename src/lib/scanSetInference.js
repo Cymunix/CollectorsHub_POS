@@ -40,3 +40,18 @@ export function inferredSetTarget(draft, drafts = []) {
     label: [taxonomy.names?.property, season || year].filter(Boolean).join(' ') || 'Set inferred from earlier scans',
   }
 }
+
+// Printings of one card number that are still undecided (the photo didn't settle it): stacks tend to run through one
+// Collection (a Refractor run, a Gold run). When the last 2-3 exact matches before this scan all share one Collection
+// and exactly one candidate printing has it, that printing is chosen. Returns the candidate or null.
+export function printingFromStackRun(candidates = [], draft = {}, drafts = []) {
+  const collectionOf = (item) => String(item?.dynamic_fields?.collection ?? '').trim().toLowerCase()
+  const run = drafts
+    .filter((other) => other.id !== draft.id && String(other.createdAt || '') < String(draft.createdAt || '') && other.scanAnalysis?.matchStatus === 'exact')
+    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+    .slice(0, 3)
+    .map((other) => collectionOf(other.scanAnalysis.bestMatch?.item))
+  if (run.length < 2 || !run[0] || run.some((value) => value !== run[0])) return null
+  const same = candidates.filter((candidate) => collectionOf(candidate.item) === run[0])
+  return same.length === 1 ? same[0] : null
+}

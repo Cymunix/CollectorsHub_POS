@@ -65,6 +65,7 @@ function targetSetConfidence(draft) {
     else if (check.sequence === 'out-of-order') add(-15, `Out of order (expected #${check.expectedNumber})`)
     if (analysis.matchStatus === 'multiple') add(-30, `${check.printings} printings share #${check.number}: pick one`)
     else if (check.variantBy === 'photo') add(-5, 'Printing chosen by its photo')
+    else if (check.variantBy === 'stack') add(-12, 'Printing chosen because the cards just before it were that Collection')
     if (differentPhoto(draft, analysis.bestMatch?.item?.item_id)) add(-40, 'The item already has a different photo')
     if (check.inferred) add(-10, 'Set inferred from the cards scanned just before it')
   }
