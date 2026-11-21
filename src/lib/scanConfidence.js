@@ -54,6 +54,7 @@ function targetSetConfidence(draft) {
     if (check.numberFrom === 'ai') add(0, `#${check.number} is in the chosen set`, true)
     else if (check.numberFrom === 'ocr') add(-5, `#${check.number} read from the card text (the AI missed it)`)
     else if (check.numberFrom === 'sequence') add(-15, `#${check.number} assumed from the stack order`)
+    else if (check.numberFrom === 'name') add(-30, `No number read: #${check.number} found by name (the only card here with that name)`)
     if (check.ocr === 'confirmed') add(0, 'Card number printed on the card agrees', true)
     else if (check.ocr === 'seen') add(-3, 'Card number found in the card text')
     else if (check.ocr === 'missing') add(-15, 'Card number not found in the card text')
@@ -64,11 +65,14 @@ function targetSetConfidence(draft) {
     else if (check.sequence === 'out-of-order') add(-15, `Out of order (expected #${check.expectedNumber})`)
     if (analysis.matchStatus === 'multiple') add(-30, `${check.printings} printings share #${check.number}: pick one`)
     else if (check.variantBy === 'photo') add(-5, 'Printing chosen by its photo')
+    else if (check.variantBy === 'stack') add(-12, 'Printing chosen because the cards just before it were that Collection')
     if (differentPhoto(draft, analysis.bestMatch?.item?.item_id)) add(-40, 'The item already has a different photo')
+    if (check.inferred) add(-10, 'Set inferred from the cards scanned just before it')
   }
   score = Math.max(0, Math.min(100, Math.round(score)))
   const tier = score >= HIGH ? 'high' : score >= MEDIUM ? 'medium' : 'low'
-  return { score, tier, reasons, readiness: analysis.matchStatus === 'exact' ? 'link' : 'check' }
+  // A card found by name alone always waits for a person, whatever the score.
+  return { score, tier, reasons, readiness: analysis.matchStatus === 'exact' && check.numberFrom !== 'name' ? 'link' : 'check' }
 }
 
 export function scanConfidence(draft, { copies = [], exactMatch = null } = {}) {

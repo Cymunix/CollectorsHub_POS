@@ -3793,6 +3793,15 @@ export function matchScanInTargetSet({ result = {}, target = {}, items = [], ocr
     number = cardNumberText(expectedNumber); numberFrom = 'sequence'
   }
 
+  // 1b. No usable number anywhere: fall back to the name, but only when exactly one card in the set carries it
+  //     (full name match, at least two words). Scored lower and flagged for a person to check.
+  const readName = looseNameWords(result.subject).join(' ')
+  if (!number && readName.split(' ').length >= 2) {
+    const named = items.filter((item) => [item.name, item.subject].some((value) => looseNameWords(value).join(' ') === readName))
+    const namedNumbers = [...new Set(named.map((item) => cardNumberText(checklistItemNumber(item))).filter(Boolean))]
+    if (namedNumbers.length === 1) { number = namedNumbers[0]; numberFrom = 'name' }
+  }
+
   const ocr = !hasText ? 'unavailable' : number ? (numberInCardText(text, cardNumberText(number)) === 'marked' ? 'confirmed' : numberInCardText(text, cardNumberText(number)) ? 'seen' : 'missing') : 'missing'
   let sequence = null
   if (number && expectedNumber) {
@@ -3818,7 +3827,6 @@ export function matchScanInTargetSet({ result = {}, target = {}, items = [], ocr
   }
 
   // 3. The name as a cross-check (never the deciding factor in a set).
-  const readName = looseNameWords(result.subject).join(' ')
   const nameAgrees = (item) => {
     if (!readName) return null
     const names = [item.name, item.subject].map((value) => looseNameWords(value).join(' ')).filter(Boolean)
@@ -3827,10 +3835,11 @@ export function matchScanInTargetSet({ result = {}, target = {}, items = [], ocr
 
   const candidates = found.map((item) => {
     const agrees = nameAgrees(item)
-    const reasons = ['In the chosen set', numberFrom === 'ocr' ? 'Card number read from the card text' : numberFrom === 'sequence' ? 'Next number in the stack' : 'Same card number']
+    const reasons = ['In the chosen set', numberFrom === 'ocr' ? 'Card number read from the card text' : numberFrom === 'sequence' ? 'Next number in the stack' : numberFrom === 'name' ? 'Only card in the set with this name (number not read)' : 'Same card number']
     if (agrees) reasons.push('Same name')
     let score = 80 + (agrees ? 10 : agrees === false ? -15 : 0) + (ocr === 'confirmed' ? 10 : ocr === 'seen' ? 5 : 0) + (sequence === 'in-order' || sequence === 'repeat' ? 5 : sequence === 'out-of-order' ? -5 : 0)
     if (found.length > 1) score -= 10
+    if (numberFrom === 'name') score -= 20
     score = Math.max(0, Math.min(100, score))
     return {
       item: { ...item, imageUrl: item.imageUrl || publicImageUrl(item.image_path) },
