@@ -55,3 +55,38 @@ export function printingFromStackRun(candidates = [], draft = {}, drafts = []) {
   const same = candidates.filter((candidate) => collectionOf(candidate.item) === run[0])
   return same.length === 1 ? same[0] : null
 }
+
+// The set a scanned card probably belongs to, in the same shape as the website's Scan Match (subset | property | year)
+// so the app's queue and the website group cards the same way. Order of evidence: the matched item, the set chosen at
+// Scan Intake, the AI's resolved taxonomy; when none names a set, the set text the AI read. Null when nothing does.
+export function likelySetOf(draft = {}) {
+  const item = draft.scanAnalysis?.bestMatch?.item
+  const target = draft.target
+  const taxonomy = draft.recognition?.taxonomy
+  const result = draft.recognition?.result || {}
+  const year = item?.release_year ?? (target?.releaseYear || null) ?? (result.release_year || null)
+  const subsetId = item?.subset_id || target?.subsetId || taxonomy?.ids?.subset_id || ''
+  if (subsetId) {
+    const propertyId = target?.propertyId || taxonomy?.ids?.property_id || ''
+    const label = [taxonomy?.names?.subset || target?.names?.subset, taxonomy?.names?.property || target?.names?.property, year].filter(Boolean).join(' · ')
+    return { key: [subsetId, propertyId, year ?? ''].join('|'), label: label || 'Unnamed set' }
+  }
+  const text = String(result.property || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  if (!text) return null
+  return { key: ['text', text, year ?? ''].join('|'), label: [String(result.property).replace(/\s+-\s+/g, ' ').trim(), year].filter(Boolean).join(' · ') }
+}
+
+// Cards grouped by likely set: biggest group first, the given order kept inside a group, no-set cards last.
+// Returns [{ key, label, cards }].
+export function groupDraftsBySet(drafts = []) {
+  const groups = new Map()
+  drafts.forEach((draft, index) => {
+    const set = likelySetOf(draft)
+    const key = set?.key || ''
+    if (!groups.has(key)) groups.set(key, { key, label: set?.label || 'No set found', first: index, cards: [] })
+    groups.get(key).cards.push(draft)
+  })
+  return [...groups.values()]
+    .sort((left, right) => Number(Boolean(right.key)) - Number(Boolean(left.key)) || right.cards.length - left.cards.length || left.first - right.first)
+    .map(({ key, label, cards }) => ({ key, label, cards }))
+}

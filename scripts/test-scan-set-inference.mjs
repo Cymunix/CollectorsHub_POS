@@ -31,3 +31,16 @@ assert.equal(printingFromStackRun(candidates, current, [withCollection(1, 'Refra
 assert.equal(printingFromStackRun(candidates, current, [withCollection(1, 'Refractor')]), null, 'needs two cards')
 assert.equal(printingFromStackRun([cand('a', 'Refractor'), cand('b', 'Refractor')], current, [withCollection(1, 'Refractor'), withCollection(2, 'Refractor')]), null, 'two printings in that Collection stay undecided')
 console.log('scan set inference ok')
+
+// Likely set: same key shape as the website, text fallback, biggest group first.
+import { likelySetOf, groupDraftsBySet } from '../src/lib/scanSetInference.js'
+const d = (id, over = {}) => ({ id, ...over })
+const withTarget = (id, subsetId, propertyId, year) => d(id, { target: { subsetId, propertyId, releaseYear: year, names: { subset: 'UD', property: 'Series 1' } } })
+assert.equal(likelySetOf(withTarget('1', 's', 'p', 2024)).key, 's|p|2024')
+assert.equal(likelySetOf(d('2', { scanAnalysis: { bestMatch: { item: { subset_id: 's2', release_year: 1991 } } } })).key, 's2||1991')
+assert.equal(likelySetOf(d('3', { recognition: { result: { property: 'Panini - Donruss', release_year: 2020 } } })).key, 'text|panini donruss|2020')
+assert.equal(likelySetOf(d('4')), null)
+const groups = groupDraftsBySet([withTarget('1', 'a', 'p', 2024), d('x'), withTarget('2', 'b', 'q', 2023), withTarget('3', 'a', 'p', 2024), withTarget('4', 'b', 'q', 2023), withTarget('5', 'b', 'q', 2023)])
+assert.deepEqual(groups.map((g) => g.cards.map((c) => c.id).join(',')), ['2,4,5', '1,3', 'x'])
+assert.equal(groups[2].label, 'No set found')
+console.log('likely set ok')
